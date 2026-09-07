@@ -1,10 +1,13 @@
 import os
 import asyncio
+import threading
 import discord
 from discord.ext import commands
+from flask import Flask
 
 # ========= الإعدادات =========
 TOKEN = os.getenv("TOKEN")
+PORT = int(os.getenv("PORT", 8080))  # Render يجهز هذا المتغير تلقائياً
 
 # اسم الكاتيجوري اللي بتتنشئ فيها التذاكر (تقدر تغيّره)
 TICKET_CATEGORY_NAME = "Tickets"
@@ -20,6 +23,25 @@ intents.members = True
 intents.message_content = True
 
 bot = commands.Bot(command_prefix="!", intents=intents)
+
+
+# ========= سيرفر وهمي بسيط عشان Render يعتبره Web Service =========
+web_app = Flask(__name__)
+
+
+@web_app.route("/")
+def home():
+    return "Bot is alive!"
+
+
+def run_web_server():
+    web_app.run(host="0.0.0.0", port=PORT)
+
+
+def keep_alive():
+    t = threading.Thread(target=run_web_server)
+    t.daemon = True
+    t.start()
 
 
 # ========= زر فتح التذكرة =========
@@ -148,4 +170,5 @@ if __name__ == "__main__":
         raise RuntimeError(
             "ما تم العثور على التوكن! تأكد من إضافة متغير البيئة TOKEN."
         )
+    keep_alive()
     bot.run(TOKEN)
