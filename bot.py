@@ -156,6 +156,60 @@ async def setup_error(ctx: commands.Context, error):
         await ctx.send("هذا الأمر للإداريين فقط.", delete_after=5)
 
 
+# ========= أمر نشر رسالة Embed مخصصة (مثل القوانين) =========
+@bot.command(name="embed")
+@commands.has_permissions(administrator=True)
+async def embed_cmd(ctx: commands.Context, channel: discord.TextChannel):
+    prompt = await ctx.send(
+        f"تمام ✅ أرسل الآن نص الرسالة كامل بأي رسالة عادية (السطر الأول بيصير عنوان "
+        f"الرسالة والباقي محتواها). عندك 5 دقايق قبل ما ينتهي الوقت."
+    )
+
+    def check(m: discord.Message):
+        return m.author == ctx.author and m.channel == ctx.channel
+
+    try:
+        reply = await bot.wait_for("message", check=check, timeout=300)
+    except asyncio.TimeoutError:
+        await prompt.edit(content="⏰ انتهى الوقت، جرب الأمر مرة ثانية.")
+        return
+
+    lines = reply.content.split("\n")
+    title = lines[0].strip() if lines else "بدون عنوان"
+    description = "\n".join(lines[1:]).strip() if len(lines) > 1 else ""
+
+    if not description:
+        description = title
+        title = None
+
+    embed = discord.Embed(
+        title=title,
+        description=description,
+        color=discord.Color.gold(),
+    )
+
+    await channel.send(embed=embed)
+    await ctx.send(f"✅ تم نشر الرسالة في {channel.mention}")
+
+    try:
+        await ctx.message.delete()
+        await reply.delete()
+    except discord.Forbidden:
+        pass
+
+
+@embed_cmd.error
+async def embed_cmd_error(ctx: commands.Context, error):
+    if isinstance(error, commands.MissingPermissions):
+        await ctx.send("هذا الأمر للإداريين فقط.", delete_after=5)
+    elif isinstance(error, commands.MissingRequiredArgument):
+        await ctx.send(
+            "الاستخدام الصحيح: `!embed #اسم-الروم`", delete_after=8
+        )
+    elif isinstance(error, commands.ChannelNotFound):
+        await ctx.send("ما لقيت هذا الروم، تأكد من ذكره صح (مثل #القوانين).", delete_after=8)
+
+
 # ========= تسجيل الأزرار الدائمة عند التشغيل =========
 @bot.event
 async def on_ready():
