@@ -55,13 +55,13 @@ def load_config():
 
             data = json.load(file)
 
-        config = deepcopy(DEFAULT_CONFIG)
-        config.update(data)
+        loaded_config = deepcopy(DEFAULT_CONFIG)
+        loaded_config.update(data)
 
-        if "guilds" not in config:
-            config["guilds"] = {}
+        if "guilds" not in loaded_config:
+            loaded_config["guilds"] = {}
 
-        return config
+        return loaded_config
 
     except (json.JSONDecodeError, OSError):
 
@@ -259,13 +259,11 @@ def get_log_channel(guild: discord.Guild):
 def is_staff(member: discord.Member):
 
     if member.guild_permissions.administrator:
-
         return True
 
     role = get_staff_role(member.guild)
 
     if role is None:
-
         return False
 
     return role in member.roles
@@ -289,7 +287,6 @@ def is_ticket_channel(channel):
 def get_ticket_owner_id(channel):
 
     if not channel.topic:
-
         return None
 
     for part in channel.topic.split("|"):
@@ -314,7 +311,6 @@ def get_ticket_owner_id(channel):
 def get_ticket_category_value(channel):
 
     if not channel.topic:
-
         return None
 
     for part in channel.topic.split("|"):
@@ -334,7 +330,6 @@ def get_ticket_category_value(channel):
 def get_ticket_claimed_id(channel):
 
     if not channel.topic:
-
         return None
 
     for part in channel.topic.split("|"):
@@ -785,10 +780,6 @@ async def create_ticket_channel(
 
         return
 
-    # -----------------------------------------------------
-    # منع التذاكر المكررة
-    # -----------------------------------------------------
-
     existing = find_open_ticket(
         guild,
         member.id
@@ -805,10 +796,6 @@ async def create_ticket_channel(
         )
 
         return
-
-    # -----------------------------------------------------
-    # البحث عن Category
-    # -----------------------------------------------------
 
     category = get_ticket_category(
         guild
@@ -836,10 +823,6 @@ async def create_ticket_channel(
 
             return
 
-    # -----------------------------------------------------
-    # رقم التذكرة
-    # -----------------------------------------------------
-
     number = get_next_ticket_number(
         guild
     )
@@ -847,10 +830,6 @@ async def create_ticket_channel(
     channel_name = (
         f"ticket-{number:04d}"
     )
-
-    # -----------------------------------------------------
-    # الصلاحيات
-    # -----------------------------------------------------
 
     overwrites = {
 
@@ -939,10 +918,6 @@ async def create_ticket_channel(
 
         return
 
-    # -----------------------------------------------------
-    # Topic
-    # -----------------------------------------------------
-
     topic = (
 
         f"ticket_id:{ticket_channel.id} | "
@@ -962,14 +937,12 @@ async def create_ticket_channel(
 
         pass
 
-    # -----------------------------------------------------
-    # Embed
-    # -----------------------------------------------------
-
     try:
 
         embed_color = int(
+
             config["embed_color"],
+
             16
         )
 
@@ -1057,10 +1030,6 @@ async def create_ticket_channel(
     except discord.HTTPException:
 
         pass
-
-    # -----------------------------------------------------
-    # Log
-    # -----------------------------------------------------
 
     await send_ticket_log(
 
@@ -1181,8 +1150,6 @@ class TicketActionView(
 
         button: discord.ui.Button
     ):
-
-        # Staff فقط
 
         if not is_staff(interaction.user):
 
@@ -1337,10 +1304,7 @@ class TicketActionView(
         button: discord.ui.Button
     ):
 
-        # =================================================
-        # التعديل الجديد:
-        # Staff / Admin فقط يستطيع إغلاق التذكرة
-        # =================================================
+        # Staff / Admin فقط
 
         if not is_staff(interaction.user):
 
@@ -1352,10 +1316,6 @@ class TicketActionView(
             )
 
             return
-
-        # =================================================
-        # تأكيد الإغلاق
-        # =================================================
 
         await interaction.response.send_message(
 
@@ -1395,9 +1355,6 @@ class ConfirmCloseView(
 
         button: discord.ui.Button
     ):
-
-        # حماية إضافية:
-        # حتى لو حاول شخص الوصول للتأكيد بطريقة أخرى
 
         if not is_staff(interaction.user):
 
@@ -1499,7 +1456,9 @@ async def setup_cmd(ctx):
 
 @setup_cmd.error
 async def setup_error(
+
     ctx,
+
     error
 ):
 
@@ -2066,74 +2025,178 @@ async def ticketconfig_error(
 
 # =========================================================
 # Lock / Unlock
+# يدعم Text Channels + Threads
 # =========================================================
 
-async def lock_channel(
-    channel: discord.TextChannel
-):
+def is_thread(channel):
 
-    guild = channel.guild
-
-    overwrite = channel.overwrites_for(
-
-        guild.default_role
-    )
-
-    overwrite.send_messages = False
-
-    await channel.set_permissions(
-
-        guild.default_role,
-
-        overwrite=overwrite,
-
-        reason="Channel locked"
+    return isinstance(
+        channel,
+        discord.Thread
     )
 
 
-async def unlock_channel(
-    channel: discord.TextChannel
-):
+def is_lockable_channel(channel):
 
-    guild = channel.guild
-
-    overwrite = channel.overwrites_for(
-
-        guild.default_role
+    return isinstance(
+        channel,
+        (
+            discord.TextChannel,
+            discord.Thread
+        )
     )
 
-    overwrite.send_messages = None
 
-    await channel.set_permissions(
+def can_manage_channel_lock(member, channel):
 
-        guild.default_role,
+    # Administrator يقدر دائمًا
 
-        overwrite=overwrite,
+    if member.guild_permissions.administrator:
 
-        reason="Channel unlocked"
-    )
+        return True
+
+    # Threads تحتاج Manage Threads
+
+    if isinstance(
+        channel,
+        discord.Thread
+    ):
+
+        return member.guild_permissions.manage_threads
+
+    # الرومات النصية تحتاج Manage Channels
+
+    return member.guild_permissions.manage_channels
+
+
+async def lock_channel(channel):
+
+    # -----------------------------------------------------
+    # Thread
+    # -----------------------------------------------------
+
+    if isinstance(
+        channel,
+        discord.Thread
+    ):
+
+        await channel.edit(
+            locked=True,
+            reason="Thread locked"
+        )
+
+        return "thread"
+
+    # -----------------------------------------------------
+    # Text Channel
+    # -----------------------------------------------------
+
+    if isinstance(
+        channel,
+        discord.TextChannel
+    ):
+
+        guild = channel.guild
+
+        overwrite = channel.overwrites_for(
+            guild.default_role
+        )
+
+        overwrite.send_messages = False
+
+        await channel.set_permissions(
+
+            guild.default_role,
+
+            overwrite=overwrite,
+
+            reason="Channel locked"
+        )
+
+        return "channel"
+
+    return None
+
+
+async def unlock_channel(channel):
+
+    # -----------------------------------------------------
+    # Thread
+    # -----------------------------------------------------
+
+    if isinstance(
+        channel,
+        discord.Thread
+    ):
+
+        await channel.edit(
+            locked=False,
+            reason="Thread unlocked"
+        )
+
+        return "thread"
+
+    # -----------------------------------------------------
+    # Text Channel
+    # -----------------------------------------------------
+
+    if isinstance(
+        channel,
+        discord.TextChannel
+    ):
+
+        guild = channel.guild
+
+        overwrite = channel.overwrites_for(
+            guild.default_role
+        )
+
+        overwrite.send_messages = None
+
+        await channel.set_permissions(
+
+            guild.default_role,
+
+            overwrite=overwrite,
+
+            reason="Channel unlocked"
+        )
+
+        return "channel"
+
+    return None
 
 
 async def perform_lock(
 
     interaction_or_message,
 
-    channel: discord.TextChannel,
+    channel,
 
     user
 ):
 
     try:
 
-        await lock_channel(
+        channel_type = await lock_channel(
             channel
         )
 
-        text = (
+        if channel_type == "thread":
 
-            f"🔒 تم قفل الروم بواسطة "
-            f"{user.mention}."
-        )
+            text = (
+
+                f"🔒 تم قفل الـ Thread بواسطة "
+                f"{user.mention}."
+            )
+
+        else:
+
+            text = (
+
+                f"🔒 تم قفل الروم بواسطة "
+                f"{user.mention}."
+            )
 
         if isinstance(
 
@@ -2143,7 +2206,8 @@ async def perform_lock(
         ):
 
             await interaction_or_message.response.send_message(
-                text
+                text,
+                delete_after=5
             )
 
         else:
@@ -2158,7 +2222,9 @@ async def perform_lock(
     except discord.Forbidden:
 
         text = (
-            "❌ لا أملك صلاحية تعديل صلاحيات هذا الروم."
+
+            "❌ لا أملك الصلاحية اللازمة "
+            "لقفل هذا الروم أو الـ Thread."
         )
 
         if isinstance(
@@ -2179,12 +2245,20 @@ async def perform_lock(
 
         else:
 
-            await channel.send(
+            # في حالة Thread مقفول، قد لا يستطيع البوت إرسال رسالة داخله
 
-                text,
+            try:
 
-                delete_after=5
-            )
+                await channel.send(
+
+                    text,
+
+                    delete_after=5
+                )
+
+            except discord.HTTPException:
+
+                pass
 
     except discord.HTTPException as error:
 
@@ -2197,22 +2271,32 @@ async def perform_unlock(
 
     interaction_or_message,
 
-    channel: discord.TextChannel,
+    channel,
 
     user
 ):
 
     try:
 
-        await unlock_channel(
+        channel_type = await unlock_channel(
             channel
         )
 
-        text = (
+        if channel_type == "thread":
 
-            f"🔓 تم فتح الروم بواسطة "
-            f"{user.mention}."
-        )
+            text = (
+
+                f"🔓 تم فتح الـ Thread بواسطة "
+                f"{user.mention}."
+            )
+
+        else:
+
+            text = (
+
+                f"🔓 تم فتح الروم بواسطة "
+                f"{user.mention}."
+            )
 
         if isinstance(
 
@@ -2222,7 +2306,8 @@ async def perform_unlock(
         ):
 
             await interaction_or_message.response.send_message(
-                text
+                text,
+                delete_after=5
             )
 
         else:
@@ -2237,7 +2322,9 @@ async def perform_unlock(
     except discord.Forbidden:
 
         text = (
-            "❌ لا أملك صلاحية تعديل صلاحيات هذا الروم."
+
+            "❌ لا أملك الصلاحية اللازمة "
+            "لفتح هذا الروم أو الـ Thread."
         )
 
         if isinstance(
@@ -2258,12 +2345,18 @@ async def perform_unlock(
 
         else:
 
-            await channel.send(
+            try:
 
-                text,
+                await channel.send(
 
-                delete_after=5
-            )
+                    text,
+
+                    delete_after=5
+                )
+
+            except discord.HTTPException:
+
+                pass
 
     except discord.HTTPException as error:
 
@@ -2280,37 +2373,66 @@ async def perform_unlock(
 
     name="lock",
 
-    description="Lock the current channel"
+    description="Lock the current channel or thread"
 )
 @app_commands.default_permissions(
-    manage_channels=True
+    manage_channels=True,
+    manage_threads=True
 )
 async def slash_lock(
 
     interaction: discord.Interaction
 ):
 
-    if not interaction.user.guild_permissions.manage_channels:
+    channel = interaction.channel
+
+    if channel is None:
 
         await interaction.response.send_message(
 
-            "❌ ما عندك صلاحية استخدام هذا الأمر.",
+            "❌ ما قدرت أحدد المكان.",
 
             ephemeral=True
         )
 
         return
 
-    if not isinstance(
-
-        interaction.channel,
-
-        discord.TextChannel
-    ):
+    if not is_lockable_channel(channel):
 
         await interaction.response.send_message(
 
-            "❌ هذا الأمر يعمل في الرومات النصية فقط.",
+            "❌ هذا الأمر يعمل في الرومات النصية والـ Threads فقط.",
+
+            ephemeral=True
+        )
+
+        return
+
+    if not can_manage_channel_lock(
+        interaction.user,
+        channel
+    ):
+
+        if isinstance(
+            channel,
+            discord.Thread
+        ):
+
+            text = (
+                "❌ تحتاج صلاحية **Manage Threads** "
+                "لاستخدام هذا الأمر على الـ Thread."
+            )
+
+        else:
+
+            text = (
+                "❌ تحتاج صلاحية **Manage Channels** "
+                "لاستخدام هذا الأمر."
+            )
+
+        await interaction.response.send_message(
+
+            text,
 
             ephemeral=True
         )
@@ -2321,7 +2443,7 @@ async def slash_lock(
 
         interaction,
 
-        interaction.channel,
+        channel,
 
         interaction.user
     )
@@ -2335,37 +2457,66 @@ async def slash_lock(
 
     name="unlock",
 
-    description="Unlock the current channel"
+    description="Unlock the current channel or thread"
 )
 @app_commands.default_permissions(
-    manage_channels=True
+    manage_channels=True,
+    manage_threads=True
 )
 async def slash_unlock(
 
     interaction: discord.Interaction
 ):
 
-    if not interaction.user.guild_permissions.manage_channels:
+    channel = interaction.channel
+
+    if channel is None:
 
         await interaction.response.send_message(
 
-            "❌ ما عندك صلاحية استخدام هذا الأمر.",
+            "❌ ما قدرت أحدد المكان.",
 
             ephemeral=True
         )
 
         return
 
-    if not isinstance(
-
-        interaction.channel,
-
-        discord.TextChannel
-    ):
+    if not is_lockable_channel(channel):
 
         await interaction.response.send_message(
 
-            "❌ هذا الأمر يعمل في الرومات النصية فقط.",
+            "❌ هذا الأمر يعمل في الرومات النصية والـ Threads فقط.",
+
+            ephemeral=True
+        )
+
+        return
+
+    if not can_manage_channel_lock(
+        interaction.user,
+        channel
+    ):
+
+        if isinstance(
+            channel,
+            discord.Thread
+        ):
+
+            text = (
+                "❌ تحتاج صلاحية **Manage Threads** "
+                "لاستخدام هذا الأمر على الـ Thread."
+            )
+
+        else:
+
+            text = (
+                "❌ تحتاج صلاحية **Manage Channels** "
+                "لاستخدام هذا الأمر."
+            )
+
+        await interaction.response.send_message(
+
+            text,
 
             ephemeral=True
         )
@@ -2376,7 +2527,7 @@ async def slash_unlock(
 
         interaction,
 
-        interaction.channel,
+        channel,
 
         interaction.user
     )
@@ -2491,6 +2642,7 @@ async def before_auto_cleanup():
 
 # =========================================================
 # استقبال الرسائل
+# يدعم Lock / Unlock للرومات والـ Threads
 # =========================================================
 
 @bot.event
@@ -2503,6 +2655,8 @@ async def on_message(message):
         return
 
     content = message.content.strip().lower()
+
+    channel = message.channel
 
     # =====================================================
     # Lock
@@ -2517,12 +2671,7 @@ async def on_message(message):
         "قفل"
     }:
 
-        if not isinstance(
-
-            message.channel,
-
-            discord.TextChannel
-        ):
+        if not is_lockable_channel(channel):
 
             return
 
@@ -2538,7 +2687,12 @@ async def on_message(message):
 
         # التحقق من الصلاحية
 
-        if not message.author.guild_permissions.manage_channels:
+        if not can_manage_channel_lock(
+
+            message.author,
+
+            channel
+        ):
 
             return
 
@@ -2546,7 +2700,7 @@ async def on_message(message):
 
             message,
 
-            message.channel,
+            channel,
 
             message.author
         )
@@ -2566,12 +2720,7 @@ async def on_message(message):
         "فتح"
     }:
 
-        if not isinstance(
-
-            message.channel,
-
-            discord.TextChannel
-        ):
+        if not is_lockable_channel(channel):
 
             return
 
@@ -2587,7 +2736,12 @@ async def on_message(message):
 
         # التحقق من الصلاحية
 
-        if not message.author.guild_permissions.manage_channels:
+        if not can_manage_channel_lock(
+
+            message.author,
+
+            channel
+        ):
 
             return
 
@@ -2595,7 +2749,7 @@ async def on_message(message):
 
             message,
 
-            message.channel,
+            channel,
 
             message.author
         )
