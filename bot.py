@@ -1258,9 +1258,13 @@ class TicketActionView(
 
             pass
 
+        # تعطيل زر الاستلام
+
         button.disabled = True
 
         button.label = "تم الاستلام ✅"
+
+        # تحديث رسالة الـ Embed
 
         await interaction.response.edit_message(
 
@@ -1268,6 +1272,24 @@ class TicketActionView(
 
             view=self
         )
+
+        # =================================================
+        # الرسالة الجديدة عند استلام التذكرة
+        # =================================================
+
+        try:
+
+            await channel.send(
+
+                f"👤 **تم استلام التذكرة بواسطة "
+                f"{interaction.user.mention}**"
+            )
+
+        except discord.HTTPException:
+
+            pass
+
+        # Log
 
         await send_ticket_log(
 
@@ -2028,18 +2050,12 @@ async def ticketconfig_error(
 # يدعم Text Channels + Threads
 # =========================================================
 
-def is_thread(channel):
-
-    return isinstance(
-        channel,
-        discord.Thread
-    )
-
-
 def is_lockable_channel(channel):
 
     return isinstance(
+
         channel,
+
         (
             discord.TextChannel,
             discord.Thread
@@ -2047,15 +2063,14 @@ def is_lockable_channel(channel):
     )
 
 
-def can_manage_channel_lock(member, channel):
-
-    # Administrator يقدر دائمًا
+def can_manage_channel_lock(
+    member,
+    channel
+):
 
     if member.guild_permissions.administrator:
 
         return True
-
-    # Threads تحتاج Manage Threads
 
     if isinstance(
         channel,
@@ -2063,8 +2078,6 @@ def can_manage_channel_lock(member, channel):
     ):
 
         return member.guild_permissions.manage_threads
-
-    # الرومات النصية تحتاج Manage Channels
 
     return member.guild_permissions.manage_channels
 
@@ -2081,7 +2094,9 @@ async def lock_channel(channel):
     ):
 
         await channel.edit(
+
             locked=True,
+
             reason="Thread locked"
         )
 
@@ -2099,6 +2114,7 @@ async def lock_channel(channel):
         guild = channel.guild
 
         overwrite = channel.overwrites_for(
+
             guild.default_role
         )
 
@@ -2130,7 +2146,9 @@ async def unlock_channel(channel):
     ):
 
         await channel.edit(
+
             locked=False,
+
             reason="Thread unlocked"
         )
 
@@ -2148,6 +2166,7 @@ async def unlock_channel(channel):
         guild = channel.guild
 
         overwrite = channel.overwrites_for(
+
             guild.default_role
         )
 
@@ -2206,18 +2225,26 @@ async def perform_lock(
         ):
 
             await interaction_or_message.response.send_message(
+
                 text,
+
                 delete_after=5
             )
 
         else:
 
-            await channel.send(
+            try:
 
-                text,
+                await channel.send(
 
-                delete_after=5
-            )
+                    text,
+
+                    delete_after=5
+                )
+
+            except discord.HTTPException:
+
+                pass
 
     except discord.Forbidden:
 
@@ -2242,23 +2269,6 @@ async def perform_lock(
 
                     ephemeral=True
                 )
-
-        else:
-
-            # في حالة Thread مقفول، قد لا يستطيع البوت إرسال رسالة داخله
-
-            try:
-
-                await channel.send(
-
-                    text,
-
-                    delete_after=5
-                )
-
-            except discord.HTTPException:
-
-                pass
 
     except discord.HTTPException as error:
 
@@ -2306,7 +2316,9 @@ async def perform_unlock(
         ):
 
             await interaction_or_message.response.send_message(
+
                 text,
+
                 delete_after=5
             )
 
@@ -2343,21 +2355,6 @@ async def perform_unlock(
                     ephemeral=True
                 )
 
-        else:
-
-            try:
-
-                await channel.send(
-
-                    text,
-
-                    delete_after=5
-                )
-
-            except discord.HTTPException:
-
-                pass
-
     except discord.HTTPException as error:
 
         print(
@@ -2376,7 +2373,9 @@ async def perform_unlock(
     description="Lock the current channel or thread"
 )
 @app_commands.default_permissions(
+
     manage_channels=True,
+
     manage_threads=True
 )
 async def slash_lock(
@@ -2409,16 +2408,21 @@ async def slash_lock(
         return
 
     if not can_manage_channel_lock(
+
         interaction.user,
+
         channel
     ):
 
         if isinstance(
+
             channel,
+
             discord.Thread
         ):
 
             text = (
+
                 "❌ تحتاج صلاحية **Manage Threads** "
                 "لاستخدام هذا الأمر على الـ Thread."
             )
@@ -2426,6 +2430,7 @@ async def slash_lock(
         else:
 
             text = (
+
                 "❌ تحتاج صلاحية **Manage Channels** "
                 "لاستخدام هذا الأمر."
             )
@@ -2460,7 +2465,9 @@ async def slash_lock(
     description="Unlock the current channel or thread"
 )
 @app_commands.default_permissions(
+
     manage_channels=True,
+
     manage_threads=True
 )
 async def slash_unlock(
@@ -2493,16 +2500,21 @@ async def slash_unlock(
         return
 
     if not can_manage_channel_lock(
+
         interaction.user,
+
         channel
     ):
 
         if isinstance(
+
             channel,
+
             discord.Thread
         ):
 
             text = (
+
                 "❌ تحتاج صلاحية **Manage Threads** "
                 "لاستخدام هذا الأمر على الـ Thread."
             )
@@ -2510,6 +2522,7 @@ async def slash_unlock(
         else:
 
             text = (
+
                 "❌ تحتاج صلاحية **Manage Channels** "
                 "لاستخدام هذا الأمر."
             )
@@ -2648,8 +2661,6 @@ async def before_auto_cleanup():
 @bot.event
 async def on_message(message):
 
-    # تجاهل رسائل البوتات
-
     if message.author.bot:
 
         return
@@ -2675,8 +2686,6 @@ async def on_message(message):
 
             return
 
-        # حذف رسالة الأمر
-
         try:
 
             await message.delete()
@@ -2684,8 +2693,6 @@ async def on_message(message):
         except discord.HTTPException:
 
             pass
-
-        # التحقق من الصلاحية
 
         if not can_manage_channel_lock(
 
@@ -2724,8 +2731,6 @@ async def on_message(message):
 
             return
 
-        # حذف رسالة الأمر
-
         try:
 
             await message.delete()
@@ -2733,8 +2738,6 @@ async def on_message(message):
         except discord.HTTPException:
 
             pass
-
-        # التحقق من الصلاحية
 
         if not can_manage_channel_lock(
 
@@ -2757,7 +2760,7 @@ async def on_message(message):
         return
 
     # =====================================================
-    # تشغيل أوامر البوت العادية
+    # أوامر البوت العادية
     # =====================================================
 
     await bot.process_commands(
