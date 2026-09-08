@@ -6,6 +6,7 @@ from datetime import datetime, timezone
 
 import discord
 from discord.ext import commands, tasks
+from discord import app_commands
 from flask import Flask
 
 
@@ -69,6 +70,7 @@ def save_config():
                 ensure_ascii=False,
                 indent=2
             )
+
     except OSError as error:
         print(f"❌ تعذر حفظ config.json: {error}")
 
@@ -83,6 +85,7 @@ def get_guild_config(guild_id: int):
         config["guilds"][guild_id] = {
             "next_ticket_number": 1
         }
+
         save_config()
 
     return config["guilds"][guild_id]
@@ -158,6 +161,26 @@ bot = commands.Bot(
 
 
 # =========================================================
+# مزامنة Slash Commands
+# =========================================================
+
+@bot.event
+async def setup_hook():
+
+    try:
+        synced = await bot.tree.sync()
+
+        print(
+            f"✅ تمت مزامنة {len(synced)} من أوامر Slash."
+        )
+
+    except Exception as error:
+        print(
+            f"❌ تعذر مزامنة أوامر Slash: {error}"
+        )
+
+
+# =========================================================
 # Flask / Render Keep Alive
 # =========================================================
 
@@ -192,27 +215,31 @@ def keep_alive():
 # =========================================================
 
 def get_staff_role(guild: discord.Guild):
+
     return discord.utils.get(
         guild.roles,
-        name="Staff"
+        name=config["staff_role_name"]
     )
 
 
 def get_ticket_category(guild: discord.Guild):
+
     return discord.utils.get(
         guild.categories,
-        name="Tickets"
+        name=config["category_name"]
     )
 
 
 def get_log_channel(guild: discord.Guild):
+
     return discord.utils.get(
         guild.text_channels,
-        name="ticket-logs"
+        name=config["log_channel_name"]
     )
 
 
 def is_staff(member: discord.Member):
+
     if member.guild_permissions.administrator:
         return True
 
@@ -225,6 +252,7 @@ def is_staff(member: discord.Member):
 
 
 def is_ticket_channel(channel):
+
     return (
         isinstance(channel, discord.TextChannel)
         and channel.topic
@@ -233,15 +261,21 @@ def is_ticket_channel(channel):
 
 
 def get_ticket_owner_id(channel):
+
     if not channel.topic:
         return None
 
     for part in channel.topic.split("|"):
+
         part = part.strip()
 
         if part.startswith("opener_id:"):
+
             try:
-                return int(part.split(":", 1)[1])
+                return int(
+                    part.split(":", 1)[1]
+                )
+
             except ValueError:
                 return None
 
@@ -249,10 +283,12 @@ def get_ticket_owner_id(channel):
 
 
 def get_ticket_category_value(channel):
+
     if not channel.topic:
         return None
 
     for part in channel.topic.split("|"):
+
         part = part.strip()
 
         if part.startswith("category:"):
@@ -262,15 +298,21 @@ def get_ticket_category_value(channel):
 
 
 def get_ticket_claimed_id(channel):
+
     if not channel.topic:
         return None
 
     for part in channel.topic.split("|"):
+
         part = part.strip()
 
         if part.startswith("claimed_id:"):
+
             try:
-                return int(part.split(":", 1)[1])
+                return int(
+                    part.split(":", 1)[1]
+                )
+
             except ValueError:
                 return None
 
@@ -281,11 +323,12 @@ def update_ticket_topic(
     channel,
     owner_id=None,
     category_value=None,
-    claimed_id=None
+    claimed_id=None,
+    keep_claimed=True
 ):
+
     current_owner = owner_id
     current_category = category_value
-    current_claimed = claimed_id
 
     if owner_id is None:
         current_owner = get_ticket_owner_id(channel)
@@ -293,8 +336,8 @@ def update_ticket_topic(
     if category_value is None:
         current_category = get_ticket_category_value(channel)
 
-    if claimed_id is None:
-        current_claimed = get_ticket_claimed_id(channel)
+    if claimed_id is None and keep_claimed:
+        claimed_id = get_ticket_claimed_id(channel)
 
     parts = [
         f"ticket_id:{channel.id}",
@@ -302,8 +345,10 @@ def update_ticket_topic(
         f"category:{current_category}",
     ]
 
-    if current_claimed:
-        parts.append(f"claimed_id:{current_claimed}")
+    if claimed_id:
+        parts.append(
+            f"claimed_id:{claimed_id}"
+        )
 
     return " | ".join(parts)
 
@@ -312,8 +357,13 @@ def update_ticket_topic(
 # البحث عن تذكرة العضو
 # =========================================================
 
-def find_open_ticket(guild: discord.Guild, user_id: int):
+def find_open_ticket(
+    guild: discord.Guild,
+    user_id: int
+):
+
     for channel in guild.text_channels:
+
         if not is_ticket_channel(channel):
             continue
 
@@ -329,7 +379,9 @@ def find_open_ticket(guild: discord.Guild, user_id: int):
 # Transcript
 # =========================================================
 
-async def build_transcript(channel: discord.TextChannel):
+async def build_transcript(
+    channel: discord.TextChannel
+):
 
     lines = []
 
@@ -342,7 +394,10 @@ async def build_transcript(channel: discord.TextChannel):
             "%Y-%m-%d %H:%M:%S"
         )
 
-        author = f"{message.author} ({message.author.id})"
+        author = (
+            f"{message.author} "
+            f"({message.author.id})"
+        )
 
         content = message.content.strip()
 
@@ -354,13 +409,17 @@ async def build_transcript(channel: discord.TextChannel):
         )
 
         if message.attachments:
+
             for attachment in message.attachments:
+
                 lines.append(
                     f"    مرفق: {attachment.url}"
                 )
 
     if not lines:
-        lines.append("لا توجد رسائل في التذكرة.")
+        lines.append(
+            "لا توجد رسائل في التذكرة."
+        )
 
     text = "\n".join(lines)
 
@@ -391,9 +450,11 @@ async def send_ticket_log(
     log_channel = get_log_channel(guild)
 
     if log_channel is None:
+
         print(
             f"⚠️ لم يتم العثور على روم Logs في {guild.name}"
         )
+
         return
 
     embed = discord.Embed(
@@ -404,16 +465,31 @@ async def send_ticket_log(
     )
 
     try:
-        await log_channel.send(
-            embed=embed,
-            file=file
-        )
+
+        if file:
+
+            await log_channel.send(
+                embed=embed,
+                file=file
+            )
+
+        else:
+
+            await log_channel.send(
+                embed=embed
+            )
 
     except discord.Forbidden:
-        print("❌ البوت لا يملك صلاحية إرسال Logs.")
+
+        print(
+            "❌ البوت لا يملك صلاحية إرسال Logs."
+        )
 
     except discord.HTTPException as error:
-        print(f"❌ خطأ أثناء إرسال Log: {error}")
+
+        print(
+            f"❌ خطأ أثناء إرسال Log: {error}"
+        )
 
 
 # =========================================================
@@ -428,10 +504,18 @@ async def close_ticket_channel(
     guild = channel.guild
 
     try:
-        transcript = await build_transcript(channel)
 
-        owner_id = get_ticket_owner_id(channel)
-        category_value = get_ticket_category_value(channel)
+        transcript = await build_transcript(
+            channel
+        )
+
+        owner_id = get_ticket_owner_id(
+            channel
+        )
+
+        category_value = get_ticket_category_value(
+            channel
+        )
 
         owner_text = (
             f"<@{owner_id}>"
@@ -440,9 +524,17 @@ async def close_ticket_channel(
         )
 
         category_text = (
-            get_category_label(category_value)
+            get_category_label(
+                category_value
+            )
             if category_value
             else "غير معروف"
+        )
+
+        closer_text = (
+            closer.mention
+            if hasattr(closer, "mention")
+            else str(closer)
         )
 
         await send_ticket_log(
@@ -452,18 +544,20 @@ async def close_ticket_channel(
                 f"**الروم:** `{channel.name}`\n"
                 f"**صاحب التذكرة:** {owner_text}\n"
                 f"**النوع:** {category_text}\n"
-                f"**أغلقها:** {closer.mention}"
+                f"**أغلقها:** {closer_text}"
             ),
             discord.Color.red(),
             transcript
         )
 
     except Exception as error:
+
         print(
             f"❌ حدث خطأ أثناء إنشاء Transcript: {error}"
         )
 
     try:
+
         await channel.send(
             "🔒 سيتم حذف التذكرة خلال **5 ثوانٍ**..."
         )
@@ -474,6 +568,7 @@ async def close_ticket_channel(
     await asyncio.sleep(5)
 
     try:
+
         await channel.delete(
             reason=f"Ticket closed by {closer}"
         )
@@ -482,6 +577,7 @@ async def close_ticket_channel(
         pass
 
     except discord.Forbidden:
+
         print(
             f"❌ البوت لا يستطيع حذف الروم {channel.name}"
         )
@@ -594,6 +690,7 @@ async def create_ticket_channel(
         return
 
     # منع التذاكر المكررة
+
     existing = find_open_ticket(
         guild,
         member.id
@@ -609,6 +706,7 @@ async def create_ticket_channel(
         return
 
     # البحث عن الكاتيجوري
+
     category = get_ticket_category(guild)
 
     if category is None:
@@ -616,7 +714,7 @@ async def create_ticket_channel(
         try:
 
             category = await guild.create_category(
-                "Tickets",
+                config["category_name"],
                 reason="إنشاء كاتيجوري التذاكر"
             )
 
@@ -630,11 +728,17 @@ async def create_ticket_channel(
             return
 
     # رقم التذكرة
-    number = get_next_ticket_number(guild)
 
-    channel_name = f"ticket-{number:04d}"
+    number = get_next_ticket_number(
+        guild
+    )
+
+    channel_name = (
+        f"ticket-{number:04d}"
+    )
 
     # الصلاحيات
+
     overwrites = {
 
         guild.default_role:
@@ -661,16 +765,20 @@ async def create_ticket_channel(
             )
     }
 
-    staff_role = get_staff_role(guild)
+    staff_role = get_staff_role(
+        guild
+    )
 
     if staff_role:
 
-        overwrites[staff_role] = discord.PermissionOverwrite(
-            view_channel=True,
-            send_messages=True,
-            read_message_history=True,
-            attach_files=True,
-            embed_links=True
+        overwrites[staff_role] = (
+            discord.PermissionOverwrite(
+                view_channel=True,
+                send_messages=True,
+                read_message_history=True,
+                attach_files=True,
+                embed_links=True
+            )
         )
 
     try:
@@ -692,6 +800,7 @@ async def create_ticket_channel(
         return
 
     # Topic
+
     topic = (
         f"ticket_id:{ticket_channel.id} | "
         f"opener_id:{member.id} | "
@@ -708,6 +817,7 @@ async def create_ticket_channel(
         pass
 
     # Embed
+
     try:
 
         embed_color = int(
@@ -730,7 +840,9 @@ async def create_ticket_channel(
 
     embed.add_field(
         name="📂 النوع",
-        value=get_category_label(category_value),
+        value=get_category_label(
+            category_value
+        ),
         inline=True
     )
 
@@ -881,7 +993,9 @@ class TicketActionView(
 
             return
 
-        claimed_id = get_ticket_claimed_id(channel)
+        claimed_id = get_ticket_claimed_id(
+            channel
+        )
 
         if claimed_id:
 
@@ -901,7 +1015,6 @@ class TicketActionView(
 
             return
 
-        # تعديل Embed
         message = interaction.message
 
         if not message.embeds:
@@ -932,7 +1045,6 @@ class TicketActionView(
                 inline=False
             )
 
-        # تحديث الـ topic
         new_topic = update_ticket_topic(
             channel,
             claimed_id=interaction.user.id
@@ -1083,13 +1195,18 @@ async def setup_cmd(ctx):
     )
 
     try:
+
         await ctx.message.delete()
+
     except discord.HTTPException:
         pass
 
 
 @setup_cmd.error
-async def setup_error(ctx, error):
+async def setup_error(
+    ctx,
+    error
+):
 
     if isinstance(
         error,
@@ -1363,10 +1480,11 @@ async def tc_color(
     value
 ):
 
-    value = value.strip().replace(
-        "#",
-        ""
-    ).upper()
+    value = (
+        value.strip()
+        .replace("#", "")
+        .upper()
+    )
 
     if len(value) != 6:
 
@@ -1501,6 +1619,258 @@ async def ticketconfig_error(
 
 
 # =========================================================
+# Lock / Unlock
+# =========================================================
+
+async def lock_channel(
+    channel: discord.TextChannel
+):
+
+    guild = channel.guild
+
+    overwrite = channel.overwrites_for(
+        guild.default_role
+    )
+
+    overwrite.send_messages = False
+
+    await channel.set_permissions(
+        guild.default_role,
+        overwrite=overwrite,
+        reason="Channel locked"
+    )
+
+
+async def unlock_channel(
+    channel: discord.TextChannel
+):
+
+    guild = channel.guild
+
+    overwrite = channel.overwrites_for(
+        guild.default_role
+    )
+
+    overwrite.send_messages = None
+
+    await channel.set_permissions(
+        guild.default_role,
+        overwrite=overwrite,
+        reason="Channel unlocked"
+    )
+
+
+async def perform_lock(
+    interaction_or_message,
+    channel: discord.TextChannel,
+    user
+):
+
+    try:
+
+        await lock_channel(channel)
+
+        text = (
+            f"🔒 تم قفل الروم بواسطة {user.mention}."
+        )
+
+        if isinstance(
+            interaction_or_message,
+            discord.Interaction
+        ):
+
+            await interaction_or_message.response.send_message(
+                text
+            )
+
+        else:
+
+            await channel.send(
+                text,
+                delete_after=5
+            )
+
+    except discord.Forbidden:
+
+        text = (
+            "❌ لا أملك صلاحية تعديل صلاحيات هذا الروم."
+        )
+
+        if isinstance(
+            interaction_or_message,
+            discord.Interaction
+        ):
+
+            if not interaction_or_message.response.is_done():
+
+                await interaction_or_message.response.send_message(
+                    text,
+                    ephemeral=True
+                )
+
+        else:
+
+            await channel.send(
+                text,
+                delete_after=5
+            )
+
+    except discord.HTTPException as error:
+
+        print(
+            f"❌ Lock Error: {error}"
+        )
+
+
+async def perform_unlock(
+    interaction_or_message,
+    channel: discord.TextChannel,
+    user
+):
+
+    try:
+
+        await unlock_channel(channel)
+
+        text = (
+            f"🔓 تم فتح الروم بواسطة {user.mention}."
+        )
+
+        if isinstance(
+            interaction_or_message,
+            discord.Interaction
+        ):
+
+            await interaction_or_message.response.send_message(
+                text
+            )
+
+        else:
+
+            await channel.send(
+                text,
+                delete_after=5
+            )
+
+    except discord.Forbidden:
+
+        text = (
+            "❌ لا أملك صلاحية تعديل صلاحيات هذا الروم."
+        )
+
+        if isinstance(
+            interaction_or_message,
+            discord.Interaction
+        ):
+
+            if not interaction_or_message.response.is_done():
+
+                await interaction_or_message.response.send_message(
+                    text,
+                    ephemeral=True
+                )
+
+        else:
+
+            await channel.send(
+                text,
+                delete_after=5
+            )
+
+    except discord.HTTPException as error:
+
+        print(
+            f"❌ Unlock Error: {error}"
+        )
+
+
+# =========================================================
+# Slash Command: /lock
+# =========================================================
+
+@bot.tree.command(
+    name="lock",
+    description="Lock the current channel"
+)
+@app_commands.default_permissions(
+    manage_channels=True
+)
+async def slash_lock(
+    interaction: discord.Interaction
+):
+
+    if not interaction.user.guild_permissions.manage_channels:
+
+        await interaction.response.send_message(
+            "❌ ما عندك صلاحية استخدام هذا الأمر.",
+            ephemeral=True
+        )
+
+        return
+
+    if not isinstance(
+        interaction.channel,
+        discord.TextChannel
+    ):
+
+        await interaction.response.send_message(
+            "❌ هذا الأمر يعمل في الرومات النصية فقط.",
+            ephemeral=True
+        )
+
+        return
+
+    await perform_lock(
+        interaction,
+        interaction.channel,
+        interaction.user
+    )
+
+
+# =========================================================
+# Slash Command: /unlock
+# =========================================================
+
+@bot.tree.command(
+    name="unlock",
+    description="Unlock the current channel"
+)
+@app_commands.default_permissions(
+    manage_channels=True
+)
+async def slash_unlock(
+    interaction: discord.Interaction
+):
+
+    if not interaction.user.guild_permissions.manage_channels:
+
+        await interaction.response.send_message(
+            "❌ ما عندك صلاحية استخدام هذا الأمر.",
+            ephemeral=True
+        )
+
+        return
+
+    if not isinstance(
+        interaction.channel,
+        discord.TextChannel
+    ):
+
+        await interaction.response.send_message(
+            "❌ هذا الأمر يعمل في الرومات النصية فقط.",
+            ephemeral=True
+        )
+
+        return
+
+    await perform_unlock(
+        interaction,
+        interaction.channel,
+        interaction.user
+    )
+
+
+# =========================================================
 # Auto Close
 # =========================================================
 
@@ -1511,12 +1881,16 @@ async def auto_cleanup():
 
     for guild in bot.guilds:
 
-        category = get_ticket_category(guild)
+        category = get_ticket_category(
+            guild
+        )
 
         if category is None:
             continue
 
-        for channel in list(category.text_channels):
+        for channel in list(
+            category.text_channels
+        ):
 
             if not is_ticket_channel(channel):
                 continue
@@ -1533,11 +1907,15 @@ async def auto_cleanup():
 
                 if last_message:
 
-                    last_activity = last_message.created_at
+                    last_activity = (
+                        last_message.created_at
+                    )
 
                 else:
 
-                    last_activity = channel.created_at
+                    last_activity = (
+                        channel.created_at
+                    )
 
                 idle_seconds = (
                     now - last_activity
@@ -1580,6 +1958,102 @@ async def auto_cleanup():
 async def before_auto_cleanup():
 
     await bot.wait_until_ready()
+
+
+# =========================================================
+# استقبال الرسائل
+# =========================================================
+
+@bot.event
+async def on_message(message):
+
+    # تجاهل رسائل البوتات
+    if message.author.bot:
+        return
+
+    content = message.content.strip().lower()
+
+    # =====================================================
+    # Lock
+    # =====================================================
+
+    if content in {
+        "lock",
+        "/lock",
+        "قفل"
+    }:
+
+        if not isinstance(
+            message.channel,
+            discord.TextChannel
+        ):
+            return
+
+        # حذف رسالة الأمر
+        try:
+
+            await message.delete()
+
+        except discord.HTTPException:
+            pass
+
+        # التحقق من الصلاحية
+        if not message.author.guild_permissions.manage_channels:
+
+            return
+
+        await perform_lock(
+            message,
+            message.channel,
+            message.author
+        )
+
+        return
+
+    # =====================================================
+    # Unlock
+    # =====================================================
+
+    if content in {
+        "unlock",
+        "/unlock",
+        "فتح"
+    }:
+
+        if not isinstance(
+            message.channel,
+            discord.TextChannel
+        ):
+            return
+
+        # حذف رسالة الأمر
+        try:
+
+            await message.delete()
+
+        except discord.HTTPException:
+            pass
+
+        # التحقق من الصلاحية
+        if not message.author.guild_permissions.manage_channels:
+
+            return
+
+        await perform_unlock(
+            message,
+            message.channel,
+            message.author
+        )
+
+        return
+
+    # =====================================================
+    # تشغيل أوامر البوت العادية
+    # =====================================================
+
+    await bot.process_commands(
+        message
+    )
 
 
 # =========================================================
