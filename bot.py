@@ -15,7 +15,7 @@ from flask import Flask
 # الإعدادات الأساسية
 # =========================================================
 
-TOKEN = os.getenv("TOKEN")
+TOKEN = os.getenv("TOKEN") or os.getenv("BOT_TOKEN")
 PORT = int(os.getenv("PORT", "8080"))
 CONFIG_FILE = "config.json"
 
@@ -28,7 +28,7 @@ DEFAULT_CONFIG = {
     "log_channel_name": "ticket-logs",
     "auto_close_days": 7,
     "admin_role_name": "skibidi admin",
-    "welcome_message": "👋 منور/ه مرحبا بك في 𝐓𝐞𝐚𝐦 𝐅𝐢𝐦𝐞🌀\n{mention}",
+    "welcome_message": "👋 منور/ه مرحبا بك في 𝐓𝐞𝐚𝐦 𝐅𝐢𝐦𝐞🌀\n\"{display_name}\" |\n~\n👋 Welcome to 𝐓𝐞𝐚𝐦 𝐅𝐢𝐦𝐞 🌀",
     "welcome_enabled": True,
     "guilds": {}
 }
@@ -45,8 +45,9 @@ DEFAULT_GUILD_CONFIG = {
     "embed_description": "اضغط على الزر تحت لفتح تذكرة جديدة والتواصل مع فريق الإدارة.",
     "embed_color": "5865F2",
     "admin_role_name": "skibidi admin",
-    "welcome_message": "👋 منور/ه مرحبا بك في 𝐓𝐞𝐚𝐦 𝐅𝐢𝐦𝐞🌀\n{mention}",
+    "welcome_message": "👋 منور/ه مرحبا بك في 𝐓𝐞𝐚𝐦 𝐅𝐢𝐦𝐞🌀\n\"{display_name}\" |\n~\n👋 Welcome to 𝐓𝐞𝐚𝐦 𝐅𝐢𝐦𝐞 🌀",
     "welcome_enabled": True,
+    "stats": {"opened": 0, "closed": 0, "claimed": 0, "categories": {}, "total_duration_seconds": 0},
 }
 
 LEGACY_KEYS = tuple(DEFAULT_GUILD_CONFIG.keys() - {"next_ticket_number", "log_channel_id", "welcome_channel_id"})
@@ -90,6 +91,9 @@ def make_guild_config():
             result[key] = deepcopy(config[key])
     return result
 
+OLD_WELCOME_MESSAGE = "👋 منور/ه مرحبا بك في 𝐓𝐞𝐚𝐦 𝐅𝐢𝐦𝐞🌀\n{mention}"
+NEW_WELCOME_MESSAGE = "👋 منور/ه مرحبا بك في 𝐓𝐞𝐚𝐦 𝐅𝐢𝐦𝐞🌀\n\"{display_name}\" |\n~\n👋 Welcome to 𝐓𝐞𝐚𝐦 𝐅𝐢𝐦𝐞 🌀"
+
 def get_guild_config(guild_id: int):
     guilds = config.setdefault("guilds", {})
     key = str(guild_id)
@@ -103,6 +107,17 @@ def get_guild_config(guild_id: int):
             if name not in current:
                 current[name] = deepcopy(default)
                 changed = True
+        if current.get("welcome_message") == OLD_WELCOME_MESSAGE:
+            current["welcome_message"] = NEW_WELCOME_MESSAGE
+            changed = True
+        if not isinstance(current.get("stats"), dict):
+            current["stats"] = deepcopy(DEFAULT_GUILD_CONFIG["stats"])
+            changed = True
+        else:
+            for stat_name, stat_default in DEFAULT_GUILD_CONFIG["stats"].items():
+                if stat_name not in current["stats"]:
+                    current["stats"][stat_name] = deepcopy(stat_default)
+                    changed = True
     if changed:
         save_config()
     return guilds[key]
@@ -125,6 +140,35 @@ def get_next_ticket_number(guild: discord.Guild):
     guild_config["next_ticket_number"] = number + 1
     save_config()
     return number
+
+def get_stats(guild: discord.Guild):
+    cfg = get_guild_config(guild.id)
+    stats = cfg.setdefault("stats", deepcopy(DEFAULT_GUILD_CONFIG["stats"]))
+    return stats
+
+def increment_ticket_open_stats(guild: discord.Guild, category_value: str):
+    stats = get_stats(guild)
+    stats["opened"] = int(stats.get("opened", 0)) + 1
+    categories = stats.setdefault("categories", {})
+    categories[category_value] = int(categories.get(category_value, 0)) + 1
+    save_config()
+
+def increment_claim_stats(guild: discord.Guild):
+    stats = get_stats(guild)
+    stats["claimed"] = int(stats.get("claimed", 0)) + 1
+    save_config()
+
+def increment_close_stats(guild: discord.Guild, duration_seconds: float = 0):
+    stats = get_stats(guild)
+    stats["closed"] = int(stats.get("closed", 0)) + 1
+    stats["total_duration_seconds"] = float(stats.get("total_duration_seconds", 0)) + max(0, duration_seconds)
+    save_config()
+
+def top_stats_text(mapping, limit=5):
+    if not mapping:
+        return "لا توجد بيانات بعد."
+    pairs = sorted(mapping.items(), key=lambda item: int(item[1]), reverse=True)[:limit]
+    return "\n".join(f"{get_category_label(k)} — **{v}**" for k, v in pairs)
 
 
 # =========================================================
@@ -419,8 +463,29 @@ async def send_ticket_log(
 ):
     log_channel = get_log_channel(guild)
 
+    # إذا اختفى الروم من الـcache بعد Restart، حاول جلبه بالـID المحفوظ.
+    if log_channel is None:
+        channel_id = get_setting(guild, "log_channel_id")
+        if channel_id:
+            try:
+                fetched = await guild.fetch_channel(int(channel_id))
+                if isinstance(fetched, discord.TextChannel):
+                    log_channel = fetched
+            except (discord.NotFound, discord.Forbidden, discord.HTTPException, TypeError, ValueError):
+                log_channel = None
+
     if log_channel is None:
         return
+
+    me = guild.me
+    if me is not None:
+        permissions = log_channel.permissions_for(me)
+        if not permissions.view_channel or not permissions.send_messages:
+            print(f"❌ Logs: البوت لا يستطيع الكتابة في #{log_channel.name}")
+            return
+        if file is None and not permissions.embed_links:
+            print(f"❌ Logs: البوت يحتاج Embed Links في #{log_channel.name}")
+            return
 
     embed = discord.Embed(
         title=title,
@@ -501,6 +566,12 @@ async def close_ticket_channel(
         pass
 
     await asyncio.sleep(5)
+
+    try:
+        duration = (datetime.now(timezone.utc) - channel.created_at).total_seconds()
+    except Exception:
+        duration = 0
+    increment_close_stats(guild, duration)
 
     try:
         await channel.delete(
@@ -643,6 +714,7 @@ async def create_ticket_channel(
     }
 
     staff_role = get_staff_role(guild)
+    admin_role = get_admin_role(guild)
 
     if staff_role:
         overwrites[staff_role] = discord.PermissionOverwrite(
@@ -651,6 +723,17 @@ async def create_ticket_channel(
             read_message_history=True,
             attach_files=True,
             embed_links=True
+        )
+
+    # رتبة skibidi admin يجب أن ترى التذاكر حتى لو لم تكن صلاحيتها Administrator.
+    if admin_role and admin_role != staff_role:
+        overwrites[admin_role] = discord.PermissionOverwrite(
+            view_channel=True,
+            send_messages=True,
+            read_message_history=True,
+            attach_files=True,
+            embed_links=True,
+            manage_messages=True
         )
 
     try:
@@ -741,6 +824,8 @@ async def create_ticket_channel(
         ),
         discord.Color.green()
     )
+
+    increment_ticket_open_stats(guild, category_value)
 
     await interaction.response.send_message(
         f"✅ تم إنشاء تذكرتك: {ticket_channel.mention}",
@@ -884,6 +969,8 @@ class TicketActionView(discord.ui.View):
         except discord.HTTPException:
             pass
 
+        increment_claim_stats(interaction.guild)
+
         await send_ticket_log(
             interaction.guild,
             "👤 تم استلام تذكرة",
@@ -1007,6 +1094,30 @@ async def setup_error(ctx, error):
         )
 
 
+@bot.tree.command(name="setup", description="تجهيز ونشر لوحة التذاكر")
+@app_commands.check(lambda interaction: is_admin(interaction.user))
+async def slash_setup(interaction):
+    guild = interaction.guild
+    me = guild.me
+    missing = []
+    if me:
+        for name, value in (("View Channel", me.guild_permissions.view_channel), ("Send Messages", me.guild_permissions.send_messages), ("Manage Channels", me.guild_permissions.manage_channels), ("Embed Links", me.guild_permissions.embed_links), ("Read Message History", me.guild_permissions.read_message_history)):
+            if not value:
+                missing.append(name)
+    if not get_admin_role(guild):
+        missing.append("رتبة skibidi admin")
+    if missing:
+        await interaction.response.send_message("❌ **Setup يحتاج تعديل**\n" + "\n".join(f"• `{item}`" for item in missing), ephemeral=True)
+        return
+    try:
+        color = int(get_setting(guild, "embed_color", "5865F2"), 16)
+    except (ValueError, TypeError):
+        color = 0x5865F2
+    embed = discord.Embed(title=get_setting(guild, "embed_title", "نظام التذاكر 🎫"), description=get_setting(guild, "embed_description", "اضغط على الزر تحت لفتح تذكرة جديدة والتواصل مع فريق الإدارة."), color=color)
+    embed.set_footer(text="نظام التذاكر")
+    await interaction.response.send_message(embed=embed, view=OpenTicketView())
+
+
 # =========================================================
 # Embed Command
 # =========================================================
@@ -1094,7 +1205,7 @@ async def embed_cmd_error(ctx, error):
 # نظام الترحيب
 # =========================================================
 
-DEFAULT_WELCOME_MESSAGE = "👋 منور/ه مرحبا بك في 𝐓𝐞𝐚𝐦 𝐅𝐢𝐦𝐞🌀\n{mention}"
+DEFAULT_WELCOME_MESSAGE = NEW_WELCOME_MESSAGE
 
 def render_welcome_message(guild, member):
     template = get_setting(guild, "welcome_message", DEFAULT_WELCOME_MESSAGE) or DEFAULT_WELCOME_MESSAGE
@@ -1290,6 +1401,12 @@ async def on_member_join(member):
             render_welcome_message(member.guild, member),
             allowed_mentions=discord.AllowedMentions(users=True, roles=False, everyone=False)
         )
+        await send_ticket_log(
+            member.guild,
+            "👋 دخول عضو جديد",
+            f"**العضو:** {member.mention}\n**الاسم:** {member.display_name}",
+            discord.Color.green()
+        )
     except (discord.Forbidden, discord.HTTPException) as error:
         print(f"❌ Welcome Error: {error}")
 
@@ -1323,8 +1440,24 @@ class LogChannelSelect(discord.ui.ChannelSelect):
         if not permissions or not permissions.view_channel or not permissions.send_messages or not permissions.embed_links:
             await interaction.response.send_message("❌ البوت يحتاج View Channel + Send Messages + Embed Links في روم الـLogs.", ephemeral=True)
             return
+        test_embed = discord.Embed(
+            title="📋 Logs جاهزة",
+            description="تم اختبار روم الـLogs بنجاح. سيتم استخدامه الآن لتسجيل أحداث البوت.",
+            color=discord.Color.green(),
+            timestamp=datetime.now(timezone.utc)
+        )
+        try:
+            await channel.send(embed=test_embed)
+        except discord.Forbidden:
+            await interaction.response.send_message("❌ Discord رفض الإرسال في روم الـLogs. راجع صلاحيات البوت.", ephemeral=True)
+            return
+        except discord.HTTPException as error:
+            print(f"❌ Logs Test Error: {error}")
+            await interaction.response.send_message("❌ صار خطأ أثناء اختبار روم الـLogs.", ephemeral=True)
+            return
+
         set_setting(interaction.guild, "log_channel_id", channel.id)
-        await interaction.response.edit_message(content=f"✅ تم تحديد روم الـLogs: {channel.mention}", view=None)
+        await interaction.response.edit_message(content=f"✅ تم تحديد روم الـLogs: {channel.mention}\n🟢 تم إرسال رسالة اختبار بنجاح.", view=None)
 
 class LogChannelSelectView(discord.ui.View):
     def __init__(self, owner_id):
@@ -1366,6 +1499,45 @@ async def bot_status_command(interaction):
         missing=[name for name,ok in checks if not ok]
         embed.add_field(name="🔐 الصلاحيات", value="✅ الأساسية موجودة" if not missing else "⚠️ ناقص:\n"+"\n".join(f"• `{x}`" for x in missing), inline=False)
     await interaction.response.send_message(embed=embed, ephemeral=True)
+
+@bot.tree.command(name="stats", description="عرض إحصائيات نظام التذاكر")
+@app_commands.check(lambda interaction: is_admin(interaction.user))
+async def stats_command(interaction):
+    guild = interaction.guild
+    stats = get_stats(guild)
+    opened = int(stats.get("opened", 0))
+    closed = int(stats.get("closed", 0))
+    claimed = int(stats.get("claimed", 0))
+    open_now = sum(1 for channel in guild.text_channels if is_ticket_channel(channel))
+    total_duration = float(stats.get("total_duration_seconds", 0))
+    avg_minutes = (total_duration / closed / 60) if closed else 0
+
+    embed = discord.Embed(title="📊 إحصائيات التذاكر", color=discord.Color.blurple(), timestamp=datetime.now(timezone.utc))
+    embed.add_field(name="🎫 المفتوحة الآن", value=str(open_now), inline=True)
+    embed.add_field(name="📈 إجمالي التذاكر", value=str(opened), inline=True)
+    embed.add_field(name="🔒 المغلقة", value=str(closed), inline=True)
+    embed.add_field(name="👤 الاستلامات", value=str(claimed), inline=True)
+    embed.add_field(name="⏱️ متوسط مدة التذكرة", value=f"{avg_minutes:.1f} دقيقة", inline=True)
+    embed.add_field(name="📂 حسب النوع", value=top_stats_text(stats.get("categories", {})), inline=False)
+    await interaction.response.send_message(embed=embed, ephemeral=True)
+
+@bot.tree.command(name="dashboard", description="لوحة إدارة نظام التذاكر")
+@app_commands.check(lambda interaction: is_admin(interaction.user))
+async def dashboard_command(interaction):
+    guild = interaction.guild
+    stats = get_stats(guild)
+    open_now = sum(1 for channel in guild.text_channels if is_ticket_channel(channel))
+    embed = discord.Embed(title="🎛️ Ticket Dashboard", description="لوحة سريعة لإدارة ومراقبة نظام التذاكر.", color=discord.Color.blurple())
+    embed.add_field(name="🎫 Open", value=str(open_now), inline=True)
+    embed.add_field(name="📈 Total", value=str(stats.get("opened", 0)), inline=True)
+    embed.add_field(name="🔒 Closed", value=str(stats.get("closed", 0)), inline=True)
+    embed.add_field(name="👤 Claimed", value=str(stats.get("claimed", 0)), inline=True)
+    logs_channel = get_log_channel(guild)
+    welcome_channel = await get_welcome_channel(guild)
+    embed.add_field(name="📋 Logs", value=logs_channel.mention if logs_channel else "❌ غير محدد", inline=True)
+    embed.add_field(name="👋 Welcome", value=welcome_channel.mention if welcome_channel else "❌ غير محدد", inline=True)
+    await interaction.response.send_message(embed=embed, ephemeral=True)
+
 
 @bot.tree.command(name="ticketinfo", description="عرض معلومات التذكرة الحالية")
 async def ticket_info_command(interaction):
