@@ -72,8 +72,30 @@ def get_guild_config(guild_id: int):
 
     if guild_id not in config["guilds"]:
         config["guilds"][guild_id] = {
-            "next_ticket_number": 1
+            "next_ticket_number": 1,
+            "log_channel_id": None,
+            "welcome_channel_id": None
         }
+        save_config()
+        return config["guilds"][guild_id]
+
+    # ترقية إعدادات سيرفر قديم لإضافة المفاتيح الجديدة إذا كانت ناقصة
+    guild_cfg = config["guilds"][guild_id]
+    changed = False
+
+    if "next_ticket_number" not in guild_cfg:
+        guild_cfg["next_ticket_number"] = 1
+        changed = True
+
+    if "log_channel_id" not in guild_cfg:
+        guild_cfg["log_channel_id"] = None
+        changed = True
+
+    if "welcome_channel_id" not in guild_cfg:
+        guild_cfg["welcome_channel_id"] = None
+        changed = True
+
+    if changed:
         save_config()
 
     return config["guilds"][guild_id]
@@ -127,6 +149,25 @@ def get_category_label(value):
 
 
 # =========================================================
+# رتب الأعضاء التلقائية + رسالة الترحيب
+# =========================================================
+
+MEMBER_ROLE_NAME = "member"
+BOT_ROLE_NAME = "Bot"
+
+WELCOME_MESSAGE_TEMPLATE = (
+    "👋 منور/ه مرحبا بك في 𝐓𝐞𝐚𝐦 𝐅𝐢𝐦𝐞🌀\n"
+    "{mention} |\n"
+    "~\n"
+    "👋 Welcome to 𝐓𝐞𝐚𝐦 𝐅𝐢𝐦𝐞 🌀."
+)
+
+# كلمات قفل/فتح المستخدمة في الرسائل النصية، تُستثنى من لوق حذف الرسائل
+# حتى لا يتكرر تسجيلها مع لوق Lock/Unlock المخصص
+LOCK_TRIGGER_WORDS = {"قفل", "lock", "فتح", "unlock", "!lock", "!unlock"}
+
+
+# =========================================================
 # Discord Bot
 # =========================================================
 
@@ -134,6 +175,8 @@ intents = discord.Intents.default()
 intents.guilds = True
 intents.members = True
 intents.message_content = True
+intents.bans = True
+intents.voice_states = True
 
 bot = commands.Bot(
     command_prefix="!",
@@ -194,6 +237,36 @@ def get_log_channel(guild: discord.Guild):
         guild.text_channels,
         name=config["log_channel_name"]
     )
+
+
+def get_configured_log_channel(guild: discord.Guild):
+    """
+    يرجع روم الـLogs المحدد عبر /log (بالـID) إذا كان موجودًا وصالحًا،
+    وإلا يرجع للروم القديم المعتمد على الاسم (ticket-logs) للتوافق.
+    """
+    guild_config = get_guild_config(guild.id)
+    channel_id = guild_config.get("log_channel_id")
+
+    if channel_id:
+        channel = guild.get_channel(channel_id)
+
+        if isinstance(channel, discord.TextChannel):
+            return channel
+
+    return get_log_channel(guild)
+
+
+def get_configured_welcome_channel(guild: discord.Guild):
+    guild_config = get_guild_config(guild.id)
+    channel_id = guild_config.get("welcome_channel_id")
+
+    if channel_id:
+        channel = guild.get_channel(channel_id)
+
+        if isinstance(channel, discord.TextChannel):
+            return channel
+
+    return None
 
 
 def is_staff(member: discord.Member):
@@ -292,6 +365,14 @@ def update_ticket_topic(
     return " | ".join(parts)
 
 
+def is_in_ticket_category(channel):
+    category = get_ticket_category(channel.guild)
+    return (
+        category is not None
+        and getattr(channel, "category_id", None) == category.id
+    )
+
+
 def find_open_ticket(guild: discord.Guild, user_id: int):
     for channel in guild.text_channels:
         if not is_ticket_channel(channel):
@@ -362,7 +443,7 @@ async def send_ticket_log(
     color=discord.Color.blurple(),
     file=None
 ):
-    log_channel = get_log_channel(guild)
+    log_channel = get_configured_log_channel(guild)
 
     if log_channel is None:
         return
@@ -384,8 +465,59 @@ async def send_ticket_log(
             await log_channel.send(
                 embed=embed
             )
+    except discord.Forbidden:
+        print(f"❌ لا صلاحية للإرسال في روم الـLogs بسيرفر {guild.name}")
     except discord.HTTPException as error:
         print(f"❌ خطأ في إرسال Log: {error}")
+    except Exception as error:
+        print(f"❌ خطأ غير متوقع في إرسال Log: {error}")
+
+
+async def send_event_log(
+    guild,
+    title,
+    color,
+    description=None,
+    fields=None
+):
+    """
+    دالة عامة لإرسال Embed مرتب لأي حدث من أحداث السيرفر إلى روم الـLogs
+    المحدد عبر /log. لا ترفع استثناء أبدًا حتى لا توقف بقية البوت
+    إذا فشل إرسال Log واحد.
+    fields: قائمة عناصر (name, value, inline)
+    """
+    try:
+        log_channel = get_configured_log_channel(guild)
+
+        if log_channel is None:
+            return
+
+        embed = discord.Embed(
+            title=title,
+            color=color,
+            timestamp=datetime.now(timezone.utc)
+        )
+
+        if description:
+            embed.description = description
+
+        if fields:
+            for name, value, inline in fields:
+                safe_value = str(value) if value not in (None, "") else "—"
+                embed.add_field(
+                    name=name,
+                    value=safe_value[:1024],
+                    inline=inline
+                )
+
+        await log_channel.send(embed=embed)
+
+    except discord.Forbidden:
+        print(f"❌ لا صلاحية للإرسال في روم الـLogs بسيرفر {guild.name}")
+    except discord.HTTPException as error:
+        print(f"❌ خطأ HTTP عند إرسال Log: {error}")
+    except Exception as error:
+        print(f"❌ خطأ غير متوقع عند إرسال Log: {error}")
 
 
 # =========================================================
@@ -1395,6 +1527,23 @@ async def send_lock_result(
     except (discord.Forbidden, discord.HTTPException):
         pass
 
+    user_text = (
+        user.mention
+        if hasattr(user, "mention")
+        else str(user)
+    )
+
+    await send_event_log(
+        channel.guild,
+        "🔒 قفل روم" if locked else "🔓 فتح روم",
+        discord.Color.red() if locked else discord.Color.green(),
+        fields=[
+            ("النوع", channel_type_name(channel), True),
+            ("الروم/الـThread", getattr(channel, "mention", channel.name), True),
+            ("بواسطة", user_text, True),
+        ]
+    )
+
 
 # =========================================================
 # تنفيذ Lock / Unlock
@@ -2068,6 +2217,466 @@ async def slash_threadlock(interaction):
         ),
         ephemeral=True
     )
+
+
+# =========================================================
+# /log و /welcome — اختيار روم عبر قائمة Discord
+# =========================================================
+
+class LogChannelSelect(discord.ui.ChannelSelect):
+    def __init__(self, owner_id):
+        super().__init__(
+            placeholder="اختر روم الـLogs...",
+            channel_types=[discord.ChannelType.text],
+            min_values=1,
+            max_values=1
+        )
+        self.owner_id = owner_id
+
+    async def callback(self, interaction):
+        if interaction.user.id != self.owner_id:
+            await interaction.response.send_message(
+                "❌ هذه القائمة ليست لك.",
+                ephemeral=True
+            )
+            return
+
+        selected = self.values[0]
+
+        guild_config = get_guild_config(interaction.guild.id)
+        guild_config["log_channel_id"] = selected.id
+        save_config()
+
+        await interaction.response.edit_message(
+            content=f"✅ تم تحديد {selected.mention} كروم رسمي لتسجيل أحداث السيرفر (Logs).",
+            view=None
+        )
+
+
+class LogChannelSelectView(discord.ui.View):
+    def __init__(self, owner_id):
+        super().__init__(timeout=120)
+        self.add_item(LogChannelSelect(owner_id))
+
+
+class WelcomeChannelSelect(discord.ui.ChannelSelect):
+    def __init__(self, owner_id):
+        super().__init__(
+            placeholder="اختر روم الترحيب...",
+            channel_types=[discord.ChannelType.text],
+            min_values=1,
+            max_values=1
+        )
+        self.owner_id = owner_id
+
+    async def callback(self, interaction):
+        if interaction.user.id != self.owner_id:
+            await interaction.response.send_message(
+                "❌ هذه القائمة ليست لك.",
+                ephemeral=True
+            )
+            return
+
+        selected = self.values[0]
+
+        guild_config = get_guild_config(interaction.guild.id)
+        guild_config["welcome_channel_id"] = selected.id
+        save_config()
+
+        await interaction.response.edit_message(
+            content=f"✅ تم تحديد {selected.mention} كروم للترحيب بالأعضاء الجدد.",
+            view=None
+        )
+
+
+class WelcomeChannelSelectView(discord.ui.View):
+    def __init__(self, owner_id):
+        super().__init__(timeout=120)
+        self.add_item(WelcomeChannelSelect(owner_id))
+
+
+@bot.tree.command(
+    name="log",
+    description="تحديد روم تسجيل أحداث السيرفر (Logs)"
+)
+async def slash_log(interaction):
+    if not interaction.user.guild_permissions.administrator:
+        await interaction.response.send_message(
+            "❌ هذا الأمر للإداريين فقط.",
+            ephemeral=True
+        )
+        return
+
+    await interaction.response.send_message(
+        "📋 اختر الروم الذي تريده ليكون روم الـLogs:",
+        view=LogChannelSelectView(interaction.user.id),
+        ephemeral=True
+    )
+
+
+@bot.tree.command(
+    name="welcome",
+    description="تحديد روم الترحيب بالأعضاء الجدد"
+)
+async def slash_welcome(interaction):
+    if not interaction.user.guild_permissions.administrator:
+        await interaction.response.send_message(
+            "❌ هذا الأمر للإداريين فقط.",
+            ephemeral=True
+        )
+        return
+
+    await interaction.response.send_message(
+        "👋 اختر روم الترحيب بالأعضاء الجدد:",
+        view=WelcomeChannelSelectView(interaction.user.id),
+        ephemeral=True
+    )
+
+
+# =========================================================
+# رتب تلقائية + رسالة ترحيب عند دخول عضو
+# =========================================================
+
+async def assign_auto_role(member: discord.Member):
+    guild = member.guild
+    role_name = BOT_ROLE_NAME if member.bot else MEMBER_ROLE_NAME
+
+    role = discord.utils.get(guild.roles, name=role_name)
+
+    if role is None:
+        print(f"⚠️ لم يتم العثور على رتبة '{role_name}' في سيرفر {guild.name}.")
+
+        await send_event_log(
+            guild,
+            "⚠️ رتبة تلقائية غير موجودة",
+            discord.Color.orange(),
+            description=f"لم يتم العثور على رتبة باسم `{role_name}` لإعطائها للعضو الجديد.",
+            fields=[("العضو", member.mention, True)]
+        )
+        return
+
+    me = guild.me
+
+    if me is None or me.top_role <= role:
+        print(f"⚠️ رتبة البوت ليست أعلى من رتبة '{role_name}' في سيرفر {guild.name}.")
+
+        await send_event_log(
+            guild,
+            "⚠️ تعذر إعطاء رتبة تلقائية",
+            discord.Color.orange(),
+            description=(
+                f"رتبة البوت ليست أعلى من رتبة `{role_name}`، "
+                "يرجى ترتيب الرتب حتى يستطيع البوت إعطاءها."
+            ),
+            fields=[("العضو", member.mention, True)]
+        )
+        return
+
+    try:
+        await member.add_roles(role, reason="إعطاء رتبة تلقائية عند الدخول")
+    except discord.Forbidden:
+        print(f"❌ لا صلاحية لإعطاء رتبة '{role_name}' في سيرفر {guild.name}.")
+    except discord.HTTPException as error:
+        print(f"❌ خطأ عند إعطاء رتبة تلقائية: {error}")
+
+
+async def send_welcome_message(member: discord.Member):
+    channel = get_configured_welcome_channel(member.guild)
+
+    if channel is None:
+        return
+
+    content = WELCOME_MESSAGE_TEMPLATE.format(mention=member.mention)
+
+    try:
+        await channel.send(content)
+    except discord.Forbidden:
+        print(f"❌ لا صلاحية لإرسال رسالة الترحيب في سيرفر {member.guild.name}.")
+    except discord.HTTPException as error:
+        print(f"❌ خطأ عند إرسال رسالة الترحيب: {error}")
+
+
+@bot.event
+async def on_member_join(member):
+    try:
+        await assign_auto_role(member)
+    except Exception as error:
+        print(f"❌ Auto Role Error: {error}")
+
+    if not member.bot:
+        try:
+            await send_welcome_message(member)
+        except Exception as error:
+            print(f"❌ Welcome Message Error: {error}")
+
+    await send_event_log(
+        member.guild,
+        "👋 دخول عضو جديد",
+        discord.Color.green(),
+        fields=[
+            ("العضو", member.mention, True),
+            ("النوع", "Bot" if member.bot else "Member", True),
+            ("الـID", str(member.id), True),
+        ]
+    )
+
+
+@bot.event
+async def on_member_remove(member):
+    await send_event_log(
+        member.guild,
+        "🚪 خروج عضو",
+        discord.Color.dark_grey(),
+        fields=[
+            ("العضو", f"{member} ({member.mention})", True),
+            ("الـID", str(member.id), True),
+        ]
+    )
+
+
+@bot.event
+async def on_member_ban(guild, user):
+    await send_event_log(
+        guild,
+        "🔨 حظر عضو",
+        discord.Color.red(),
+        fields=[
+            ("العضو", f"{user} ({user.mention})", True),
+            ("الـID", str(user.id), True),
+        ]
+    )
+
+
+@bot.event
+async def on_member_unban(guild, user):
+    await send_event_log(
+        guild,
+        "🔓 فك حظر عضو",
+        discord.Color.green(),
+        fields=[
+            ("العضو", f"{user} ({user.mention})", True),
+            ("الـID", str(user.id), True),
+        ]
+    )
+
+
+# =========================================================
+# لوق حذف/تعديل الرسائل
+# =========================================================
+
+@bot.event
+async def on_message_delete(message):
+    if message.guild is None:
+        return
+
+    if message.author.bot:
+        return
+
+    content = (message.content or "").strip()
+
+    # تجاهل رسائل أوامر القفل النصية والأوامر بالـ prefix
+    # لأنها تُسجَّل أصلاً عبر لوق Lock/Unlock أو تنظيف طبيعي للأوامر
+    if content.lower() in LOCK_TRIGGER_WORDS:
+        return
+
+    if content.startswith(bot.command_prefix):
+        return
+
+    preview = content if content else "[بدون نص / مرفق فقط]"
+
+    await send_event_log(
+        message.guild,
+        "🗑️ حذف رسالة",
+        discord.Color.dark_red(),
+        fields=[
+            ("العضو", message.author.mention, True),
+            ("الروم", message.channel.mention, True),
+            ("المحتوى", preview[:500], False),
+        ]
+    )
+
+
+@bot.event
+async def on_message_edit(before, after):
+    if before.guild is None:
+        return
+
+    if before.author.bot:
+        return
+
+    if before.content == after.content:
+        return
+
+    await send_event_log(
+        before.guild,
+        "✏️ تعديل رسالة",
+        discord.Color.orange(),
+        fields=[
+            ("العضو", before.author.mention, True),
+            ("الروم", before.channel.mention, True),
+            ("قبل", (before.content or "—")[:400], False),
+            ("بعد", (after.content or "—")[:400], False),
+        ]
+    )
+
+
+# =========================================================
+# لوق الرومات (إنشاء / حذف / تعديل)
+# =========================================================
+
+@bot.event
+async def on_guild_channel_create(channel):
+    # لا نسجّل رومات التذاكر هنا، لأن فتح التذكرة له لوق مخصص أصلاً
+    if is_in_ticket_category(channel):
+        return
+
+    await send_event_log(
+        channel.guild,
+        "📁 إنشاء روم",
+        discord.Color.green(),
+        fields=[
+            ("الروم", getattr(channel, "mention", channel.name), True),
+            ("النوع", str(channel.type), True),
+        ]
+    )
+
+
+@bot.event
+async def on_guild_channel_delete(channel):
+    # حذف رومات التذاكر له لوق مخصص أصلاً عند الإغلاق
+    if is_in_ticket_category(channel):
+        return
+
+    await send_event_log(
+        channel.guild,
+        "🗑️ حذف روم",
+        discord.Color.dark_red(),
+        fields=[
+            ("اسم الروم", channel.name, True),
+            ("النوع", str(channel.type), True),
+        ]
+    )
+
+
+@bot.event
+async def on_guild_channel_update(before, after):
+    # نتجاهل رومات التذاكر لأن الـtopic يتغير باستمرار (Claim مثلاً)
+    # وهذا يسبب سبام لا فائدة منه
+    if is_in_ticket_category(after):
+        return
+
+    changes = []
+
+    if before.name != after.name:
+        changes.append(f"**الاسم:** `{before.name}` ➜ `{after.name}`")
+
+    before_topic = getattr(before, "topic", None)
+    after_topic = getattr(after, "topic", None)
+
+    if before_topic != after_topic:
+        changes.append("**تم تغيير وصف/موضوع الروم.**")
+
+    if not changes:
+        return
+
+    await send_event_log(
+        after.guild,
+        "⚙️ تعديل روم",
+        discord.Color.blue(),
+        description="\n".join(changes),
+        fields=[("الروم", getattr(after, "mention", after.name), True)]
+    )
+
+
+# =========================================================
+# لوق الرتب (إنشاء / حذف / تعديل)
+# =========================================================
+
+@bot.event
+async def on_guild_role_create(role):
+    await send_event_log(
+        role.guild,
+        "🟢 إنشاء Role",
+        discord.Color.green(),
+        fields=[("الرتبة", role.mention, True)]
+    )
+
+
+@bot.event
+async def on_guild_role_delete(role):
+    await send_event_log(
+        role.guild,
+        "🔴 حذف Role",
+        discord.Color.red(),
+        fields=[("اسم الرتبة", role.name, True)]
+    )
+
+
+@bot.event
+async def on_guild_role_update(before, after):
+    if before.name == after.name and before.color == after.color:
+        return
+
+    changes = []
+
+    if before.name != after.name:
+        changes.append(f"**الاسم:** `{before.name}` ➜ `{after.name}`")
+
+    if before.color != after.color:
+        changes.append(f"**اللون:** `{before.color}` ➜ `{after.color}`")
+
+    await send_event_log(
+        after.guild,
+        "⚙️ تعديل Role",
+        discord.Color.blue(),
+        description="\n".join(changes),
+        fields=[("الرتبة", after.mention, True)]
+    )
+
+
+# =========================================================
+# لوق الـVoice (دخول / خروج / انتقال)
+# =========================================================
+
+@bot.event
+async def on_voice_state_update(member, before, after):
+    if before.channel is None and after.channel is not None:
+        await send_event_log(
+            member.guild,
+            "🔊 دخول Voice",
+            discord.Color.green(),
+            fields=[
+                ("العضو", member.mention, True),
+                ("الروم", after.channel.mention, True),
+            ]
+        )
+
+    elif before.channel is not None and after.channel is None:
+        await send_event_log(
+            member.guild,
+            "🔇 خروج Voice",
+            discord.Color.dark_grey(),
+            fields=[
+                ("العضو", member.mention, True),
+                ("الروم", before.channel.mention, True),
+            ]
+        )
+
+    elif (
+        before.channel is not None
+        and after.channel is not None
+        and before.channel.id != after.channel.id
+    ):
+        await send_event_log(
+            member.guild,
+            "🔄 انتقال Voice",
+            discord.Color.blue(),
+            fields=[
+                ("العضو", member.mention, True),
+                ("من", before.channel.mention, True),
+                ("إلى", after.channel.mention, True),
+            ]
+        )
 
 
 # =========================================================
