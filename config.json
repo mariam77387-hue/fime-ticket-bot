@@ -4,6 +4,7 @@
   "embed_color": "5865F2",
   "category_name": "Tickets",
   "staff_role_name": "Staff",
+  "admin_role_name": "skibidi admin",
   "log_channel_name": "ticket-logs",
   "auto_close_days": 7,
   "guilds": {}
