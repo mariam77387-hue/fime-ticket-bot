@@ -2919,5 +2919,16 @@ if __name__ == "__main__":
             "أضفه في Environment Variables."
         )
 
+    # =====================================================
+    # تحميل نظام Server Logs من bot2.py
+    # =====================================================
+    try:
+        import bot2
+        asyncio.run(bot2.setup(bot))
+        print("✅ تم تحميل نظام Server Logs من bot2.py")
+    except Exception as error:
+        print(f"❌ تعذر تحميل bot2.py: {error}")
+        raise
+
     keep_alive()
     bot.run(TOKEN)
