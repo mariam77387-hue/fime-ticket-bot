@@ -149,6 +149,7 @@ def guild_config(guild):
     cfg.setdefault("level_voice_xp_per_minute", 3)
     cfg.setdefault("level_rewards", {})
     cfg.setdefault("level_xp", {})
+    cfg.setdefault("level_channel_id", None)
 
     # Protection
     protection = cfg.setdefault("protection", {})
@@ -156,7 +157,7 @@ def guild_config(guild):
     protection.setdefault("anti_spam", True)
     protection.setdefault("spam_limit", 5)
     protection.setdefault("spam_window", 5)
-    protection.setdefault("spam_timeout_minutes", 10)
+    protection.setdefault("spam_timeout_seconds", 600)
     protection.setdefault("anti_repeat", True)
     protection.setdefault("repeat_limit", 3)
     protection.setdefault("anti_links", True)
@@ -164,12 +165,19 @@ def guild_config(guild):
     protection.setdefault("anti_mentions", True)
     protection.setdefault("mention_limit", 5)
     protection.setdefault("mention_timeout_minutes", 10)
+    protection.setdefault("exempt_spam_role_ids", [])
+    protection.setdefault("exempt_link_role_ids", [])
+    protection.setdefault("security_enabled", True)
+    protection.setdefault("raid_join_limit", 8)
+    protection.setdefault("raid_window_seconds", 15)
+    protection.setdefault("raid_timeout_minutes", 10)
+    protection.setdefault("security_action", "timeout_new_joins")
 
     # AI
     ai = cfg.setdefault("ai", {})
     ai.setdefault("enabled", False)
     ai.setdefault("channel_id", None)
-    ai.setdefault("system_prompt", "أنت مساعد مفيد وودود داخل سيرفر Discord. كن مختصرًا وواضحًا.")
+    ai.setdefault("system_prompt", "أنت مساعد مفيد وودود داخل سيرفر Discord. كن مختصرًا وواضحًا. إذا سأل المستخدم عن سكربتات أو إعدادات البوت، أعطه شرحًا آمنًا ومباشرًا.")
 
     # Warnings
     cfg.setdefault("warnings", {})
@@ -343,6 +351,8 @@ class ServerLogger(commands.Cog):
         self._repeat_messages = defaultdict(deque)
         self._chat_xp_cooldown = {}
         self._voice_xp_loop_started = False
+        self._raid_joins = defaultdict(deque)
+        self._security_actions = defaultdict(deque)
 
     async def cog_load(self):
         print("✅ Team Fime bot2 systems loaded.")
@@ -557,7 +567,7 @@ class ServerLogger(commands.Cog):
         )
         embed.add_field(
             name="⭐ Levels",
-            value="`/level` • `/setxp` • `/resetlevel` • `/levelreward`",
+            value="`/level` • `/setxp` • `/resetlevel` • `/levelreward` • `/levelchannel`",
             inline=False,
         )
         embed.add_field(
@@ -775,6 +785,52 @@ class ServerLogger(commands.Cog):
                     except discord.HTTPException:
                         pass
 
+    async def announce_level_up(self, guild, member, old_level, new_level, xp, source):
+        channel_id = get_value(guild, ["level_channel_id"], None)
+        channel = None
+        if channel_id:
+            channel = guild.get_channel(int(channel_id))
+        if channel is not None and isinstance(channel, discord.TextChannel):
+            if permission_ok(guild, channel):
+                embed = discord.Embed(
+                    title="🎉 Level Up!",
+                    description=f"مبروك {member.mention}! ارتفع مستواك من **{old_level}** إلى **{new_level}**.",
+                    color=discord.Color.gold(),
+                )
+                embed.add_field(name="✨ XP", value=f"`{xp}`", inline=True)
+                embed.add_field(name="📌 المصدر", value=source, inline=True)
+                embed.set_thumbnail(url=member.display_avatar.url)
+                try:
+                    await channel.send(embed=embed)
+                    return
+                except discord.HTTPException:
+                    pass
+
+        await self.send_log(
+            guild,
+            "level",
+            f"ارتفع مستوى {member.mention}!",
+            fields=[
+                ("⭐ المستوى", f"`{old_level}` → `{new_level}`", True),
+                ("✨ XP", f"`{xp}`", True),
+                ("📌 المصدر", source, True),
+            ],
+        )
+
+    @app_commands.command(name="levelchannel", description="تحديد روم إعلانات الارتقاء باللفل")
+    @app_commands.describe(channel="الروم الذي تظهر فيه رسائل Level Up")
+    @app_commands.default_permissions(administrator=True)
+    async def levelchannel(self, interaction: discord.Interaction, channel: discord.TextChannel | None = None):
+        if not is_admin(interaction.user):
+            await interaction.response.send_message("❌ للإداريين فقط.", ephemeral=True)
+            return
+        if channel is None:
+            set_value(interaction.guild, ["level_channel_id"], None)
+            await interaction.response.send_message("♻️ تم إلغاء روم إعلانات اللفل. ستعود رسائل اللفل إلى اللوق.", ephemeral=True)
+            return
+        set_value(interaction.guild, ["level_channel_id"], channel.id)
+        await interaction.response.send_message(f"✅ روم اللفل أصبح {channel.mention}.", ephemeral=True)
+
     async def award_chat_xp(self, message):
         guild = message.guild
         member = message.author
@@ -803,15 +859,7 @@ class ServerLogger(commands.Cog):
 
         if new_level > old_level:
             await self.check_level_reward(guild, member, old_level, new_level)
-            await self.send_log(
-                guild,
-                "level",
-                f"ارتفع مستوى {member.mention}!",
-                fields=[
-                    ("⭐ المستوى", f"`{old_level}` → `{new_level}`", True),
-                    ("✨ XP", f"`{new_xp}`", True),
-                ],
-            )
+            await self.announce_level_up(guild, member, old_level, new_level, new_xp, "💬 الشات")
 
     @app_commands.command(name="level", description="عرض Level وXP لعضو")
     @app_commands.describe(member="العضو اختياري")
@@ -1273,14 +1321,21 @@ class ServerLogger(commands.Cog):
     # Protection
     # =====================================================
 
-    def protection_exempt(self, message):
+    def protection_exempt(self, message, protection=None, kind=None):
         if not message.guild or not message.author:
             return True
-        if message.author.bot:
+        if message.author.bot or is_admin(message.author):
             return True
-        if is_admin(message.author):
+        protection = protection or guild_config(message.guild)["protection"]
+        role_ids = protection.get("exempt_spam_role_ids", []) if kind == "spam" else protection.get("exempt_link_role_ids", [])
+        member_role_ids = {role.id for role in getattr(message.author, "roles", [])}
+        return bool(member_role_ids.intersection({int(x) for x in role_ids}))
+
+    def is_exempt_from(self, member, protection, kind):
+        if member.bot or is_admin(member):
             return True
-        return False
+        role_ids = protection.get("exempt_spam_role_ids", []) if kind == "spam" else protection.get("exempt_link_role_ids", [])
+        return bool({role.id for role in member.roles}.intersection({int(x) for x in role_ids}))
 
     def has_link(self, content):
         return bool(
@@ -1294,11 +1349,11 @@ class ServerLogger(commands.Cog):
         lower = content.lower()
         return any(domain.lower() in lower for domain in allowed_domains)
 
-    async def punish_protection(self, message, reason, minutes):
+    async def punish_protection(self, message, reason, seconds):
         member = message.author
         try:
             await member.timeout(
-                discord.utils.utcnow() + timedelta(minutes=minutes),
+                discord.utils.utcnow() + timedelta(seconds=seconds),
                 reason=f"Team Fime Protection: {reason}",
             )
         except discord.HTTPException:
@@ -1315,16 +1370,13 @@ class ServerLogger(commands.Cog):
             f"🛡️ تم تفعيل الحماية على {member.mention}.",
             fields=[
                 ("السبب", reason, True),
-                ("العقوبة", f"Timeout {minutes} دقيقة", True),
+                ("العقوبة", f"Timeout {int(seconds)} ثانية", True),
                 ("الروم", channel_text(message.channel), True),
             ],
         )
         return True
 
     async def process_protection(self, message):
-        if self.protection_exempt(message):
-            return
-
         guild = message.guild
         cfg = guild_config(guild)
         protection = cfg["protection"]
@@ -1336,7 +1388,7 @@ class ServerLogger(commands.Cog):
         now = time.monotonic()
 
         # Anti spam
-        if protection.get("anti_spam", True):
+        if protection.get("anti_spam", True) and not self.is_exempt_from(message.author, protection, "spam"):
             queue = self._message_times[key]
             window = int(protection.get("spam_window", 5))
             limit = int(protection.get("spam_limit", 5))
@@ -1350,12 +1402,12 @@ class ServerLogger(commands.Cog):
                 await self.punish_protection(
                     message,
                     f"Spam ({limit} رسائل خلال {window} ثواني)",
-                    int(protection.get("spam_timeout_minutes", 10)),
+                    int(protection.get("spam_timeout_seconds", 600)),
                 )
                 return
 
         # Anti repeat
-        if protection.get("anti_repeat", True) and message.content.strip():
+        if protection.get("anti_repeat", True) and not self.is_exempt_from(message.author, protection, "spam") and message.content.strip():
             repeats = self._repeat_messages[key]
             normalized = re.sub(r"\s+", " ", message.content.strip().lower())
             repeats.append((now, normalized))
@@ -1369,18 +1421,18 @@ class ServerLogger(commands.Cog):
                 await self.punish_protection(
                     message,
                     "تكرار نفس الرسالة بشكل متتابع",
-                    int(protection.get("spam_timeout_minutes", 10)),
+                    int(protection.get("spam_timeout_seconds", 600)),
                 )
                 return
 
         # Anti link
-        if protection.get("anti_links", True) and self.has_link(message.content):
+        if protection.get("anti_links", True) and not self.is_exempt_from(message.author, protection, "links") and self.has_link(message.content):
             allowed = protection.get("allowed_domains", [])
             if not self.allowed_link(message.content, allowed):
                 await self.punish_protection(
                     message,
                     "رابط غير مسموح",
-                    int(protection.get("spam_timeout_minutes", 10)),
+                    int(protection.get("spam_timeout_seconds", 600)),
                 )
                 return
 
@@ -1391,7 +1443,7 @@ class ServerLogger(commands.Cog):
                 await self.punish_protection(
                     message,
                     "منشنات كثيرة",
-                    int(protection.get("mention_timeout_minutes", 10)),
+                    int(protection.get("mention_timeout_minutes", 10)) * 60,
                 )
 
     # =====================================================
@@ -1438,9 +1490,10 @@ class ServerLogger(commands.Cog):
 
     @app_commands.command(name="antispam", description="تعديل Anti-Spam")
     @app_commands.describe(
-        limit="عدد الرسائل",
-        window="الفترة بالثواني",
-        timeout_minutes="مدة Timeout بالدقائق",
+        limit="عدد الرسائل مثل 5",
+        window="خلال كم ثانية مثل 5",
+        timeout_minutes="العقوبة بالدقائق (اختياري)",
+        timeout_seconds="العقوبة بالثواني (اختياري)",
     )
     @app_commands.default_permissions(administrator=True)
     async def antispam(
@@ -1448,27 +1501,42 @@ class ServerLogger(commands.Cog):
         interaction: discord.Interaction,
         limit: int,
         window: int,
-        timeout_minutes: int,
+        timeout_minutes: int | None = None,
+        timeout_seconds: int | None = None,
     ):
         if not is_admin(interaction.user):
             await interaction.response.send_message("❌ للإداريين فقط.", ephemeral=True)
             return
-
-        if not 2 <= limit <= 30 or not 1 <= window <= 60 or not 1 <= timeout_minutes <= 10080:
-            await interaction.response.send_message("❌ القيم خارج الحدود المسموحة.", ephemeral=True)
+        if (timeout_minutes is None) == (timeout_seconds is None):
+            await interaction.response.send_message("❌ اختر مدة العقوبة بالدقائق **أو** بالثواني، وليس الاثنين معًا.", ephemeral=True)
             return
+        if not 2 <= limit <= 30 or not 1 <= window <= 60:
+            await interaction.response.send_message("❌ عدد الرسائل يجب أن يكون 2-30 والفترة 1-60 ثانية.", ephemeral=True)
+            return
+        if timeout_minutes is not None:
+            if not 1 <= timeout_minutes <= 10080:
+                await interaction.response.send_message("❌ مدة الدقائق يجب أن تكون من 1 إلى 10080 دقيقة.", ephemeral=True)
+                return
+            seconds = timeout_minutes * 60
+            label = f"{timeout_minutes} دقيقة"
+        else:
+            if not 1 <= timeout_seconds <= 604800:
+                await interaction.response.send_message("❌ مدة الثواني يجب أن تكون من 1 إلى 604800 ثانية.", ephemeral=True)
+                return
+            seconds = timeout_seconds
+            label = f"{timeout_seconds} ثانية"
 
         def writer(cfg):
             protection = cfg.setdefault("protection", {})
             protection["anti_spam"] = True
             protection["spam_limit"] = limit
             protection["spam_window"] = window
-            protection["spam_timeout_minutes"] = timeout_minutes
+            protection["spam_timeout_seconds"] = seconds
 
         update_guild_config(interaction.guild, writer)
-
         await interaction.response.send_message(
-            f"🛡️ Anti-Spam: `{limit}` رسائل خلال `{window}s` → Timeout `{timeout_minutes}m`."
+            f"🛡️ Anti-Spam تم ضبطه: **{limit} رسائل خلال {window} ثواني** → Timeout **{label}**.",
+            ephemeral=True,
         )
 
     @app_commands.command(name="antilink", description="تشغيل أو إيقاف حماية الروابط")
@@ -1507,13 +1575,108 @@ class ServerLogger(commands.Cog):
         await interaction.response.send_message(f"✅ تم السماح بـ `{domain}`.")
 
     # =====================================================
+    # Welcome message customization
+    # =====================================================
+
+    @app_commands.command(name="welcomemessage", description="تعديل رسالة الترحيب التي يستخدمها bot.py")
+    @app_commands.describe(message="رسالة الترحيب. المتغيرات: {mention} {username} {display_name} {server}")
+    @app_commands.default_permissions(administrator=True)
+    async def welcomemessage(self, interaction: discord.Interaction, message: str):
+        if not is_admin(interaction.user):
+            await interaction.response.send_message("❌ للإداريين فقط.", ephemeral=True)
+            return
+        if len(message) > 1900:
+            await interaction.response.send_message("❌ رسالة الترحيب طويلة جدًا. الحد 1900 حرف.", ephemeral=True)
+            return
+
+        # bot.py هو المسؤول عن إرسال الترحيب، وهذا الأمر يغيّر القالب الذي يقرأه bot.py.
+        set_value(interaction.guild, ["welcome_message"], message)
+        preview = message.replace("{mention}", interaction.user.mention).replace("{username}", interaction.user.name).replace("{display_name}", interaction.user.display_name).replace("{server}", interaction.guild.name)
+        await interaction.response.send_message(
+            f"✅ تم حفظ رسالة الترحيب.\n\n**المعاينة:**\n{preview[:1900]}",
+            ephemeral=True,
+        )
+
+    @app_commands.command(name="protectionexempt", description="استثناء رتبة من حماية السبام أو الروابط")
+    @app_commands.describe(role="الرتبة المستثناة", protection="نوع الحماية")
+    @app_commands.choices(protection=[
+        app_commands.Choice(name="Spam + Repeat", value="spam"),
+        app_commands.Choice(name="Links", value="links"),
+        app_commands.Choice(name="Spam + Repeat + Links", value="both"),
+    ])
+    @app_commands.default_permissions(administrator=True)
+    async def protectionexempt(self, interaction: discord.Interaction, role: discord.Role, protection: app_commands.Choice[str]):
+        if not is_admin(interaction.user):
+            await interaction.response.send_message("❌ للإداريين فقط.", ephemeral=True)
+            return
+        value = protection.value
+        def writer(cfg):
+            p = cfg.setdefault("protection", {})
+            if value in ("spam", "both") and role.id not in p.setdefault("exempt_spam_role_ids", []):
+                p["exempt_spam_role_ids"].append(role.id)
+            if value in ("links", "both") and role.id not in p.setdefault("exempt_link_role_ids", []):
+                p["exempt_link_role_ids"].append(role.id)
+        update_guild_config(interaction.guild, writer)
+        await interaction.response.send_message(f"✅ تم استثناء {role.mention} من: **{protection.name}**.", ephemeral=True)
+
+    @app_commands.command(name="protectionexemptremove", description="إلغاء استثناء رتبة من الحماية")
+    @app_commands.describe(role="الرتبة", protection="نوع الحماية")
+    @app_commands.choices(protection=[
+        app_commands.Choice(name="Spam + Repeat", value="spam"),
+        app_commands.Choice(name="Links", value="links"),
+        app_commands.Choice(name="الكل", value="both"),
+    ])
+    @app_commands.default_permissions(administrator=True)
+    async def protectionexemptremove(self, interaction: discord.Interaction, role: discord.Role, protection: app_commands.Choice[str]):
+        if not is_admin(interaction.user):
+            await interaction.response.send_message("❌ للإداريين فقط.", ephemeral=True)
+            return
+        value = protection.value
+        def writer(cfg):
+            p = cfg.setdefault("protection", {})
+            if value in ("spam", "both"):
+                p["exempt_spam_role_ids"] = [x for x in p.setdefault("exempt_spam_role_ids", []) if int(x) != role.id]
+            if value in ("links", "both"):
+                p["exempt_link_role_ids"] = [x for x in p.setdefault("exempt_link_role_ids", []) if int(x) != role.id]
+        update_guild_config(interaction.guild, writer)
+        await interaction.response.send_message(f"♻️ تم إلغاء استثناء {role.mention}.", ephemeral=True)
+
+    @app_commands.command(name="protectionexemptlist", description="عرض الرتب المستثناة من الحماية")
+    @app_commands.default_permissions(administrator=True)
+    async def protectionexemptlist(self, interaction: discord.Interaction):
+        if not is_admin(interaction.user):
+            await interaction.response.send_message("❌ للإداريين فقط.", ephemeral=True)
+            return
+        p = guild_config(interaction.guild)["protection"]
+        spam_roles = [interaction.guild.get_role(int(x)) for x in p.get("exempt_spam_role_ids", [])]
+        link_roles = [interaction.guild.get_role(int(x)) for x in p.get("exempt_link_role_ids", [])]
+        embed = discord.Embed(title="🛡️ Protection Exempt Roles", color=discord.Color.blurple())
+        embed.add_field(name="Spam / Repeat", value=", ".join(r.mention for r in spam_roles if r) or "لا يوجد", inline=False)
+        embed.add_field(name="Links", value=", ".join(r.mention for r in link_roles if r) or "لا يوجد", inline=False)
+        await interaction.response.send_message(embed=embed, ephemeral=True)
+
+    # =====================================================
     # AI Chat
     # =====================================================
+
+    def local_ai_response(self, text):
+        t = text.strip().lower()
+        if any(x in t for x in ["كيف احط سكربت", "كيف أحط سكربت", "وين احط سكربت", "كيف اضع سكربت"]):
+            return "تقدر تحط السكربت في الروم المخصص له إذا كان عندك روم للسكربتات. مثال: أرسل السكربت داخل روم #scripts، والبوت يقدر يرد عليك بالمكان الصحيح أو يشرح لك طريقة الاستخدام."
+        if "كيف" in t and "بوت" in t:
+            return "إذا تقصد إعداد البوت، اكتب لي وش الشيء اللي تبي تسويه بالضبط، وبشرح لك الخطوات بشكل مختصر."
+        if any(x in t for x in ["مساعدة", "help", "وش تقدر", "ماذا تستطيع"]):
+            return "أقدر أساعدك في أوامر السيرفر، التذاكر، الرتب، الحماية، اللفلات، والبرمجة بشكل عام. اكتب سؤالك مباشرة."
+        if "لفل" in t or "level" in t:
+            return "نظام اللفل يعطي XP من الشات والفويس، والمالك يقدر يحدد روم رسائل Level Up ويضع مكافآت رتب عند الوصول لمستويات معينة."
+        if "تذكرة" in t or "ticket" in t:
+            return "إذا تحتاج دعم، افتح تذكرة من نظام التذاكر الموجود في السيرفر وسيتم توجيهك للقسم المناسب."
+        return "هذا وضع المساعد المحلي في Team Fime. ما عندي نموذج سحابي بدون API Key، لكن أقدر أجاوب على الأسئلة الشائعة المبرمجة هنا. إذا وفرت AI_API_KEY لاحقًا يتحول المساعد إلى نموذج GPT تلقائيًا."
 
     async def openai_response(self, user_text, system_prompt):
         api_key = os.getenv("AI_API_KEY")
         if not api_key:
-            return None, "لم يتم ضبط `AI_API_KEY` في Environment Variables."
+            return self.local_ai_response(user_text), None
 
         model = os.getenv("AI_MODEL", "gpt-5.6-luna")
 
@@ -1612,10 +1775,58 @@ class ServerLogger(commands.Cog):
         embed.add_field(name="الروم", value=channel.mention if channel else "غير محدد", inline=True)
         embed.add_field(
             name="API Key",
-            value="🟢 موجود" if os.getenv("AI_API_KEY") else "🔴 غير موجود",
+            value="🟢 GPT API" if os.getenv("AI_API_KEY") else "🟡 Local Assistant (بدون API Key)",
             inline=True,
         )
         await interaction.response.send_message(embed=embed, ephemeral=True)
+
+    # =====================================================
+    # Anti-Raid / Anti-Hack defensive security
+    # =====================================================
+
+    def security_record(self, guild, key, window, limit):
+        bucket = self._security_actions[(guild.id, key)]
+        now = time.monotonic()
+        bucket.append(now)
+        while bucket and now - bucket[0] > window:
+            bucket.popleft()
+        return len(bucket) >= limit
+
+    async def security_alert(self, guild, title, description):
+        await self.send_log(
+            guild,
+            "protection",
+            description,
+            fields=[("🛡️ الإجراء", title, False)],
+        )
+
+    @app_commands.command(name="security", description="إعداد الحماية الأمنية ضد الهجمات الجماعية")
+    @app_commands.describe(enabled="تشغيل أو إيقاف الحماية الأمنية")
+    @app_commands.default_permissions(administrator=True)
+    async def security(self, interaction: discord.Interaction, enabled: bool):
+        if not is_admin(interaction.user):
+            await interaction.response.send_message("❌ للإداريين فقط.", ephemeral=True)
+            return
+        set_value(interaction.guild, ["protection", "security_enabled"], enabled)
+        await interaction.response.send_message(f"🛡️ الحماية الأمنية: {'🟢 مفعلة' if enabled else '🔴 معطلة'}", ephemeral=True)
+
+    @app_commands.command(name="securityconfig", description="تحديد حد هجوم دخول الأعضاء")
+    @app_commands.describe(join_limit="عدد الأعضاء خلال الفترة", window_seconds="الفترة بالثواني", timeout_minutes="Timeout للأعضاء الجدد أثناء الهجوم")
+    @app_commands.default_permissions(administrator=True)
+    async def securityconfig(self, interaction: discord.Interaction, join_limit: int, window_seconds: int, timeout_minutes: int):
+        if not is_admin(interaction.user):
+            await interaction.response.send_message("❌ للإداريين فقط.", ephemeral=True)
+            return
+        if not 3 <= join_limit <= 100 or not 5 <= window_seconds <= 120 or not 1 <= timeout_minutes <= 1440:
+            await interaction.response.send_message("❌ القيم: الأعضاء 3-100، الفترة 5-120 ثانية، العقوبة 1-1440 دقيقة.", ephemeral=True)
+            return
+        def writer(cfg):
+            p=cfg.setdefault("protection", {})
+            p["raid_join_limit"]=join_limit
+            p["raid_window_seconds"]=window_seconds
+            p["raid_timeout_minutes"]=timeout_minutes
+        update_guild_config(interaction.guild, writer)
+        await interaction.response.send_message(f"🛡️ Anti-Raid: `{join_limit}` دخول خلال `{window_seconds}` ثانية → Timeout `{timeout_minutes}` دقيقة للأعضاء الجدد أثناء الهجوم.", ephemeral=True)
 
     # =====================================================
     # Events
@@ -1623,6 +1834,23 @@ class ServerLogger(commands.Cog):
 
     @commands.Cog.listener()
     async def on_member_join(self, member):
+        cfg = guild_config(member.guild)
+        protection = cfg.get("protection", {})
+        if protection.get("security_enabled", True) and not member.bot:
+            bucket = self._raid_joins[member.guild.id]
+            now = time.monotonic()
+            bucket.append(now)
+            window = int(protection.get("raid_window_seconds", 15))
+            while bucket and now - bucket[0] > window:
+                bucket.popleft()
+            if len(bucket) >= int(protection.get("raid_join_limit", 8)):
+                timeout_minutes = int(protection.get("raid_timeout_minutes", 10))
+                try:
+                    await member.timeout(discord.utils.utcnow() + timedelta(minutes=timeout_minutes), reason="Team Fime Anti-Raid")
+                except discord.HTTPException:
+                    pass
+                await self.security_alert(member.guild, "Anti-Raid", f"تم رصد دخول جماعي: `{len(bucket)}` أعضاء خلال `{window}` ثانية. تم تطبيق حماية على العضو الجديد {member.mention}.")
+
         await self.send_log(
             member.guild,
             "member_join",
@@ -1652,6 +1880,9 @@ class ServerLogger(commands.Cog):
 
     @commands.Cog.listener()
     async def on_guild_role_delete(self, role):
+        cfg = guild_config(role.guild)
+        if cfg["protection"].get("security_enabled", True) and self.security_record(role.guild, "role_delete", 20, 4):
+            await self.security_alert(role.guild, "Anti-Nuke", "تم رصد حذف عدة رتب بسرعة. راجع صلاحيات الإدارة فورًا.")
         await self.send_log(
             role.guild,
             "role_delete",
@@ -2004,15 +2235,7 @@ class ServerLogger(commands.Cog):
                             old_level,
                             new_level,
                         )
-                        await self.send_log(
-                            guild,
-                            "level",
-                            f"ارتفع مستوى {member.mention} بسبب نشاط الفويس.",
-                            fields=[
-                                ("⭐ المستوى", f"`{old_level}` → `{new_level}`", True),
-                                ("✨ XP", f"`{new_xp}`", True),
-                            ],
-                        )
+                        await self.announce_level_up(guild, member, old_level, new_level, new_xp, "🔊 الفويس")
             except Exception as error:
                 print(f"⚠️ Voice XP error in {guild.name}: {error}")
 
