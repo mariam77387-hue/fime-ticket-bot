@@ -1583,105 +1583,195 @@ class ServerLogger(commands.Cog):
         await interaction.response.send_message(f"✅ تم السماح بـ `{domain}`.")
 
     # =====================================================
-    # Permanent Server Invite
-    # =====================================================
+# Permanent Server Invite
+# =====================================================
 
-    async def find_invite_channel(self, guild, preferred=None):
-        candidates = []
-        if isinstance(preferred, discord.TextChannel):
-            candidates.append(preferred)
+async def find_invite_channel(self, guild, preferred=None):
+    candidates = []
 
-        for channel in guild.text_channels:
-            if channel not in candidates:
-                candidates.append(channel)
+    if isinstance(preferred, discord.TextChannel):
+        candidates.append(preferred)
 
-        for channel in candidates:
-            try:
-                permissions = channel.permissions_for(guild.me)
-                if permissions.view_channel and permissions.create_instant_invite:
-                    return channel
-            except Exception:
-                continue
-        return None
+    for channel in guild.text_channels:
+        if channel not in candidates:
+            candidates.append(channel)
 
-    async def ensure_permanent_invite(self, guild, preferred=None, force_new=False):
-        cfg = guild_config(guild)
-        saved_code = cfg.get("permanent_invite_code")
-
-        if saved_code and not force_new:
-            try:
-                invite = await self.bot.fetch_invite(saved_code, with_counts=False)
-                if invite and invite.guild and invite.guild.id == guild.id:
-                    return invite, False
-            except (discord.NotFound, discord.HTTPException, discord.Forbidden):
-                pass
-
-        saved_channel_id = cfg.get("permanent_invite_channel_id")
-        channel = preferred
-        if channel is None and saved_channel_id:
-            try:
-                channel = guild.get_channel(int(saved_channel_id))
-            except (TypeError, ValueError):
-                channel = None
-
-        channel = await self.find_invite_channel(guild, channel)
-        if channel is None:
-            return None, False
-
+    for channel in candidates:
         try:
-            invite = await channel.create_invite(
-                max_age=0,
-                max_uses=0,
-                unique=True,
-                reason="Team Fime Permanent Server Invite",
+            me = guild.me
+            if me is None:
+                continue
+
+            permissions = channel.permissions_for(me)
+
+            if permissions.view_channel and permissions.create_instant_invite:
+                return channel
+
+        except Exception:
+            continue
+
+    return None
+
+
+async def ensure_permanent_invite(self, guild, preferred=None, force_new=False):
+    cfg = guild_config(guild)
+
+    saved_code = cfg.get("permanent_invite_code")
+
+    # =================================================
+    # استخدم الرابط المحفوظ أولًا
+    # لا تنشئ رابطًا جديدًا عند Restart
+    # =================================================
+    if saved_code and not force_new:
+        try:
+            invite = await self.bot.fetch_invite(
+                saved_code,
+                with_counts=False
             )
-        except (discord.Forbidden, discord.HTTPException):
-            return None, False
 
-        def writer(cfg):
-            cfg["permanent_invite_code"] = invite.code
-            cfg["permanent_invite_channel_id"] = channel.id
+            if invite and invite.guild and invite.guild.id == guild.id:
+                return invite, False
 
-        update_guild_config(guild, writer)
-        return invite, True
+        except (
+            discord.NotFound,
+            discord.HTTPException,
+            discord.Forbidden
+        ):
+            # الرابط لم يعد موجودًا، ننتقل لإنشاء رابط جديد
+            pass
 
-    @app_commands.command(name="permanentinvite", description="إنشاء أو تجديد رابط دعوة دائم للسيرفر")
-    @app_commands.describe(channel="الروم الذي سيتم إنشاء الدعوة منه، اختياري")
-    async def permanentinvite(self, interaction: discord.Interaction, channel: discord.TextChannel | None = None):
-        if not is_owner(interaction.user):
-            await interaction.response.send_message("❌ هذا الأمر لمالك السيرفر فقط.", ephemeral=True)
-            return
+    # =================================================
+    # تحديد الروم المحفوظ سابقًا
+    # =================================================
+    saved_channel_id = cfg.get("permanent_invite_channel_id")
 
-        await interaction.response.defer(ephemeral=True)
-        invite, created = await self.ensure_permanent_invite(interaction.guild, channel, force_new=True)
-        if invite is None:
-            await interaction.followup.send(
-                "❌ ما قدرت أنشئ الرابط. تأكد أن البوت عنده **Create Invite** في أحد الرومات.",
-                ephemeral=True,
-            )
-            return
+    channel = preferred
 
-        await interaction.followup.send(
-            "🔗 **رابط الدعوة الدائم لسيرفر Team Fime**\n"
-            f"https://discord.gg/{invite.code}\n\n"
-            "♾️ بدون انتهاء\n"
-            "♾️ بدون حد لعدد الاستخدامات",
-            ephemeral=True,
+    if channel is None and saved_channel_id:
+        try:
+            channel = guild.get_channel(int(saved_channel_id))
+        except (TypeError, ValueError):
+            channel = None
+
+    # =================================================
+    # إذا الروم المحفوظ غير موجود، ابحث عن روم مناسب
+    # =================================================
+    channel = await self.find_invite_channel(guild, channel)
+
+    if channel is None:
+        return None, False
+
+    # =================================================
+    # إنشاء Invite جديد فقط إذا لم يوجد Invite صالح
+    # =================================================
+    try:
+        invite = await channel.create_invite(
+            max_age=0,
+            max_uses=0,
+            unique=True,
+            reason="Team Fime Permanent Server Invite",
         )
 
-    @app_commands.command(name="invite", description="عرض رابط الدعوة الدائم للسيرفر")
-    async def invite(self, interaction: discord.Interaction):
-        invite, _ = await self.ensure_permanent_invite(interaction.guild)
-        if invite is None:
-            await interaction.response.send_message(
-                "❌ لا يوجد رابط دائم حاليًا، ولا أستطيع إنشاء واحد بسبب صلاحيات البوت.",
-                ephemeral=True,
-            )
-            return
+    except discord.Forbidden:
+        return None, False
 
+    except discord.HTTPException:
+        return None, False
+
+    # =================================================
+    # حفظ الرابط بشكل دائم
+    # =================================================
+    def writer(cfg):
+        cfg["permanent_invite_code"] = invite.code
+        cfg["permanent_invite_channel_id"] = channel.id
+
+        # حفظ Invite ID إذا كان متوفرًا
+        if getattr(invite, "id", None):
+            cfg["permanent_invite_id"] = invite.id
+
+    update_guild_config(guild, writer)
+
+    return invite, True
+
+
+@app_commands.command(
+    name="permanentinvite",
+    description="إنشاء أو عرض رابط الدعوة الدائم للسيرفر"
+)
+@app_commands.describe(
+    channel="الروم الذي سيتم إنشاء الدعوة منه، اختياري"
+)
+async def permanentinvite(
+    self,
+    interaction: discord.Interaction,
+    channel: discord.TextChannel | None = None
+):
+    if not is_owner(interaction.user):
         await interaction.response.send_message(
-            f"🔗 **رابط سيرفر Team Fime**\nhttps://discord.gg/{invite.code}\n\n♾️ رابط دائم",
+            "❌ هذا الأمر لمالك السيرفر فقط.",
+            ephemeral=True
         )
+        return
+
+    await interaction.response.defer(ephemeral=True)
+
+    # =================================================
+    # مهم:
+    # لا تستخدم force_new=True
+    # =================================================
+    invite, created = await self.ensure_permanent_invite(
+        interaction.guild,
+        channel,
+        force_new=False
+    )
+
+    if invite is None:
+        await interaction.followup.send(
+            "❌ ما قدرت أجيب أو أنشئ الرابط.\n"
+            "تأكد أن البوت عنده صلاحية **Create Invite** "
+            "في أحد الرومات.",
+            ephemeral=True
+        )
+        return
+
+    if created:
+        status = "🆕 تم إنشاء رابط دائم جديد."
+    else:
+        status = "♾️ تم استخدام الرابط الدائم المحفوظ."
+
+    await interaction.followup.send(
+        "🔗 **رابط الدعوة الدائم لسيرفر Team Fime**\n"
+        f"https://discord.gg/{invite.code}\n\n"
+        f"{status}\n"
+        "♾️ بدون انتهاء\n"
+        "♾️ بدون حد لعدد الاستخدامات",
+        ephemeral=True
+    )
+
+
+@app_commands.command(
+    name="invite",
+    description="عرض رابط الدعوة الدائم للسيرفر"
+)
+async def invite(self, interaction: discord.Interaction):
+    invite, created = await self.ensure_permanent_invite(
+        interaction.guild,
+        force_new=False
+    )
+
+    if invite is None:
+        await interaction.response.send_message(
+            "❌ لا يوجد رابط دائم حاليًا، "
+            "ولا أستطيع إنشاء واحد بسبب صلاحيات البوت.",
+            ephemeral=True
+        )
+        return
+
+    await interaction.response.send_message(
+        "🔗 **رابط سيرفر Team Fime**\n"
+        f"https://discord.gg/{invite.code}\n\n"
+        "♾️ رابط دائم"
+    )
 
     # =====================================================
     # Welcome message customization
