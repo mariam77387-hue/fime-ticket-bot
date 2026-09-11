@@ -1703,7 +1703,7 @@ async def ensure_permanent_invite(self, guild, preferred=None, force_new=False):
 )
 async def permanentinvite(
     self,
-    interaction: discord.Interaction,
+    interaction,
     channel: discord.TextChannel | None = None
 ):
     if not is_owner(interaction.user):
@@ -1715,10 +1715,6 @@ async def permanentinvite(
 
     await interaction.response.defer(ephemeral=True)
 
-    # =================================================
-    # مهم:
-    # لا تستخدم force_new=True
-    # =================================================
     invite, created = await self.ensure_permanent_invite(
         interaction.guild,
         channel,
@@ -1728,16 +1724,16 @@ async def permanentinvite(
     if invite is None:
         await interaction.followup.send(
             "❌ ما قدرت أجيب أو أنشئ الرابط.\n"
-            "تأكد أن البوت عنده صلاحية **Create Invite** "
-            "في أحد الرومات.",
+            "تأكد أن البوت عنده صلاحية **Create Invite** في أحد الرومات.",
             ephemeral=True
         )
         return
 
-    if created:
-        status = "🆕 تم إنشاء رابط دائم جديد."
-    else:
-        status = "♾️ تم استخدام الرابط الدائم المحفوظ."
+    status = (
+        "🆕 تم إنشاء رابط دائم جديد."
+        if created
+        else "♾️ تم استخدام الرابط الدائم المحفوظ."
+    )
 
     await interaction.followup.send(
         "🔗 **رابط الدعوة الدائم لسيرفر Team Fime**\n"
@@ -1753,7 +1749,7 @@ async def permanentinvite(
     name="invite",
     description="عرض رابط الدعوة الدائم للسيرفر"
 )
-async def invite(self, interaction: discord.Interaction):
+async def invite(self, interaction):
     invite, created = await self.ensure_permanent_invite(
         interaction.guild,
         force_new=False
