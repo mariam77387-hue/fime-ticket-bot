@@ -1,2 +1,2 @@
-discord.py>=2.3.2
+discord.py>=2.6.3
 Flask>=2.3.0
