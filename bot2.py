@@ -1749,7 +1749,7 @@ async def permanentinvite(
     name="invite",
     description="عرض رابط الدعوة الدائم للسيرفر"
 )
-async def invite(self, interaction):
+async def invite(self, interaction: discord.Interaction):
     invite, created = await self.ensure_permanent_invite(
         interaction.guild,
         force_new=False
