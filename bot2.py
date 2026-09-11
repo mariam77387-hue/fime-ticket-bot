@@ -173,6 +173,10 @@ def guild_config(guild):
     protection.setdefault("raid_timeout_minutes", 10)
     protection.setdefault("security_action", "timeout_new_joins")
 
+    # Permanent invite
+    cfg.setdefault("permanent_invite_code", None)
+    cfg.setdefault("permanent_invite_channel_id", None)
+
     # AI
     ai = cfg.setdefault("ai", {})
     ai.setdefault("enabled", False)
@@ -260,6 +264,10 @@ def permission_ok(guild, channel):
 
 def is_admin(member):
     return bool(member and member.guild_permissions.administrator)
+
+
+def is_owner(member):
+    return bool(member and member.guild and member.id == member.guild.owner_id)
 
 
 def can_moderate(actor, target):
@@ -1575,6 +1583,107 @@ class ServerLogger(commands.Cog):
         await interaction.response.send_message(f"✅ تم السماح بـ `{domain}`.")
 
     # =====================================================
+    # Permanent Server Invite
+    # =====================================================
+
+    async def find_invite_channel(self, guild, preferred=None):
+        candidates = []
+        if isinstance(preferred, discord.TextChannel):
+            candidates.append(preferred)
+
+        for channel in guild.text_channels:
+            if channel not in candidates:
+                candidates.append(channel)
+
+        for channel in candidates:
+            try:
+                permissions = channel.permissions_for(guild.me)
+                if permissions.view_channel and permissions.create_instant_invite:
+                    return channel
+            except Exception:
+                continue
+        return None
+
+    async def ensure_permanent_invite(self, guild, preferred=None, force_new=False):
+        cfg = guild_config(guild)
+        saved_code = cfg.get("permanent_invite_code")
+
+        if saved_code and not force_new:
+            try:
+                invite = await self.bot.fetch_invite(saved_code, with_counts=False)
+                if invite and invite.guild and invite.guild.id == guild.id:
+                    return invite, False
+            except (discord.NotFound, discord.HTTPException, discord.Forbidden):
+                pass
+
+        saved_channel_id = cfg.get("permanent_invite_channel_id")
+        channel = preferred
+        if channel is None and saved_channel_id:
+            try:
+                channel = guild.get_channel(int(saved_channel_id))
+            except (TypeError, ValueError):
+                channel = None
+
+        channel = await self.find_invite_channel(guild, channel)
+        if channel is None:
+            return None, False
+
+        try:
+            invite = await channel.create_invite(
+                max_age=0,
+                max_uses=0,
+                unique=True,
+                reason="Team Fime Permanent Server Invite",
+            )
+        except (discord.Forbidden, discord.HTTPException):
+            return None, False
+
+        def writer(cfg):
+            cfg["permanent_invite_code"] = invite.code
+            cfg["permanent_invite_channel_id"] = channel.id
+
+        update_guild_config(guild, writer)
+        return invite, True
+
+    @app_commands.command(name="permanentinvite", description="إنشاء أو تجديد رابط دعوة دائم للسيرفر")
+    @app_commands.describe(channel="الروم الذي سيتم إنشاء الدعوة منه، اختياري")
+    async def permanentinvite(self, interaction: discord.Interaction, channel: discord.TextChannel | None = None):
+        if not is_owner(interaction.user):
+            await interaction.response.send_message("❌ هذا الأمر لمالك السيرفر فقط.", ephemeral=True)
+            return
+
+        await interaction.response.defer(ephemeral=True)
+        invite, created = await self.ensure_permanent_invite(interaction.guild, channel, force_new=True)
+        if invite is None:
+            await interaction.followup.send(
+                "❌ ما قدرت أنشئ الرابط. تأكد أن البوت عنده **Create Invite** في أحد الرومات.",
+                ephemeral=True,
+            )
+            return
+
+        await interaction.followup.send(
+            "🔗 **رابط الدعوة الدائم لسيرفر Team Fime**\n"
+            f"https://discord.gg/{invite.code}\n\n"
+            "♾️ بدون انتهاء\n"
+            "♾️ بدون حد لعدد الاستخدامات",
+            ephemeral=True,
+        )
+
+    @app_commands.command(name="invite", description="عرض رابط الدعوة الدائم للسيرفر")
+    async def invite(self, interaction: discord.Interaction):
+        invite, _ = await self.ensure_permanent_invite(interaction.guild)
+        if invite is None:
+            await interaction.response.send_message(
+                "❌ لا يوجد رابط دائم حاليًا، ولا أستطيع إنشاء واحد بسبب صلاحيات البوت.",
+                ephemeral=True,
+            )
+            return
+
+        await interaction.response.send_message(
+            f"🔗 **رابط سيرفر Team Fime**\nhttps://discord.gg/{invite.code}\n\n♾️ رابط دائم",
+        )
+
+    # =====================================================
     # Welcome message customization
     # =====================================================
 
@@ -1582,8 +1691,8 @@ class ServerLogger(commands.Cog):
     @app_commands.describe(message="رسالة الترحيب. المتغيرات: {mention} {username} {display_name} {server}")
     @app_commands.default_permissions(administrator=True)
     async def welcomemessage(self, interaction: discord.Interaction, message: str):
-        if not is_admin(interaction.user):
-            await interaction.response.send_message("❌ للإداريين فقط.", ephemeral=True)
+        if not is_owner(interaction.user):
+            await interaction.response.send_message("❌ تعديل رسالة الترحيب لمالك السيرفر فقط.", ephemeral=True)
             return
         if len(message) > 1900:
             await interaction.response.send_message("❌ رسالة الترحيب طويلة جدًا. الحد 1900 حرف.", ephemeral=True)
@@ -2362,58 +2471,4 @@ class ServerLogger(commands.Cog):
     # =====================================================
 
     @tasks.loop(minutes=1)
-    async def voice_xp_loop(self):
-        for guild in list(self.bot.guilds):
-            try:
-                cfg = guild_config(guild)
-                if not cfg.get("levels_enabled", True):
-                    continue
-
-                amount = int(cfg.get("level_voice_xp_per_minute", 3))
-                if amount <= 0:
-                    continue
-
-                for member in guild.members:
-                    if member.bot or not member.voice or not member.voice.channel:
-                        continue
-                    if member.voice.afk:
-                        continue
-
-                    old_xp, new_xp = self.add_user_xp(guild, member.id, amount)
-
-                    old_level = self.level_from_xp(old_xp)
-                    new_level = self.level_from_xp(new_xp)
-
-                    if new_level > old_level:
-                        await self.check_level_reward(
-                            guild,
-                            member,
-                            old_level,
-                            new_level,
-                        )
-                        await self.announce_level_up(guild, member, old_level, new_level, new_xp, "🔊 الفويس")
-            except Exception as error:
-                print(f"⚠️ Voice XP error in {guild.name}: {error}")
-
-    @voice_xp_loop.before_loop
-    async def before_voice_xp_loop(self):
-        await self.bot.wait_until_ready()
-
-    @commands.Cog.listener()
-    async def on_ready(self):
-        if not self.voice_xp_loop.is_running():
-            self.voice_xp_loop.start()
-
-        # استعادة اللوحات مرة واحدة فقط.
-        if not getattr(self, "_panels_restored", False):
-            self._panels_restored = True
-            await self.restore_persistent_panels()
-
-
-# =========================================================
-# Setup
-# =========================================================
-
-async def setup(bot):
-    await bot.add_cog(ServerLogger(bot))
-    print("✅ تم تشغيل Team Fime bot2.py بالكامل.")
+    async 
