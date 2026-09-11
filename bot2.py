@@ -1703,7 +1703,7 @@ async def ensure_permanent_invite(self, guild, preferred=None, force_new=False):
 )
 async def permanentinvite(
     self,
-    interaction,
+    interaction: discord.Interaction,
     channel: discord.TextChannel | None = None
 ):
     if not is_owner(interaction.user):
