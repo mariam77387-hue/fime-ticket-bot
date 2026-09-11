@@ -2471,4 +2471,67 @@ class ServerLogger(commands.Cog):
     # =====================================================
 
     @tasks.loop(minutes=1)
-    async 
+    async def voice_xp_loop(self):
+        for guild in list(self.bot.guilds):
+            try:
+                cfg = guild_config(guild)
+                if not cfg.get("levels_enabled", True):
+                    continue
+
+                amount = int(cfg.get("level_voice_xp_per_minute", 3))
+                if amount <= 0:
+                    continue
+
+                for member in guild.members:
+                    if member.bot or not member.voice or not member.voice.channel:
+                        continue
+                    if member.voice.afk:
+                        continue
+
+                    old_xp, new_xp = self.add_user_xp(guild, member.id, amount)
+
+                    old_level = self.level_from_xp(old_xp)
+                    new_level = self.level_from_xp(new_xp)
+
+                    if new_level > old_level:
+                        await self.check_level_reward(
+                            guild,
+                            member,
+                            old_level,
+                            new_level,
+                        )
+                        await self.announce_level_up(guild, member, old_level, new_level, new_xp, "🔊 الفويس")
+            except Exception as error:
+                print(f"⚠️ Voice XP error in {guild.name}: {error}")
+
+    @voice_xp_loop.before_loop
+    async def before_voice_xp_loop(self):
+        await self.bot.wait_until_ready()
+
+    @commands.Cog.listener()
+    async def on_ready(self):
+        if not self.voice_xp_loop.is_running():
+            self.voice_xp_loop.start()
+
+        # استعادة اللوحات مرة واحدة فقط.
+        if not getattr(self, "_panels_restored", False):
+            self._panels_restored = True
+            await self.restore_persistent_panels()
+
+        # تأكد من وجود رابط دائم محفوظ لكل سيرفر، وإذا كان الرابط القديم صالحًا يتم الاحتفاظ به.
+        if not getattr(self, "_invites_checked", False):
+            self._invites_checked = True
+            for guild in list(self.bot.guilds):
+                try:
+                    await self.ensure_permanent_invite(guild)
+                except Exception as error:
+                    print(f"⚠️ Permanent invite error in {guild.name}: {error}")
+
+
+# =========================================================
+# Setup
+# =========================================================
+
+async def setup(bot):
+    await bot.add_cog(ServerLogger(bot))
+    print("✅ تم تشغيل Team Fime bot2.py بالكامل.")
