@@ -1590,8 +1590,23 @@ class ServerLogger(commands.Cog):
             return
 
         # bot.py هو المسؤول عن إرسال الترحيب، وهذا الأمر يغيّر القالب الذي يقرأه bot.py.
+        old_cfg = guild_config(interaction.guild)
+        old_message = old_cfg.get("welcome_message", "")
         set_value(interaction.guild, ["welcome_message"], message)
         preview = message.replace("{mention}", interaction.user.mention).replace("{username}", interaction.user.name).replace("{display_name}", interaction.user.display_name).replace("{server}", interaction.guild.name)
+
+        # سجل التعديل في Server Logs حتى يظهر تغيير نص الترحيب في اللوق.
+        await self.send_log(
+            interaction.guild,
+            "message_edit",
+            f"تم تعديل نص رسالة الترحيب بواسطة {mention_user(interaction.user)}.",
+            actor=interaction.user,
+            fields=[
+                ("قبل", truncate(old_message or "غير محدد", 900), False),
+                ("بعد", truncate(message, 900), False),
+            ],
+        )
+
         await interaction.response.send_message(
             f"✅ تم حفظ رسالة الترحيب.\n\n**المعاينة:**\n{preview[:1900]}",
             ephemeral=True,
@@ -1656,33 +1671,173 @@ class ServerLogger(commands.Cog):
         await interaction.response.send_message(embed=embed, ephemeral=True)
 
     # =====================================================
-    # AI Chat
+    # AI Chat — Team Fime Assistant
     # =====================================================
 
+    # معلومات السيرفر التي يعرفها المساعد حتى بدون API.
+    AI_SERVER_GUIDE = {
+        "scripts": "<#{scripts}>",
+        "search": "<#{search}>",
+        "updates": "<#{updates}>",
+        "human_help": "<#{human_help}>",
+        "chat": "<#{chat}>",
+        "delta_key": "<#{delta_key}>",
+        "rules": "<#{rules}>",
+        "minecraft": "<#{minecraft}>",
+    }
+
+    AI_CHANNEL_IDS = {
+        "scripts": 1537157629963538432,
+        "search": 1537546827593818154,
+        "updates": 1537167568950001664,
+        "human_help": 1537177338545053756,
+        "chat": 1529802314729964230,
+        "delta_key": 1530187925474771164,
+        "rules": 1537173539826835597,
+        "minecraft": 1537396033661829180,
+    }
+
+    def _ai_channels(self):
+        return {
+            key: f"<#{channel_id}>"
+            for key, channel_id in self.AI_CHANNEL_IDS.items()
+        }
+
+    def _normalize_ai_text(self, text):
+        text = (text or "").strip().lower()
+        replacements = {
+            "أ": "ا", "إ": "ا", "آ": "ا",
+            "ة": "ه", "ى": "ي",
+            "ؤ": "و", "ئ": "ي",
+        }
+        for old, new in replacements.items():
+            text = text.replace(old, new)
+        text = re.sub(r"[\u064b-\u065f\u0670]", "", text)
+        text = re.sub(r"\s+", " ", text)
+        return text
+
     def local_ai_response(self, text):
-        t = text.strip().lower()
-        if any(x in t for x in ["كيف احط سكربت", "كيف أحط سكربت", "وين احط سكربت", "كيف اضع سكربت"]):
-            return "تقدر تحط السكربت في الروم المخصص له إذا كان عندك روم للسكربتات. مثال: أرسل السكربت داخل روم #scripts، والبوت يقدر يرد عليك بالمكان الصحيح أو يشرح لك طريقة الاستخدام."
-        if "كيف" in t and "بوت" in t:
-            return "إذا تقصد إعداد البوت، اكتب لي وش الشيء اللي تبي تسويه بالضبط، وبشرح لك الخطوات بشكل مختصر."
-        if any(x in t for x in ["مساعدة", "help", "وش تقدر", "ماذا تستطيع"]):
-            return "أقدر أساعدك في أوامر السيرفر، التذاكر، الرتب، الحماية، اللفلات، والبرمجة بشكل عام. اكتب سؤالك مباشرة."
-        if "لفل" in t or "level" in t:
-            return "نظام اللفل يعطي XP من الشات والفويس، والمالك يقدر يحدد روم رسائل Level Up ويضع مكافآت رتب عند الوصول لمستويات معينة."
-        if "تذكرة" in t or "ticket" in t:
-            return "إذا تحتاج دعم، افتح تذكرة من نظام التذاكر الموجود في السيرفر وسيتم توجيهك للقسم المناسب."
-        return "هذا وضع المساعد المحلي في Team Fime. ما عندي نموذج سحابي بدون API Key، لكن أقدر أجاوب على الأسئلة الشائعة المبرمجة هنا. إذا وفرت AI_API_KEY لاحقًا يتحول المساعد إلى نموذج GPT تلقائيًا."
+        """مساعد محلي فعلي: يعرف أقسام Team Fime ويرد مباشرة بدون كلام تقني."""
+        t = self._normalize_ai_text(text)
+        ch = self._ai_channels()
+
+        # ترحيب / تعريف المساعد — بدون كشف طريقة تشغيله للمستخدم.
+        if (
+            t in {"طلسم", "هلا", "هلا والله", "السلام عليكم", "السلام عليكم ورحمة الله",
+                 "مرحبا", "مراحب", "الو", "hello", "hi", "hey"}
+            or any(x in t for x in ["من انت", "وش انت", "منو انت", "وش تسوي", "وش تقدر تسوي"])
+        ):
+            return "هلا 👋 أنا مساعد 𝐓𝐞𝐚𝐦 𝐅𝐢𝐦𝐞، موجود عشان أجاوبك على أسئلتك وأدلك على المكان الصحيح في السيرفر. اكتب سؤالك مباشرة."
+
+        # السكربتات / Delta.
+        if any(x in t for x in [
+            "وين احط السكربت", "وين احط سكربت", "كيف احط السكربت", "كيف احط سكربت",
+            "مكان السكربت", "مكان سكربت", "ارسله وين", "احط السكربت وين",
+            "وين ارسل السكربت", "كيف ارسل السكربت",
+        ]):
+            return f"حط السكربت في روم السكربتات {ch['scripts']} . وإذا ما عرفت الطريقة أو واجهتك مشكلة، توجه لروم حل المشاكل {ch['human_help']} وبنساعدك."
+
+        if any(x in t for x in ["دلتا", "delta", "مفتاح دلتا", "key دلتا", "مفتاح delta"]):
+            return f"إذا تقصد مفتاح دلتا، تلقى كل ما يخصه في {ch['delta_key']}."
+
+        # البحث عن سكربت.
+        if any(x in t for x in [
+            "ابحث عن سكربت", "البحث عن سكربت", "ابي سكربت", "ابغى سكربت",
+            "وين السكربت", "وين القى سكربت", "دور لي سكربت", "سكريبت",
+        ]) and not any(x in t for x in ["وين احط", "كيف احط"]):
+            return f"للبحث عن سكربت استخدم روم البحث {ch['search']}."
+
+        # تحديثات السكربتات.
+        if any(x in t for x in ["تحديث السكربت", "تحديثات السكربت", "اخر تحديث", "اخر تحديث للسكربت", "التحديث عن السكربت"]):
+            return f"تحديثات السكربتات تنزل في روم التحديثات {ch['updates']}."
+
+        # Minecraft.
+        if any(x in t for x in ["ماينكرفت", "ماين كرفت", "minecraft", "ماينكرافت"]):
+            return f"كل ما يخص Minecraft موجود في روم ماينكرفت {ch['minecraft']}."
+
+        # القوانين.
+        if any(x in t for x in ["القوانين", "قوانين السيرفر", "قوانين", "rules"]):
+            return f"تقدر تشوف قوانين السيرفر هنا {ch['rules']}."
+
+        # الشات.
+        if any(x in t for x in ["الشات", "وين الشات", "روم الشات", "chat"]):
+            return f"الشات العام هنا {ch['chat']}."
+
+        # التذاكر / الدعم.
+        if any(x in t for x in ["تذكره", "تذكرة", "ticket", "دعم فني", "الدعم"]):
+            return "إذا تحتاج دعم إداري، افتح تذكرة من نظام التذاكر في السيرفر."
+
+        # اللفلات.
+        if any(x in t for x in ["لفل", "لفلات", "level", "xp", "خبره"]):
+            return "نظام اللفل يعطيك XP من نشاطك في الشات والفويس، وكل ما ارتفع مستواك تقدر توصل لمكافآت اللفل المحددة في السيرفر."
+
+        # أوامر البوت / الحماية.
+        if any(x in t for x in ["اوامر البوت", "اوامر البوت", "commands", "وش اوامر البوت"]):
+            return "إذا تقصد أوامر الإدارة والبوت، استخدم أمر /commands عشان تشوف الأنظمة المتوفرة."
+
+        if any(x in t for x in ["حمايه", "حماية", "anti spam", "سبام", "حظر الروابط"]):
+            return "الحماية تشمل مكافحة السبام وتكرار الرسائل والروابط والمنشنات، ويتم التحكم فيها من أوامر الإدارة."
+
+        if any(x in t for x in ["مساعده", "مساعدة", "help", "ما عرفت", "ماعرف", "مو فاهم", "ما فهمت", "مشكله", "مشكلة", "مشكلتي"]):
+            return f"إذا ما لقيت جواب لمشكلتك، توجه لروم المساعدة البشرية {ch['human_help']} وبيساعدك أحد من الفريق."
+
+        # لا تخترع جوابًا عند عدم معرفة السؤال.
+        return f"ما عندي جواب مؤكد على سؤالك حاليًا. توجه لروم المساعدة البشرية {ch['human_help']} وبيساعدك الفريق هناك."
+
+    def build_ai_system_prompt(self, system_prompt):
+        ch = self._ai_channels()
+        guide = f"""
+أنت مساعد 𝐓𝐞𝐚𝐦 𝐅𝐢𝐦𝐞 داخل Discord.
+
+أسلوبك:
+- تكلم بالعربية البسيطة والطبيعية، وبلهجة خليجية خفيفة إذا كان المستخدم يتكلم بها.
+- لا تتكلم عن API Key أو النموذج أو أنك مساعد محلي أو سحابي، إلا إذا سأل المستخدم عن ذلك بشكل مباشر.
+- لا تقل للمستخدم إنك تحتاج API أو إنك لا تملك نموذجًا.
+- جاوب مباشرة وباختصار، بدون مقدمات تقنية أو حشو.
+- لا تخترع أسماء رومات أو معلومات غير موجودة في الدليل.
+- إذا كان السؤال عن مكان شيء في السيرفر، استخدم منشن الروم الصحيح من الدليل.
+- إذا لم تكن متأكدًا من الإجابة، لا تخمّن؛ وجّه المستخدم إلى روم المساعدة البشرية.
+
+دليل Team Fime:
+- السكربتات: {ch['scripts']}
+- البحث عن سكربت: {ch['search']}
+- تحديثات السكربتات: {ch['updates']}
+- المساعدة البشرية: {ch['human_help']}
+- الشات: {ch['chat']}
+- مفتاح/رابط Delta: {ch['delta_key']}
+- القوانين: {ch['rules']}
+- Minecraft: {ch['minecraft']}
+
+قاعدة مهمة:
+إذا سأل المستخدم "وين أحط السكربت؟" أو سؤالًا مشابهًا عن مكان السكربت، وجّهه إلى روم السكربتات {ch['scripts']}. وإذا كان يسأل عن مشكلة أو لا يعرف الطريقة، وجّهه إلى {ch['human_help']}.
+إذا لم تعرف الإجابة، استخدم هذه الصيغة بمعنى قريب منها: "ما عندي جواب مؤكد على سؤالك حاليًا. توجه لروم المساعدة البشرية {ch['human_help']} وبيساعدك الفريق هناك."
+
+{system_prompt}
+"""
+        return guide.strip()
 
     async def openai_response(self, user_text, system_prompt):
+        # الأسئلة التي نعرفها بشكل مؤكد تأخذ جواب Team Fime المحدد حتى مع وجود API.
+        local_answer = self.local_ai_response(user_text)
+        normalized = self._normalize_ai_text(user_text)
+
+        known_markers = [
+            "سكربت", "سكريبت", "دلتا", "delta", "ماينكرفت", "minecraft",
+            "القوانين", "قوانين", "الشات", "تذكرة", "ticket", "لفل", "level",
+            "مساعده", "مساعدة", "مشكله", "مشكلة", "اوامر البوت", "commands",
+            "طلسم", "هلا", "مرحبا", "من انت", "وش انت",
+        ]
+        if any(marker in normalized for marker in known_markers):
+            return local_answer, None
+
         api_key = os.getenv("AI_API_KEY")
         if not api_key:
-            return self.local_ai_response(user_text), None
+            return local_answer, None
 
         model = os.getenv("AI_MODEL", "gpt-5.6-luna")
-
         payload = {
             "model": model,
-            "instructions": system_prompt,
+            "instructions": self.build_ai_system_prompt(system_prompt),
             "input": user_text,
             "max_output_tokens": 500,
         }
@@ -1698,33 +1853,28 @@ class ServerLogger(commands.Cog):
                 },
                 method="POST",
             )
-
             with urllib.request.urlopen(req, timeout=45) as response:
                 return json.loads(response.read().decode("utf-8"))
 
         try:
             data = await asyncio.to_thread(request)
         except urllib.error.HTTPError as error:
-            try:
-                body = error.read().decode("utf-8")
-            except Exception:
-                body = str(error)
-            return None, f"خطأ من AI API: {truncate(body, 500)}"
-        except Exception as error:
-            return None, f"تعذر الاتصال بالذكاء الاصطناعي: `{error}`"
+            # لا نعرض تفاصيل API للمستخدم؛ نعطيه مسار المساعدة الصحيح.
+            return f"صار عندي تعذر مؤقت في الإجابة. إذا سؤالك مهم، توجه لروم المساعدة البشرية {self._ai_channels()['human_help']}." , None
+        except Exception:
+            return f"ما قدرت أجيب إجابة الآن. إذا ما تبي تنتظر، توجه لروم المساعدة البشرية {self._ai_channels()['human_help']}." , None
 
-        # Responses API returns output items; collect output_text safely.
         chunks = []
         for item in data.get("output", []):
             for content in item.get("content", []):
                 if content.get("type") == "output_text":
-                    text = content.get("text", "")
-                    if text:
-                        chunks.append(text)
+                    value = content.get("text", "")
+                    if value:
+                        chunks.append(value)
 
         result = "\n".join(chunks).strip()
         if not result:
-            return None, "لم يصل نص من نموذج الذكاء الاصطناعي."
+            return f"ما عندي جواب مؤكد على سؤالك حاليًا. توجه لروم المساعدة البشرية {self._ai_channels()['human_help']} وبيساعدك الفريق هناك.", None
 
         return result[:3900], None
 
@@ -2094,16 +2244,22 @@ class ServerLogger(commands.Cog):
     async def on_message_edit(self, before, after):
         if not before.guild or before.author.bot:
             return
+
+        # تجاهل تعديلات Discord الداخلية التي لا تغيّر محتوى الرسالة فعليًا.
         if before.content == after.content:
             return
+
+        jump = getattr(after, "jump_url", None)
+        jump_text = f"\n[فتح الرسالة]({jump})" if jump else ""
 
         await self.send_log(
             before.guild,
             "message_edit",
-            f"تم تعديل رسالة بواسطة {mention_user(before.author)}.",
+            f"تم تعديل رسالة بواسطة {mention_user(before.author)} في {channel_text(after.channel)}.{jump_text}",
+            actor=before.author,
             fields=[
-                ("قبل", truncate(before.content, 450), False),
-                ("بعد", truncate(after.content, 450), False),
+                ("قبل", truncate(before.content or "(بدون نص)", 700), False),
+                ("بعد", truncate(after.content or "(بدون نص)", 700), False),
             ],
         )
 
