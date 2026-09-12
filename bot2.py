@@ -1587,7 +1587,7 @@ class ServerLogger(commands.Cog):
     # Permanent Server Invite
     # =====================================================
 
-    async def find_invite_channel(self, guild, preferred=None):
+        async def find_invite_channel(self, guild, preferred=None):
         candidates = []
 
         if isinstance(preferred, discord.TextChannel):
@@ -1619,6 +1619,7 @@ class ServerLogger(commands.Cog):
 
         saved_code = cfg.get("permanent_invite_code")
 
+        # استخدام الرابط المحفوظ إذا كان ما زال صالحًا
         if saved_code and not force_new:
             try:
                 invite = await self.bot.fetch_invite(
@@ -1629,12 +1630,13 @@ class ServerLogger(commands.Cog):
                 if invite and invite.guild and invite.guild.id == guild.id:
                     return invite, False
 
-            except (
-                discord.NotFound,
-                discord.HTTPException,
-                discord.Forbidden
-            ):
+            except discord.NotFound:
+                # الرابط انحذف فعلًا، لذلك يمكن إنشاء رابط جديد
                 pass
+
+            except (discord.Forbidden, discord.HTTPException):
+                # لا تنشئ رابطًا جديدًا بسبب خطأ مؤقت
+                return None, False
 
         saved_channel_id = cfg.get("permanent_invite_channel_id")
 
@@ -1729,6 +1731,31 @@ class ServerLogger(commands.Cog):
 
 
     @app_commands.command(
+        name="invite",
+        description="عرض رابط الدعوة الدائم للسيرفر"
+    )
+    async def invite(self, interaction: discord.Interaction):
+        invite, created = await self.ensure_permanent_invite(
+            interaction.guild,
+            force_new=False
+        )
+
+        if invite is None:
+            await interaction.response.send_message(
+                "❌ لا يوجد رابط دائم حاليًا، "
+                "ولا أستطيع إنشاء واحد بسبب صلاحيات البوت.",
+                ephemeral=True
+            )
+            return
+
+        await interaction.response.send_message(
+            "🔗 **رابط سيرفر Team Fime**\n"
+            f"https://discord.gg/{invite.code}\n\n"
+            "♾️ رابط دائم"
+        )
+
+
+    @app_commands.command(
         name="invitebot",
         description="الحصول على رابط دعوة البوت"
     )
@@ -1758,7 +1785,6 @@ class ServerLogger(commands.Cog):
             view=view,
             ephemeral=True
         )
-
     # =====================================================
     # Welcome message customization
     # =====================================================
