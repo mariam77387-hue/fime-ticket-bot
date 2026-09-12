@@ -406,6 +406,72 @@ class SelfRolePanelView(discord.ui.View):
 
 
 # ---------------------------------------------------------------------------
+# قائمة مساعدة تفاعلية لأوامر Self Roles (/rolehelp)
+# ---------------------------------------------------------------------------
+
+COMMAND_HELP: dict[str, tuple[str, str]] = {
+    "rolesetup": (
+        "📋 /rolesetup",
+        "يعرض حالة نظام Self Roles الحالية: عدد الرتب، حالة اللوحة، وكل الإعدادات المفعّلة.",
+    ),
+    "roleadd": (
+        "➕ /roleadd",
+        "يضيف رتبة جديدة لنظام Self Roles.\nالخيارات: `role`، `name`، `emoji` (اختياري)، `description` (اختياري).",
+    ),
+    "roleremove": (
+        "➖ /roleremove",
+        "يحذف رتبة من نظام Self Roles.\nالخيارات: `role`.",
+    ),
+    "rolelist": (
+        "📃 /rolelist",
+        "يعرض كل الرتب المضافة في النظام مع حالتها (مفعّلة / معطّلة).",
+    ),
+    "rolepanel": (
+        "🎭 /rolepanel",
+        "ينشئ لوحة اختيار الرتب في روم معيّن، أو يحدّث اللوحة الموجودة تلقائيًا بدل تكرارها.\nالخيارات: `channel`.",
+    ),
+    "roleconfig": (
+        "⚙️ /roleconfig",
+        (
+            "يعرض أو يعدّل إعدادات النظام: توجيه الأعضاء الجدد، رسالة DM، استعادة الرتب عند العودة، "
+            "اللوجز، رتبة الإدارة، ولون/عنوان/وصف اللوحة.\nاستدعِه بدون خيارات لعرض الإعدادات الحالية."
+        ),
+    ),
+    "rolehelp": (
+        "❓ /rolehelp",
+        "يعرض هذه القائمة نفسها في أي وقت.",
+    ),
+}
+
+
+class RoleHelpSelect(discord.ui.Select):
+    """قائمة منسدلة لعرض شرح كل أمر من أوامر Self Roles على حدة."""
+
+    def __init__(self):
+        options = [
+            discord.SelectOption(label=title, value=key, description=desc.split("\n")[0][:100])
+            for key, (title, desc) in COMMAND_HELP.items()
+        ]
+        super().__init__(
+            placeholder="📖 اختر أمرًا لعرض شرحه بالتفصيل",
+            min_values=1,
+            max_values=1,
+            options=options,
+        )
+
+    async def callback(self, interaction: discord.Interaction):
+        title, desc = COMMAND_HELP[self.values[0]]
+        embed = discord.Embed(title=title, description=desc, color=0x5865F2)
+        await interaction.response.send_message(embed=embed, ephemeral=True)
+
+
+class RoleHelpView(discord.ui.View):
+    def __init__(self):
+        super().__init__(timeout=120)
+        self.add_item(RoleHelpSelect())
+
+
+# ---------------------------------------------------------------------------
 # الـ Cog الرئيسي
 # ---------------------------------------------------------------------------
 
@@ -707,6 +773,22 @@ class SelfRolesCog(commands.Cog):
     # ---------------- Slash Commands ----------------
 
     group_error_msg = "❌ ما تملك الصلاحية الكافية لاستخدام هذا الأمر."
+
+    @app_commands.command(name="rolehelp", description="عرض قائمة تفاعلية بكل أوامر نظام Self Roles")
+    @app_commands.guild_only()
+    async def rolehelp(self, interaction: discord.Interaction):
+        if not await self._check_admin(interaction):
+            return await interaction.response.send_message(self.group_error_msg, ephemeral=True)
+
+        embed = discord.Embed(
+            title="🎭 أوامر نظام Self Roles",
+            description="اختر أمرًا من القائمة تحت لعرض شرحه بالتفصيل، أو استخدم الأوامر مباشرة من شريط الكتابة:",
+            color=0x5865F2,
+        )
+        for title, desc in COMMAND_HELP.values():
+            embed.add_field(name=title, value=desc.split("\n")[0], inline=False)
+
+        await interaction.response.send_message(embed=embed, view=RoleHelpView(), ephemeral=True)
 
     @app_commands.command(name="rolesetup", description="عرض حالة نظام Self Roles وإرشادات الاستخدام")
     @app_commands.guild_only()
