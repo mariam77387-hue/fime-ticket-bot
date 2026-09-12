@@ -1587,7 +1587,7 @@ class ServerLogger(commands.Cog):
     # Permanent Server Invite
     # =====================================================
 
-        async def find_invite_channel(self, guild, preferred=None):
+              async def find_invite_channel(self, guild, preferred=None):
         candidates = []
 
         if isinstance(preferred, discord.TextChannel):
