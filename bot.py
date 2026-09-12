@@ -1742,6 +1742,14 @@ async def tc_autoclose(ctx, days: int):
 # ملاحظة:
 # Discord لا يسمح بإخفاء Public Thread بشكل مستقل عن الروم الأب.
 # لذلك خيارات الـThreads هنا هي قفل/فتح الكتابة فقط.
+#
+# 🆕 تحديث:
+# - عند قفل Text Channel، يتم أيضًا تعطيل الكتابة داخل جميع الـThreads
+#   النشطة (غير المؤرشفة) التابعة له عبر صلاحية send_messages_in_threads،
+#   بدون قفل/أرشفة الـThread نفسه.
+# - عند الفتح يتم إرجاع الكتابة في الـThreads كما كانت (بدون overwrite).
+# - أضيف خيار قفل مع إخفاء الروم بالكامل عن @everyone (اختياري)،
+#   يُستخدم فقط عند الطلب صراحة من زر "قفل وإخفاء".
 
 
 def is_lockable_channel(channel):
@@ -1783,25 +1791,56 @@ def bot_can_manage_lock(channel):
     return False
 
 
-async def lock_text_channel(channel):
+def get_channel_active_threads(channel):
+    # الثريدات النشطة (غير المؤرشفة) التابعة لروم نصي معيّن فقط.
+    if not isinstance(channel, discord.TextChannel):
+        return []
+
+    try:
+        return [
+            thread
+            for thread in channel.threads
+            if not thread.archived
+        ]
+    except Exception:
+        return []
+
+
+async def lock_text_channel(channel, hide=False):
     everyone = channel.guild.default_role
     overwrite = channel.overwrites_for(everyone)
 
-    overwrite.view_channel = True
+    overwrite.view_channel = False if hide else True
     overwrite.send_messages = False
+    overwrite.send_messages_in_threads = False
 
     try:
         await channel.set_permissions(
             everyone,
             overwrite=overwrite,
-            reason="Lock: read only"
+            reason="Lock: read only" + (" + hidden" if hide else "")
         )
-        return True
     except discord.Forbidden:
         return False
     except discord.HTTPException as error:
         print(f"❌ Text Lock Error: {error}")
         return False
+
+    # منع الكتابة في جميع الـThreads النشطة التابعة للروم، بدون قفلها/أرشفتها.
+    for thread in get_channel_active_threads(channel):
+        try:
+            thread_overwrite = thread.overwrites_for(everyone)
+            thread_overwrite.send_messages_in_threads = False
+            await thread.set_permissions(
+                everyone,
+                overwrite=thread_overwrite,
+                reason="Lock parent channel: thread write disabled"
+            )
+        except (discord.Forbidden, discord.HTTPException) as error:
+            print(f"❌ Thread Sub-Lock Error ({thread.name}): {error}")
+            continue
+
+    return True
 
 
 async def unlock_text_channel(channel):
@@ -1810,6 +1849,7 @@ async def unlock_text_channel(channel):
 
     overwrite.view_channel = True
     overwrite.send_messages = None
+    overwrite.send_messages_in_threads = None
 
     try:
         await channel.set_permissions(
@@ -1817,12 +1857,27 @@ async def unlock_text_channel(channel):
             overwrite=overwrite,
             reason="Unlock: open chat"
         )
-        return True
     except discord.Forbidden:
         return False
     except discord.HTTPException as error:
         print(f"❌ Text Unlock Error: {error}")
         return False
+
+    # إرجاع الكتابة في جميع الـThreads النشطة التابعة للروم كما كانت.
+    for thread in get_channel_active_threads(channel):
+        try:
+            thread_overwrite = thread.overwrites_for(everyone)
+            thread_overwrite.send_messages_in_threads = None
+            await thread.set_permissions(
+                everyone,
+                overwrite=thread_overwrite,
+                reason="Unlock parent channel: thread write restored"
+            )
+        except (discord.Forbidden, discord.HTTPException) as error:
+            print(f"❌ Thread Sub-Unlock Error ({thread.name}): {error}")
+            continue
+
+    return True
 
 
 async def lock_thread(thread):
@@ -1862,12 +1917,12 @@ async def unlock_thread(thread):
         return False
 
 
-async def lock_any_channel(channel):
+async def lock_any_channel(channel, hide=False):
     if isinstance(channel, discord.Thread):
         return await lock_thread(channel)
 
     if isinstance(channel, discord.TextChannel):
-        return await lock_text_channel(channel)
+        return await lock_text_channel(channel, hide=hide)
 
     return False
 
@@ -1925,7 +1980,8 @@ async def perform_lock(
     interaction,
     channel,
     user,
-    response=True
+    response=True,
+    hide=False
 ):
     if not is_lockable_channel(channel):
         if response:
@@ -1960,7 +2016,7 @@ async def perform_lock(
             )
         return False
 
-    success = await lock_any_channel(channel)
+    success = await lock_any_channel(channel, hide=hide)
 
     if not success:
         if response:
@@ -1971,10 +2027,23 @@ async def perform_lock(
         return False
 
     if response:
+        is_text = isinstance(channel, discord.TextChannel)
+
+        if hide and is_text:
+            visibility_note = "🙈 تم إخفاء الروم بالكامل عن الجميع."
+        else:
+            visibility_note = "👁️ الروم ما زال ظاهرًا، لكن الكتابة مقفلة."
+
+        threads_note = (
+            "\n🧵 تم أيضًا منع الكتابة في جميع الـThreads النشطة التابعة له."
+            if is_text
+            else ""
+        )
+
         await interaction.response.send_message(
             f"🔒 تم قفل **{channel_type_name(channel)}** "
             f"{channel.mention}.\n"
-            "👁️ الروم ما زال ظاهرًا، لكن الكتابة مقفلة.",
+            f"{visibility_note}{threads_note}",
             ephemeral=True
         )
 
@@ -2029,10 +2098,19 @@ async def perform_unlock(
         return False
 
     if response:
+        is_text = isinstance(channel, discord.TextChannel)
+
+        threads_note = (
+            "\n🧵 تم أيضًا إرجاع الكتابة في جميع الـThreads التابعة له."
+            if is_text
+            else ""
+        )
+
         await interaction.response.send_message(
             f"🔓 تم فتح **{channel_type_name(channel)}** "
             f"{channel.mention}.\n"
-            "💬 الكتابة مفتوحة الآن.",
+            "💬 الكتابة مفتوحة الآن، والروم ظاهر بشكل طبيعي."
+            f"{threads_note}",
             ephemeral=True
         )
 
@@ -2087,6 +2165,32 @@ class ChannelLockView(discord.ui.View):
             interaction,
             channel,
             interaction.user
+        )
+
+    @discord.ui.button(
+        label="قفل وإخفاء",
+        emoji="🙈",
+        style=discord.ButtonStyle.danger
+    )
+    async def read_only_hidden(
+        self,
+        interaction,
+        button
+    ):
+        channel = self.get_channel(interaction.guild)
+
+        if channel is None:
+            await interaction.response.send_message(
+                "❌ ما قدرت ألقى الروم.",
+                ephemeral=True
+            )
+            return
+
+        await perform_lock(
+            interaction,
+            channel,
+            interaction.user,
+            hide=True
         )
 
     @discord.ui.button(
@@ -2496,8 +2600,9 @@ async def slash_lock(
     await interaction.response.send_message(
         f"⚙️ **إدارة الروم {target.mention}**\n\n"
         "اختر الحالة المطلوبة:\n\n"
-        "🔒 **قفل الكتابة** — الروم يبقى ظاهرًا، لكن الأعضاء لا يستطيعون الكلام.\n"
-        "💬 **فتح الكلام** — يسمح للأعضاء بالكلام من جديد.",
+        "🔒 **قفل الكتابة** — الروم يبقى ظاهرًا، لكن الأعضاء لا يستطيعون الكلام (بما فيها الـThreads التابعة).\n"
+        "🙈 **قفل وإخفاء** — نفس القفل أعلاه، مع إخفاء الروم بالكامل عن @everyone.\n"
+        "💬 **فتح الكلام** — يسمح للأعضاء بالكلام من جديد ويُظهر الروم بشكل طبيعي.",
         view=ChannelLockView(
             target.id,
             interaction.user.id
