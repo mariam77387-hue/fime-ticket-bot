@@ -47,6 +47,7 @@ DEFAULT_GUILD_CONFIG = {
     "admin_role_name": "skibidi admin",
     "welcome_message": "👋 منور/ه مرحبا بك في 𝐓𝐞𝐚𝐦 𝐅𝐢𝐦𝐞🌀\n\"{display_name}\" |\n~\n👋 Welcome to 𝐓𝐞𝐚𝐦 𝐅𝐢𝐦𝐞 🌀",
     "welcome_enabled": True,
+    "thread_lock_states": {},
     "stats": {"opened": 0, "closed": 0, "claimed": 0, "categories": {}, "total_duration_seconds": 0},
 }
 
@@ -1742,14 +1743,6 @@ async def tc_autoclose(ctx, days: int):
 # ملاحظة:
 # Discord لا يسمح بإخفاء Public Thread بشكل مستقل عن الروم الأب.
 # لذلك خيارات الـThreads هنا هي قفل/فتح الكتابة فقط.
-#
-# 🆕 تحديث:
-# - عند قفل Text Channel، يتم أيضًا تعطيل الكتابة داخل جميع الـThreads
-#   النشطة (غير المؤرشفة) التابعة له عبر صلاحية send_messages_in_threads،
-#   بدون قفل/أرشفة الـThread نفسه.
-# - عند الفتح يتم إرجاع الكتابة في الـThreads كما كانت (بدون overwrite).
-# - أضيف خيار قفل مع إخفاء الروم بالكامل عن @everyone (اختياري)،
-#   يُستخدم فقط عند الطلب صراحة من زر "قفل وإخفاء".
 
 
 def is_lockable_channel(channel):
@@ -1791,93 +1784,145 @@ def bot_can_manage_lock(channel):
     return False
 
 
-def get_channel_active_threads(channel):
-    # الثريدات النشطة (غير المؤرشفة) التابعة لروم نصي معيّن فقط.
-    if not isinstance(channel, discord.TextChannel):
-        return []
-
-    try:
-        return [
-            thread
-            for thread in channel.threads
-            if not thread.archived
-        ]
-    except Exception:
-        return []
-
-
-async def lock_text_channel(channel, hide=False):
+async def lock_text_channel(channel):
     everyone = channel.guild.default_role
     overwrite = channel.overwrites_for(everyone)
-
-    overwrite.view_channel = False if hide else True
+    overwrite.view_channel = True
     overwrite.send_messages = False
-    overwrite.send_messages_in_threads = False
-
     try:
-        await channel.set_permissions(
-            everyone,
-            overwrite=overwrite,
-            reason="Lock: read only" + (" + hidden" if hide else "")
-        )
+        await channel.set_permissions(everyone, overwrite=overwrite, reason="Lock: read only")
+        return True
     except discord.Forbidden:
         return False
     except discord.HTTPException as error:
         print(f"❌ Text Lock Error: {error}")
         return False
 
-    # منع الكتابة في جميع الـThreads النشطة التابعة للروم، بدون قفلها/أرشفتها.
-    for thread in get_channel_active_threads(channel):
-        try:
-            thread_overwrite = thread.overwrites_for(everyone)
-            thread_overwrite.send_messages_in_threads = False
-            await thread.set_permissions(
-                everyone,
-                overwrite=thread_overwrite,
-                reason="Lock parent channel: thread write disabled"
-            )
-        except (discord.Forbidden, discord.HTTPException) as error:
-            print(f"❌ Thread Sub-Lock Error ({thread.name}): {error}")
-            continue
-
-    return True
-
 
 async def unlock_text_channel(channel):
     everyone = channel.guild.default_role
     overwrite = channel.overwrites_for(everyone)
-
     overwrite.view_channel = True
     overwrite.send_messages = None
-    overwrite.send_messages_in_threads = None
-
     try:
-        await channel.set_permissions(
-            everyone,
-            overwrite=overwrite,
-            reason="Unlock: open chat"
-        )
+        await channel.set_permissions(everyone, overwrite=overwrite, reason="Unlock: open chat")
+        return True
     except discord.Forbidden:
         return False
     except discord.HTTPException as error:
         print(f"❌ Text Unlock Error: {error}")
         return False
 
-    # إرجاع الكتابة في جميع الـThreads النشطة التابعة للروم كما كانت.
-    for thread in get_channel_active_threads(channel):
-        try:
-            thread_overwrite = thread.overwrites_for(everyone)
-            thread_overwrite.send_messages_in_threads = None
-            await thread.set_permissions(
-                everyone,
-                overwrite=thread_overwrite,
-                reason="Unlock parent channel: thread write restored"
-            )
-        except (discord.Forbidden, discord.HTTPException) as error:
-            print(f"❌ Thread Sub-Unlock Error ({thread.name}): {error}")
-            continue
 
-    return True
+def get_thread_lock_states(guild):
+    cfg = get_guild_config(guild.id)
+    states = cfg.setdefault("thread_lock_states", {})
+    if not isinstance(states, dict):
+        states = {}
+        cfg["thread_lock_states"] = states
+        save_config()
+    return states
+
+
+def _permission_value(value):
+    return None if value is None else bool(value)
+
+
+async def lock_threads_in_channel(channel):
+    if not isinstance(channel, discord.TextChannel):
+        return False, 0
+
+    everyone = channel.guild.default_role
+    states = get_thread_lock_states(channel.guild)
+    channel_key = str(channel.id)
+    state = states.get(channel_key)
+
+    if not isinstance(state, dict):
+        current = channel.overwrites_for(everyone)
+        state = {
+            "create_public_threads": _permission_value(current.create_public_threads),
+            "create_private_threads": _permission_value(current.create_private_threads),
+            "send_messages_in_threads": _permission_value(current.send_messages_in_threads),
+            "threads": {}
+        }
+        states[channel_key] = state
+
+    overwrite = channel.overwrites_for(everyone)
+    overwrite.create_public_threads = False
+    overwrite.create_private_threads = False
+    overwrite.send_messages_in_threads = False
+
+    try:
+        await channel.set_permissions(everyone, overwrite=overwrite, reason="Disable Threads")
+    except discord.Forbidden:
+        return False, 0
+    except discord.HTTPException as error:
+        print(f"❌ Thread Permission Error: {error}")
+        return False, 0
+
+    locked_count = 0
+    for thread in list(channel.guild.threads):
+        if thread.parent_id != channel.id or thread.locked:
+            continue
+        thread_id = str(thread.id)
+        state["threads"].setdefault(thread_id, {"archived": bool(thread.archived)})
+        try:
+            if thread.archived:
+                await thread.edit(archived=False, reason="Preparing thread for lock")
+            await thread.edit(locked=True, reason="Disable Threads")
+            locked_count += 1
+        except discord.Forbidden:
+            print(f"❌ لا أستطيع قفل الـThread: {thread.id}")
+        except discord.HTTPException as error:
+            print(f"❌ Thread Lock Error ({thread.id}): {error}")
+
+    save_config()
+    return True, locked_count
+
+
+async def unlock_threads_in_channel(channel):
+    if not isinstance(channel, discord.TextChannel):
+        return False, 0
+
+    everyone = channel.guild.default_role
+    states = get_thread_lock_states(channel.guild)
+    channel_key = str(channel.id)
+    state = states.get(channel_key)
+    if not isinstance(state, dict):
+        return True, 0
+
+    overwrite = channel.overwrites_for(everyone)
+    overwrite.create_public_threads = state.get("create_public_threads")
+    overwrite.create_private_threads = state.get("create_private_threads")
+    overwrite.send_messages_in_threads = state.get("send_messages_in_threads")
+
+    try:
+        await channel.set_permissions(everyone, overwrite=overwrite, reason="Enable Threads")
+    except discord.Forbidden:
+        return False, 0
+    except discord.HTTPException as error:
+        print(f"❌ Thread Permission Restore Error: {error}")
+        return False, 0
+
+    restored_count = 0
+    for thread_id, thread_state in state.get("threads", {}).items():
+        try:
+            thread = channel.guild.get_thread(int(thread_id))
+            if thread is None:
+                thread = await channel.guild.fetch_channel(int(thread_id))
+            if not isinstance(thread, discord.Thread):
+                continue
+            if thread.locked:
+                await thread.edit(locked=False, archived=bool(thread_state.get("archived", False)), reason="Enable Threads")
+                restored_count += 1
+        except (discord.NotFound, discord.Forbidden):
+            continue
+        except discord.HTTPException as error:
+            print(f"❌ Thread Unlock Error ({thread_id}): {error}")
+
+    states.pop(channel_key, None)
+    save_config()
+    return True, restored_count
 
 
 async def lock_thread(thread):
@@ -1917,12 +1962,12 @@ async def unlock_thread(thread):
         return False
 
 
-async def lock_any_channel(channel, hide=False):
+async def lock_any_channel(channel):
     if isinstance(channel, discord.Thread):
         return await lock_thread(channel)
 
     if isinstance(channel, discord.TextChannel):
-        return await lock_text_channel(channel, hide=hide)
+        return await lock_text_channel(channel)
 
     return False
 
@@ -1980,8 +2025,7 @@ async def perform_lock(
     interaction,
     channel,
     user,
-    response=True,
-    hide=False
+    response=True
 ):
     if not is_lockable_channel(channel):
         if response:
@@ -2016,7 +2060,7 @@ async def perform_lock(
             )
         return False
 
-    success = await lock_any_channel(channel, hide=hide)
+    success = await lock_any_channel(channel)
 
     if not success:
         if response:
@@ -2027,23 +2071,10 @@ async def perform_lock(
         return False
 
     if response:
-        is_text = isinstance(channel, discord.TextChannel)
-
-        if hide and is_text:
-            visibility_note = "🙈 تم إخفاء الروم بالكامل عن الجميع."
-        else:
-            visibility_note = "👁️ الروم ما زال ظاهرًا، لكن الكتابة مقفلة."
-
-        threads_note = (
-            "\n🧵 تم أيضًا منع الكتابة في جميع الـThreads النشطة التابعة له."
-            if is_text
-            else ""
-        )
-
         await interaction.response.send_message(
             f"🔒 تم قفل **{channel_type_name(channel)}** "
             f"{channel.mention}.\n"
-            f"{visibility_note}{threads_note}",
+            "👁️ الروم ما زال ظاهرًا، لكن الكتابة مقفلة.",
             ephemeral=True
         )
 
@@ -2098,19 +2129,10 @@ async def perform_unlock(
         return False
 
     if response:
-        is_text = isinstance(channel, discord.TextChannel)
-
-        threads_note = (
-            "\n🧵 تم أيضًا إرجاع الكتابة في جميع الـThreads التابعة له."
-            if is_text
-            else ""
-        )
-
         await interaction.response.send_message(
             f"🔓 تم فتح **{channel_type_name(channel)}** "
             f"{channel.mention}.\n"
-            "💬 الكتابة مفتوحة الآن، والروم ظاهر بشكل طبيعي."
-            f"{threads_note}",
+            "💬 الكتابة مفتوحة الآن.",
             ephemeral=True
         )
 
@@ -2168,32 +2190,6 @@ class ChannelLockView(discord.ui.View):
         )
 
     @discord.ui.button(
-        label="قفل وإخفاء",
-        emoji="🙈",
-        style=discord.ButtonStyle.danger
-    )
-    async def read_only_hidden(
-        self,
-        interaction,
-        button
-    ):
-        channel = self.get_channel(interaction.guild)
-
-        if channel is None:
-            await interaction.response.send_message(
-                "❌ ما قدرت ألقى الروم.",
-                ephemeral=True
-            )
-            return
-
-        await perform_lock(
-            interaction,
-            channel,
-            interaction.user,
-            hide=True
-        )
-
-    @discord.ui.button(
         label="فتح الكلام",
         emoji="💬",
         style=discord.ButtonStyle.success
@@ -2219,9 +2215,72 @@ class ChannelLockView(discord.ui.View):
         )
 
     @discord.ui.button(
+        label="منع الـThreads",
+        emoji="🧵",
+        style=discord.ButtonStyle.danger,
+        row=1
+    )
+    async def disable_threads(self, interaction, button):
+        channel = self.get_channel(interaction.guild)
+        if channel is None:
+            await interaction.response.send_message("❌ ما قدرت ألقى الروم.", ephemeral=True)
+            return
+        if not isinstance(channel, discord.TextChannel):
+            await interaction.response.send_message("❌ هذا الخيار يعمل على الروم الأب فقط.", ephemeral=True)
+            return
+        if not can_manage_lock(interaction.user, channel):
+            await interaction.response.send_message("❌ تحتاج صلاحية **Manage Channels**.", ephemeral=True)
+            return
+        me = interaction.guild.me
+        if me is None or not me.guild_permissions.manage_threads:
+            await interaction.response.send_message("❌ البوت يحتاج صلاحية **Manage Threads**.", ephemeral=True)
+            return
+        success, count = await lock_threads_in_channel(channel)
+        if not success:
+            await interaction.response.send_message("❌ فشل تفعيل منع الـThreads. تأكد من صلاحيات البوت.", ephemeral=True)
+            return
+        await interaction.response.send_message(
+            f"🧵 تم منع الـThreads في {channel.mention}.\n"
+            f"🔒 تم قفل **{count}** Thread نشط ومنع إنشاء Threads جديدة.",
+            ephemeral=True
+        )
+
+    @discord.ui.button(
+        label="فتح الـThreads",
+        emoji="🔓",
+        style=discord.ButtonStyle.success,
+        row=1
+    )
+    async def enable_threads(self, interaction, button):
+        channel = self.get_channel(interaction.guild)
+        if channel is None:
+            await interaction.response.send_message("❌ ما قدرت ألقى الروم.", ephemeral=True)
+            return
+        if not isinstance(channel, discord.TextChannel):
+            await interaction.response.send_message("❌ هذا الخيار يعمل على الروم الأب فقط.", ephemeral=True)
+            return
+        if not can_manage_lock(interaction.user, channel):
+            await interaction.response.send_message("❌ تحتاج صلاحية **Manage Channels**.", ephemeral=True)
+            return
+        me = interaction.guild.me
+        if me is None or not me.guild_permissions.manage_threads:
+            await interaction.response.send_message("❌ البوت يحتاج صلاحية **Manage Threads**.", ephemeral=True)
+            return
+        success, count = await unlock_threads_in_channel(channel)
+        if not success:
+            await interaction.response.send_message("❌ فشل فتح الـThreads. تأكد من صلاحيات البوت.", ephemeral=True)
+            return
+        await interaction.response.send_message(
+            f"🔓 تم فتح الـThreads في {channel.mention}.\n"
+            f"💬 تم استرجاع **{count}** Thread إلى حالتها السابقة.",
+            ephemeral=True
+        )
+
+    @discord.ui.button(
         label="إلغاء",
         emoji="✖️",
-        style=discord.ButtonStyle.secondary
+        style=discord.ButtonStyle.secondary,
+        row=1
     )
     async def cancel(
         self,
@@ -2232,6 +2291,33 @@ class ChannelLockView(discord.ui.View):
             content="تم إلغاء العملية.",
             view=None
         )
+
+
+@bot.tree.command(
+    name="threadunlock",
+    description="إلغاء منع الـThreads في الروم الحالي"
+)
+async def slash_threadunlock(interaction):
+    channel = interaction.channel
+    if not isinstance(channel, discord.TextChannel):
+        await interaction.response.send_message("❌ استخدم هذا الأمر داخل Text Channel.", ephemeral=True)
+        return
+    if not can_manage_lock(interaction.user, channel):
+        await interaction.response.send_message("❌ تحتاج صلاحية **Manage Channels**.", ephemeral=True)
+        return
+    me = interaction.guild.me
+    if me is None or not me.guild_permissions.manage_threads:
+        await interaction.response.send_message("❌ البوت يحتاج صلاحية **Manage Threads**.", ephemeral=True)
+        return
+    success, count = await unlock_threads_in_channel(channel)
+    if not success:
+        await interaction.response.send_message("❌ فشل إلغاء منع الـThreads. تأكد من صلاحيات البوت.", ephemeral=True)
+        return
+    await interaction.response.send_message(
+        f"🧵 تم إلغاء منع الـThreads في {channel.mention}.\n"
+        f"🔓 تم استرجاع **{count}** Thread.",
+        ephemeral=True
+    )
 
 
 # =========================================================
@@ -2600,9 +2686,8 @@ async def slash_lock(
     await interaction.response.send_message(
         f"⚙️ **إدارة الروم {target.mention}**\n\n"
         "اختر الحالة المطلوبة:\n\n"
-        "🔒 **قفل الكتابة** — الروم يبقى ظاهرًا، لكن الأعضاء لا يستطيعون الكلام (بما فيها الـThreads التابعة).\n"
-        "🙈 **قفل وإخفاء** — نفس القفل أعلاه، مع إخفاء الروم بالكامل عن @everyone.\n"
-        "💬 **فتح الكلام** — يسمح للأعضاء بالكلام من جديد ويُظهر الروم بشكل طبيعي.",
+        "🔒 **قفل الكتابة** — الروم يبقى ظاهرًا، لكن الأعضاء لا يستطيعون الكلام.\n"
+        "💬 **فتح الكلام** — يسمح للأعضاء بالكلام من جديد.",
         view=ChannelLockView(
             target.id,
             interaction.user.id
@@ -3017,17 +3102,6 @@ async def on_command_error(ctx, error):
 # تشغيل البوت
 # =========================================================
 
-if __name__ == "__main__":
-    if not TOKEN:
-        raise RuntimeError(
-            "❌ لم يتم العثور على TOKEN. "
-            "أضفه في Environment Variables."
-        )
-
-    # =====================================================
-    # تحميل نظام Server Logs من bot2.py
-    # =====================================================
-    
 if __name__ == "__main__":
     if not TOKEN:
         raise RuntimeError(
