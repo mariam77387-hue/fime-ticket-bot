@@ -1758,6 +1758,7 @@ class ServerLogger(commands.Cog):
             ephemeral=True
         )
 
+
     # =====================================================
     # Welcome message customization
     # =====================================================
