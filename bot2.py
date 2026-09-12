@@ -1727,28 +1727,35 @@ class ServerLogger(commands.Cog):
         )
 
 
-    @app_commands.command(
-        name="invite",
-        description="عرض رابط الدعوة الدائم للسيرفر"
+        @app_commands.command(
+        name="invitebot",
+        description="الحصول على رابط دعوة البوت"
     )
-    async def invite(self, interaction: discord.Interaction):
-        invite, created = await self.ensure_permanent_invite(
-            interaction.guild,
-            force_new=False
+    async def invitebot(self, interaction: discord.Interaction):
+        bot_id = self.bot.user.id
+
+        invite_url = discord.utils.oauth_url(
+            bot_id,
+            permissions=discord.Permissions(administrator=True),
+            scopes=("bot", "applications.commands")
         )
 
-        if invite is None:
-            await interaction.response.send_message(
-                "❌ لا يوجد رابط دائم حاليًا، "
-                "ولا أستطيع إنشاء واحد بسبب صلاحيات البوت.",
-                ephemeral=True
-            )
-            return
+        view = discord.ui.View()
+
+        button = discord.ui.Button(
+            label="➕ إضافة البوت للسيرفر",
+            style=discord.ButtonStyle.link,
+            url=invite_url
+        )
+
+        view.add_item(button)
 
         await interaction.response.send_message(
-            "🔗 **رابط سيرفر Team Fime**\n"
-            f"https://discord.gg/{invite.code}\n\n"
-            "♾️ رابط دائم"
+            "🤖 **دعوة Team Fime Bot**\n\n"
+            "اضغط على الزر بالأسفل لإضافة البوت إلى سيرفرك.\n"
+            "🛡️ البوت سيطلب صلاحية Administrator.",
+            view=view,
+            ephemeral=True
         )
 
     # =====================================================
