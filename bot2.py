@@ -1728,7 +1728,7 @@ class ServerLogger(commands.Cog):
         )
 
 
-            @app_commands.command(
+    @app_commands.command(
         name="invitebot",
         description="الحصول على رابط دعوة البوت"
     )
