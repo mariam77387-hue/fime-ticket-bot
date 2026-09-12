@@ -2922,22 +2922,30 @@ if __name__ == "__main__":
     # =====================================================
     # تحميل نظام Server Logs من bot2.py
     # =====================================================
+    if __name__ == "__main__":
+    if not TOKEN:
+        raise RuntimeError(
+            "❌ لم يتم العثور على TOKEN. "
+            "أضفه في Environment Variables."
+        )
+
     async def main():
-    try:
-        await bot.load_extension("bot2")
-        print("✅ تم تحميل نظام Server Logs من bot2.py")
-    except Exception as error:
-        print(f"❌ تعذر تحميل bot2.py: {error}")
-        raise
+        async with bot:
+            try:
+                await bot.load_extension("bot2")
+                print("✅ تم تحميل نظام Server Logs من bot2.py")
+            except Exception as error:
+                print(f"❌ تعذر تحميل bot2.py: {error}")
+                raise
 
-    try:
-        await bot.load_extension("bot3")
-        print("✅ تم تحميل نظام Self Roles من bot3.py")
-    except Exception as error:
-        print(f"❌ تعذر تحميل bot3.py: {error}")
-        raise
+            try:
+                await bot.load_extension("bot3")
+                print("✅ تم تحميل نظام Self Roles من bot3.py")
+            except Exception as error:
+                print(f"❌ تعذر تحميل bot3.py: {error}")
+                raise
 
-    await bot.start(TOKEN)
+            keep_alive()
+            await bot.start(TOKEN)
 
-
-asyncio.run(main())
+    asyncio.run(main())
