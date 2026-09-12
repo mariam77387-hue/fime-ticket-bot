@@ -2922,21 +2922,22 @@ if __name__ == "__main__":
     # =====================================================
     # تحميل نظام Server Logs من bot2.py
     # =====================================================
+    async def main():
     try:
-    import bot2
-    asyncio.run(bot2.setup(bot))
-    print("✅ تم تحميل نظام Server Logs من bot2.py")
-except Exception as error:
-    print(f"❌ تعذر تحميل bot2.py: {error}")
-    raise
+        await bot.load_extension("bot2")
+        print("✅ تم تحميل نظام Server Logs من bot2.py")
+    except Exception as error:
+        print(f"❌ تعذر تحميل bot2.py: {error}")
+        raise
 
-try:
-    import bot3
-    asyncio.run(bot3.setup(bot))
-    print("✅ تم تحميل نظام Self Roles من bot3.py")
-except Exception as error:
-    print(f"❌ تعذر تحميل bot3.py: {error}")
-    raise
+    try:
+        await bot.load_extension("bot3")
+        print("✅ تم تحميل نظام Self Roles من bot3.py")
+    except Exception as error:
+        print(f"❌ تعذر تحميل bot3.py: {error}")
+        raise
 
-keep_alive()
-bot.run(TOKEN)
+    await bot.start(TOKEN)
+
+
+asyncio.run(main())
