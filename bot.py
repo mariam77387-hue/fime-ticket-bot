@@ -2168,10 +2168,31 @@ ROBLOX_GAME_ALIASES = {
 
 def normalize_search_text(value: str):
     value = str(value or "").strip().casefold()
+    # إزالة التشكيل (الحركات)
     value = re.sub(r"[\u064B-\u065F\u0670]", "", value)
-    value = value.replace("أ", "ا").replace("إ", "ا").replace("آ", "ا")
+    # توحيد الألف بأشكالها
+    value = value.replace("أ", "ا").replace("إ", "ا").replace("آ", "ا").replace("ٱ", "ا")
+    # توحيد الياء/الألف المقصورة، والتاء المربوطة/الهاء
+    # هذا هو سبب فشل مطابقات كثيرة سابقًا: نفس الكلمة بإملاءين مختلفين
+    # (مثال: "المزرعه" مقابل "المزرعة"، "بيضه" مقابل "بيضة") لم تكن تُعامل كمتطابقة.
+    value = value.replace("ى", "ي")
+    value = value.replace("ة", "ه")
+    # إزالة التطويل (ـ)
+    value = value.replace("ـ", "")
     value = re.sub(r"\s+", " ", value)
-    return value
+    return value.strip()
+
+
+def _strip_arabic_definite_article(word: str):
+    # يزيل "ال" التعريف من بداية الكلمة (الباب -> باب) لتسهيل المطابقة
+    # بدون الحاجة لتكرار كل اسم مستعار بنسختين (بـ"ال" وبدونها).
+    if word.startswith("ال") and len(word) > 3:
+        return word[2:]
+    return word
+
+
+def _dealias_definite_article(text: str):
+    return " ".join(_strip_arabic_definite_article(word) for word in text.split(" ") if word)
 
 
 def clean_script_query(content: str):
@@ -2183,11 +2204,62 @@ def clean_script_query(content: str):
     return value.strip()
 
 
+_ALIAS_LOOKUP_CACHE = None
+
+
+def _get_alias_lookup():
+    # نبني القاموس المُطبَّع مرة واحدة فقط ونرتبه من الأطول إلى الأقصر،
+    # حتى تُعطى الأولوية للمطابقات الأكثر تحديدًا عند البحث كجزء من نص أطول
+    # (مثلًا "ماب المزرعه" يجب أن يُفضَّل على "مزرعه" لو كانا يتقاطعان).
+    global _ALIAS_LOOKUP_CACHE
+    if _ALIAS_LOOKUP_CACHE is None:
+        lookup = {}
+        for arabic_name, english_name in ROBLOX_GAME_ALIASES.items():
+            key = normalize_search_text(arabic_name)
+            if key:
+                lookup.setdefault(key, english_name)
+        _ALIAS_LOOKUP_CACHE = sorted(
+            lookup.items(),
+            key=lambda item: len(item[0]),
+            reverse=True
+        )
+    return _ALIAS_LOOKUP_CACHE
+
+
 def translate_game_alias(query: str):
+    """
+    يحوّل اسم اللعبة العربي (أو اختصاره) إلى الاسم الإنجليزي الصحيح
+    قبل إرسال طلب البحث إلى ScriptBlox.
+
+    يدعم:
+    - اختلافات الإملاء الشائعة (ة/ه، ى/ي) عبر normalize_search_text.
+    - وجود/غياب "ال" التعريف (الباب / باب).
+    - استعلامات تحتوي كلمات زائدة حول اسم اللعبة (مثل "بغى سكربت جرو جاردن").
+    """
     normalized = normalize_search_text(query)
-    for arabic_name, english_name in ROBLOX_GAME_ALIASES.items():
-        if normalize_search_text(arabic_name) == normalized:
-            return english_name
+    if not normalized:
+        return query.strip()
+
+    normalized_no_al = _dealias_definite_article(normalized)
+    candidates = [normalized]
+    if normalized_no_al != normalized:
+        candidates.append(normalized_no_al)
+
+    alias_pairs = _get_alias_lookup()
+
+    # 1) مطابقة كاملة للاستعلام (مع أو بدون "ال" التعريف)
+    for candidate in candidates:
+        for key, english_name in alias_pairs:
+            if key == candidate:
+                return english_name
+
+    # 2) الاسم المستعار موجود كجزء من الاستعلام (الأطول أولًا لتفادي
+    #    المطابقات الخاطئة القصيرة جدًا)
+    for candidate in candidates:
+        for key, english_name in alias_pairs:
+            if key and key in candidate:
+                return english_name
+
     return query.strip()
 
 
