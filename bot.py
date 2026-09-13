@@ -4,6 +4,11 @@ import json
 import asyncio
 from copy import deepcopy
 from datetime import datetime, timezone
+from urllib.parse import quote_plus
+from urllib.request import Request, urlopen
+from urllib.error import HTTPError, URLError
+from difflib import SequenceMatcher
+import re
 
 import discord
 from discord.ext import commands, tasks
@@ -48,6 +53,19 @@ DEFAULT_GUILD_CONFIG = {
     "welcome_message": "👋 منور/ه مرحبا بك في 𝐓𝐞𝐚𝐦 𝐅𝐢𝐦𝐞🌀\n\"{display_name}\" |\n~\n👋 Welcome to 𝐓𝐞𝐚𝐦 𝐅𝐢𝐦𝐞 🌀",
     "welcome_enabled": True,
     "thread_lock_states": {},
+    "auto_message": {
+        "enabled": False,
+        "channel_id": None,
+        "mode": "every_message",
+        "message": "",
+        "interval_seconds": 30,
+    },
+    "script_search": {
+        "enabled": False,
+        "channel_id": None,
+        "max_results": 5,
+        "strict": False,
+    },
     "stats": {"opened": 0, "closed": 0, "claimed": 0, "categories": {}, "total_duration_seconds": 0},
 }
 
@@ -1728,6 +1746,437 @@ async def tc_autoclose(ctx, days: int):
     )
 
 
+
+# =========================================================
+# 📢 نظام الرسائل التلقائية
+# =========================================================
+
+AUTO_MESSAGE_RUNTIME = {}
+SCRIPT_SEARCH_COOLDOWN = {}
+SCRIPTBLOX_API = "https://scriptblox.com/api/script/search"
+SCRIPTBLOX_RAW_API = "https://scriptblox.com/api/script/raw"
+
+
+def get_auto_message_config(guild: discord.Guild):
+    cfg = get_guild_config(guild.id)
+    data = cfg.setdefault("auto_message", deepcopy(DEFAULT_GUILD_CONFIG["auto_message"]))
+    if not isinstance(data, dict):
+        data = deepcopy(DEFAULT_GUILD_CONFIG["auto_message"])
+        cfg["auto_message"] = data
+        save_config()
+    return data
+
+
+def get_script_search_config(guild: discord.Guild):
+    cfg = get_guild_config(guild.id)
+    data = cfg.setdefault("script_search", deepcopy(DEFAULT_GUILD_CONFIG["script_search"]))
+    if not isinstance(data, dict):
+        data = deepcopy(DEFAULT_GUILD_CONFIG["script_search"])
+        cfg["script_search"] = data
+        save_config()
+    return data
+
+
+def get_configured_channel(guild: discord.Guild, channel_id):
+    try:
+        channel_id = int(channel_id)
+    except (TypeError, ValueError):
+        return None
+    return guild.get_channel(channel_id)
+
+
+async def send_auto_message(guild: discord.Guild):
+    data = get_auto_message_config(guild)
+    if not data.get("enabled") or data.get("mode") != "interval":
+        return False
+
+    channel = get_configured_channel(guild, data.get("channel_id"))
+    text = str(data.get("message") or "").strip()
+    if not isinstance(channel, discord.TextChannel) or not text:
+        return False
+
+    try:
+        await channel.send(text, allowed_mentions=discord.AllowedMentions.none())
+        return True
+    except (discord.Forbidden, discord.NotFound):
+        return False
+    except discord.HTTPException as error:
+        print(f"❌ Auto Message Error in {guild.id}: {error}")
+        return False
+
+
+@tasks.loop(seconds=5)
+async def auto_message_loop():
+    now = asyncio.get_running_loop().time()
+
+    for guild in list(bot.guilds):
+        data = get_auto_message_config(guild)
+        if not data.get("enabled") or data.get("mode") != "interval":
+            AUTO_MESSAGE_RUNTIME.pop(guild.id, None)
+            continue
+
+        try:
+            interval = max(5, int(data.get("interval_seconds", 30)))
+        except (TypeError, ValueError):
+            interval = 30
+
+        next_run = AUTO_MESSAGE_RUNTIME.get(guild.id, 0)
+        if now < next_run:
+            continue
+
+        await send_auto_message(guild)
+        AUTO_MESSAGE_RUNTIME[guild.id] = now + interval
+
+
+@auto_message_loop.before_loop
+async def before_auto_message_loop():
+    await bot.wait_until_ready()
+
+
+@bot.tree.command(
+    name="automessage",
+    description="إدارة الرسائل التلقائية في روم محدد"
+)
+@app_commands.describe(
+    action="الإجراء المطلوب",
+    channel="الروم الذي ستُرسل فيه الرسالة",
+    mode="طريقة الإرسال",
+    message="نص الرسالة التلقائية",
+    interval="الفاصل بالثواني في وضع التوقيت، من 5 إلى 86400"
+)
+@app_commands.choices(
+    action=[
+        app_commands.Choice(name="تشغيل / تعديل", value="setup"),
+        app_commands.Choice(name="إيقاف", value="disable"),
+        app_commands.Choice(name="عرض الإعدادات", value="show"),
+    ],
+    mode=[
+        app_commands.Choice(name="بعد كل رسالة", value="every_message"),
+        app_commands.Choice(name="بتوقيت ثابت", value="interval"),
+    ]
+)
+@admin_only()
+async def automessage_command(
+    interaction: discord.Interaction,
+    action: app_commands.Choice[str],
+    channel: discord.TextChannel = None,
+    mode: app_commands.Choice[str] = None,
+    message: str = None,
+    interval: int = None,
+):
+    guild = interaction.guild
+    data = get_auto_message_config(guild)
+
+    if action.value == "show":
+        if not data.get("enabled"):
+            await interaction.response.send_message("📢 نظام الرسائل التلقائية متوقف حاليًا.", ephemeral=True)
+            return
+        target = get_configured_channel(guild, data.get("channel_id"))
+        mode_text = "بعد كل رسالة" if data.get("mode") == "every_message" else f"كل {data.get('interval_seconds', 30)} ثانية"
+        await interaction.response.send_message(
+            f"📢 **إعدادات الرسائل التلقائية**\n\n"
+            f"الروم: {target.mention if target else 'غير موجود'}\n"
+            f"الوضع: **{mode_text}**\n"
+            f"الرسالة: {data.get('message') or '—'}",
+            ephemeral=True
+        )
+        return
+
+    if action.value == "disable":
+        data["enabled"] = False
+        AUTO_MESSAGE_RUNTIME.pop(guild.id, None)
+        save_config()
+        await interaction.response.send_message("✅ تم إيقاف الرسائل التلقائية.", ephemeral=True)
+        return
+
+    if channel is None or mode is None or not str(message or "").strip():
+        await interaction.response.send_message(
+            "❌ عند التشغيل لازم تحدد **الروم + طريقة الإرسال + الرسالة**.",
+            ephemeral=True
+        )
+        return
+
+    if mode.value == "interval":
+        if interval is None:
+            await interaction.response.send_message("❌ في وضع التوقيت لازم تحدد عدد الثواني.", ephemeral=True)
+            return
+        if not 5 <= interval <= 86400:
+            await interaction.response.send_message("❌ المدة يجب أن تكون بين **5** و **86400** ثانية.", ephemeral=True)
+            return
+    else:
+        interval = 30
+
+    data.update({
+        "enabled": True,
+        "channel_id": channel.id,
+        "mode": mode.value,
+        "message": str(message).strip(),
+        "interval_seconds": interval,
+    })
+    AUTO_MESSAGE_RUNTIME[guild.id] = asyncio.get_running_loop().time() + interval
+    save_config()
+
+    mode_text = "بعد كل رسالة" if mode.value == "every_message" else f"كل {interval} ثانية"
+    await interaction.response.send_message(
+        f"✅ تم إعداد الرسائل التلقائية.\n\n"
+        f"📍 الروم: {channel.mention}\n"
+        f"⚙️ الوضع: **{mode_text}**\n"
+        f"📝 الرسالة: {message}",
+        ephemeral=True
+    )
+
+
+# =========================================================
+# 🔎 نظام بحث Roblox Scripts عبر ScriptBlox
+# =========================================================
+
+# اختصارات عربية شائعة لتقوية البحث. يمكن إضافة أي اسم جديد هنا لاحقًا.
+ROBLOX_GAME_ALIASES = {
+    "بلوكس فروت": "Blox Fruits",
+    "بلوكس فروتس": "Blox Fruits",
+    "بلف": "Blox Fruits",
+    "جرو جاردن": "Grow a Garden",
+    "جرو": "Grow a Garden",
+    "مردر مستري": "Murder Mystery 2",
+    "ممر": "Murder Mystery 2",
+    "ميم": "Murder Mystery 2",
+    "دورز": "DOORS",
+    "دور": "DOORS",
+    "بروك هيفن": "Brookhaven",
+    "بروكهافن": "Brookhaven",
+    "فش": "Fisch",
+    "فيش": "Fisch",
+    "سي فش": "Fisch",
+    "بلوكس": "Blox Fruits",
+    "بد وارز": "BedWars",
+    "بدورز": "BedWars",
+    "ماب سيتي": "Brookhaven",
+}
+
+
+def normalize_search_text(value: str):
+    value = str(value or "").strip().casefold()
+    value = re.sub(r"[\u064B-\u065F\u0670]", "", value)
+    value = value.replace("أ", "ا").replace("إ", "ا").replace("آ", "ا")
+    value = re.sub(r"\s+", " ", value)
+    return value
+
+
+def clean_script_query(content: str):
+    value = str(content or "").strip()
+    value = re.sub(r"^!\s*بحث\s*", "", value, flags=re.IGNORECASE)
+    value = re.sub(r"^بحث\s+", "", value, flags=re.IGNORECASE)
+    value = re.sub(r"^!\s*search\s*", "", value, flags=re.IGNORECASE)
+    value = re.sub(r"^search\s+", "", value, flags=re.IGNORECASE)
+    return value.strip()
+
+
+def translate_game_alias(query: str):
+    normalized = normalize_search_text(query)
+    for arabic_name, english_name in ROBLOX_GAME_ALIASES.items():
+        if normalize_search_text(arabic_name) == normalized:
+            return english_name
+    return query.strip()
+
+
+def _http_json(url: str):
+    request = Request(
+        url,
+        headers={
+            "User-Agent": "FimeDiscordBot/1.0",
+            "Accept": "application/json",
+        },
+    )
+    with urlopen(request, timeout=15) as response:
+        return json.loads(response.read().decode("utf-8", errors="replace"))
+
+
+async def scriptblox_search(query: str, max_results: int = 5, strict: bool = False):
+    search_query = translate_game_alias(query)
+    params = (
+        f"q={quote_plus(search_query)}"
+        f"&max={max(1, min(20, int(max_results)))}"
+        f"&strict={'true' if strict else 'false'}"
+        "&sortBy=updatedAt&order=desc"
+    )
+    url = f"{SCRIPTBLOX_API}?{params}"
+    try:
+        data = await asyncio.to_thread(_http_json, url)
+    except (HTTPError, URLError, TimeoutError, OSError, json.JSONDecodeError) as error:
+        print(f"❌ ScriptBlox Search Error: {error}")
+        return None
+
+    result = data.get("result") if isinstance(data, dict) else None
+    scripts = result.get("scripts", []) if isinstance(result, dict) else []
+    return scripts if isinstance(scripts, list) else []
+
+
+async def scriptblox_get_raw(script_id: str):
+    if not script_id:
+        return ""
+    url = f"{SCRIPTBLOX_RAW_API}/{quote_plus(str(script_id))}"
+    try:
+        request = Request(url, headers={"User-Agent": "FimeDiscordBot/1.0"})
+        def fetch_raw():
+            with urlopen(request, timeout=15) as response:
+                return response.read().decode("utf-8", errors="replace")
+        raw = await asyncio.to_thread(fetch_raw)
+        try:
+            parsed = json.loads(raw)
+            if isinstance(parsed, dict):
+                return str(parsed.get("script") or parsed.get("raw") or parsed.get("content") or "")
+        except json.JSONDecodeError:
+            pass
+        return raw
+    except (HTTPError, URLError, TimeoutError, OSError) as error:
+        print(f"❌ ScriptBlox Raw Error: {error}")
+        return ""
+
+
+def choose_best_script(scripts, query: str):
+    if not scripts:
+        return None
+    wanted = normalize_search_text(translate_game_alias(query))
+
+    def score(item):
+        title = normalize_search_text(item.get("title", ""))
+        game = item.get("game") or {}
+        game_name = normalize_search_text(game.get("name", ""))
+        title_score = SequenceMatcher(None, wanted, title).ratio() if title else 0
+        game_score = SequenceMatcher(None, wanted, game_name).ratio() if game_name else 0
+        exact = 2 if wanted == game_name else 0
+        contains = 1 if wanted and (wanted in game_name or wanted in title) else 0
+        return exact + contains + max(game_score, title_score)
+
+    return max(scripts, key=score)
+
+
+def scriptblox_script_url(script):
+    slug = script.get("slug") or script.get("_id") or ""
+    return f"https://scriptblox.com/script/{slug}" if slug else "https://scriptblox.com/"
+
+
+async def send_script_result(message: discord.Message, query: str):
+    guild = message.guild
+    data = get_script_search_config(guild)
+    scripts = await scriptblox_search(
+        query,
+        max_results=data.get("max_results", 5),
+        strict=bool(data.get("strict", False)),
+    )
+
+    if scripts is None:
+        await message.channel.send("❌ تعذر الوصول إلى خدمة البحث حاليًا. حاول بعد قليل.")
+        return
+
+    if not scripts:
+        await message.channel.send(
+            f"🔎 ما لقيت سكربت مناسب لـ **{query}** في ScriptBlox.\n"
+            "جرب الاسم الإنجليزي أو اسم اللعبة بشكل أوضح."
+        )
+        return
+
+    script = choose_best_script(scripts, query) or scripts[0]
+    title = str(script.get("title") or "بدون عنوان")
+    game = script.get("game") or {}
+    game_name = str(game.get("name") or "غير معروف")
+    verified = "✅ موثق" if script.get("verified") else "⚪ غير موثق"
+    key = "🔑 Key" if script.get("key") else "🔓 بدون Key"
+    patched = "⚠️ Patched" if script.get("isPatched") else "🟢 غير Patched"
+    url = scriptblox_script_url(script)
+
+    embed = discord.Embed(
+        title="🔎 نتيجة بحث السكربت",
+        description=(
+            f"**{title}**\n\n"
+            f"🎮 اللعبة: **{game_name}**\n"
+            f"{verified} • {key} • {patched}\n\n"
+            f"🔗 [فتح صفحة السكربت]({url})\n"
+            "Powered by ScriptBlox.com"
+        ),
+        color=discord.Color.blurple(),
+    )
+    if game.get("imageUrl"):
+        embed.set_thumbnail(url=str(game["imageUrl"]))
+    if script.get("image"):
+        embed.set_image(url=str(script["image"]))
+
+    await message.channel.send(embed=embed)
+
+    # إذا كانت الاستجابة تتضمن محتوى السكربت، نرسله بصيغة سهلة النسخ.
+    raw = str(script.get("script") or "").strip()
+    if not raw:
+        raw = await scriptblox_get_raw(script.get("slug") or script.get("_id"))
+        raw = str(raw or "").strip()
+
+    if raw:
+        if len(raw) <= 1800:
+            await message.channel.send(
+                f"```lua\n{raw}\n```\n"
+                "📋 انسخ الكود من المربع أعلاه."
+            )
+        else:
+            data_file = io.BytesIO(raw.encode("utf-8"))
+            data_file.seek(0)
+            filename = re.sub(r"[^A-Za-z0-9_-]+", "_", title)[:60] or "script"
+            await message.channel.send(
+                "📋 السكربت طويل، لذلك أرسلته كملف نصي لسهولة النسخ.",
+                file=discord.File(data_file, filename=f"{filename}.lua")
+            )
+
+
+@bot.tree.command(
+    name="scriptsearch",
+    description="تحديد روم بحث Roblox Scripts"
+)
+@app_commands.describe(
+    channel="الروم الذي يعمل فيه البحث",
+    enabled="تشغيل أو إيقاف البحث",
+    max_results="عدد النتائج التي يبحث بينها البوت من 1 إلى 20",
+    strict="تفعيل البحث المطابق بشكل أدق"
+)
+@admin_only()
+async def scriptsearch_command(
+    interaction: discord.Interaction,
+    channel: discord.TextChannel = None,
+    enabled: bool = True,
+    max_results: int = 5,
+    strict: bool = False,
+):
+    guild = interaction.guild
+    data = get_script_search_config(guild)
+
+    if not 1 <= max_results <= 20:
+        await interaction.response.send_message("❌ عدد النتائج يجب أن يكون بين 1 و20.", ephemeral=True)
+        return
+
+    data.update({
+        "enabled": bool(enabled),
+        "channel_id": channel.id if channel else data.get("channel_id"),
+        "max_results": max_results,
+        "strict": bool(strict),
+    })
+
+    if channel is None and enabled and not data.get("channel_id"):
+        await interaction.response.send_message("❌ لازم تحدد روم البحث أول مرة.", ephemeral=True)
+        return
+
+    save_config()
+    target = get_configured_channel(guild, data.get("channel_id"))
+    state = "مفعّل" if data.get("enabled") else "متوقف"
+    await interaction.response.send_message(
+        f"🔎 **نظام بحث السكربتات**\n\n"
+        f"الحالة: **{state}**\n"
+        f"الروم: {target.mention if target else 'غير موجود'}\n"
+        f"النتائج: **{data.get('max_results', 5)}**\n"
+        f"Strict: **{'ON' if data.get('strict') else 'OFF'}**\n\n"
+        "يمكن للأعضاء الكتابة مثل:\n"
+        "`بحث Blox Fruits`\n"
+        "`!بحث Blox Fruits`\n"
+        "أو كتابة اسم اللعبة فقط."
+        , ephemeral=True
+    )
+
 # =========================================================
 # 🔥 نظام Lock / Unlock الجديد
 # =========================================================
@@ -2915,6 +3364,46 @@ async def on_message(message):
 
         return
 
+    # 📢 الرسالة التلقائية عند كل رسالة
+    if isinstance(channel, discord.TextChannel) and message.guild:
+        auto_data = get_auto_message_config(message.guild)
+        if (
+            auto_data.get("enabled")
+            and auto_data.get("mode") == "every_message"
+            and int(auto_data.get("channel_id") or 0) == channel.id
+            and str(auto_data.get("message") or "").strip()
+        ):
+            try:
+                await channel.send(
+                    str(auto_data["message"]).strip(),
+                    allowed_mentions=discord.AllowedMentions.none()
+                )
+            except (discord.Forbidden, discord.NotFound):
+                pass
+            except discord.HTTPException as error:
+                print(f"❌ Auto Message Error in {channel.id}: {error}")
+
+    # 🔎 بحث السكربتات: يعمل فقط في الروم المحدد
+    if isinstance(channel, discord.TextChannel) and message.guild:
+        search_data = get_script_search_config(message.guild)
+        if (
+            search_data.get("enabled")
+            and int(search_data.get("channel_id") or 0) == channel.id
+            and message.content.strip()
+        ):
+            now = asyncio.get_running_loop().time()
+            last = SCRIPT_SEARCH_COOLDOWN.get((message.guild.id, message.author.id), 0)
+            if now - last >= 3:
+                query = clean_script_query(message.content)
+                if query:
+                    SCRIPT_SEARCH_COOLDOWN[(message.guild.id, message.author.id)] = now
+                    await send_script_result(message, query)
+            else:
+                try:
+                    await message.channel.send("⏳ انتظر 3 ثواني قبل البحث مرة أخرى.", delete_after=3)
+                except discord.HTTPException:
+                    pass
+
     await bot.process_commands(message)
 
 
@@ -3024,6 +3513,13 @@ async def on_ready():
 
         print(
             "✅ تم تشغيل Auto Cleanup."
+        )
+
+    if not auto_message_loop.is_running():
+        auto_message_loop.start()
+
+        print(
+            "✅ تم تشغيل Auto Message System."
         )
 
     print(
