@@ -1314,13 +1314,10 @@ class RobloxSearchCog(commands.Cog):
                     await send_script_result(message, query)
 
             except Exception as error:
-                print(
-                    f"[search] {type(error).__name__}: {error}"
-                )
-
-                await message.channel.send(
-                    "❌ حدث خطأ مؤقت أثناء البحث. جرّب مرة أخرى بعد قليل."
-                )
+    print(f"[search] {type(error).__name__}: {error}")
+    await message.channel.send(
+        "❌ حدث خطأ مؤقت أثناء البحث. جرّب مرة أخرى بعد قليل."
+    )
 
         await self.bot.process_commands(message)
 
