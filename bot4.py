@@ -1468,21 +1468,30 @@ async def on_app_command_error(
     error: app_commands.AppCommandError,
 ) -> None:
     print(f"[app-command] {type(error).__name__}: {error}")
+
     message = "❌ تعذر تنفيذ الأمر حاليًا."
+
     if interaction.response.is_done():
         await interaction.followup.send(message, ephemeral=True)
     else:
-        await interaction.response.send_message(message, ephemeral=True)
-
-
-def main() -> None:
-    if not DISCORD_TOKEN:
-        raise SystemExit(
-            "ضع DISCORD_TOKEN في متغيرات البيئة قبل تشغيل البوت. "
-            "لا تضع التوكن داخل هذا الملف."
+        await interaction.response.send_message(
+            message,
+            ephemeral=True,
         )
-    bot.run(DISCORD_TOKEN)
 
 
-if __name__ == "__main__":
-    main()
+# =========================================================
+# Discord Extension Entry Point
+# =========================================================
+
+async def setup(bot: commands.Bot):
+    """
+    تحميل bot4 كـ Extension داخل البوت الرئيسي.
+    """
+
+    # نقل أوامر التطبيق الموجودة في bot4 إلى البوت الرئيسي
+    for command in bot.tree.get_commands():
+        if command.name not in [cmd.name for cmd in bot.tree.get_commands()]:
+            bot.tree.add_command(command)
+
+    print("✅ تم تحميل bot4.py كـ Extension")
