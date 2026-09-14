@@ -1279,219 +1279,260 @@ async def send_script_result(message: discord.Message, query: str) -> None:
 # Bot events and slash commands
 # ---------------------------------------------------------------------------
 
+class RobloxSearchCog(commands.Cog):
+    def __init__(self, bot: commands.Bot):
+        self.bot = bot
 
-intents = discord.Intents.default()
-intents.guilds = True
-intents.messages = True
-intents.message_content = True
+    # -----------------------------------------------------------------------
+    # on_message
+    # -----------------------------------------------------------------------
 
-bot = commands.Bot(
-    command_prefix=("!", "؟", "."),
-    intents=intents,
-    help_command=None,
-)
+    @commands.Cog.listener()
+    async def on_message(self, message: discord.Message) -> None:
+        if message.author.bot or not message.guild:
+            return
 
-
-@bot.event
-async def on_ready() -> None:
-    try:
-        synced = await bot.tree.sync()
-        print(f"[ready] {bot.user} | synced {len(synced)} slash commands")
-    except Exception as error:
-        print(f"[ready] slash sync failed: {type(error).__name__}: {error}")
-
-
-@bot.event
-async def on_message(message: discord.Message) -> None:
-    if message.author.bot or not message.guild:
-        return
-
-    data = get_script_search_config(message.guild)
-    channel = get_configured_channel(message.guild, data.get("channel_id"))
-    if not data.get("enabled") or not channel or message.channel.id != channel.id:
-        await bot.process_commands(message)
-        return
-
-    query = clean_script_query(message.content)
-    if query:
-        try:
-            async with message.channel.typing():
-                await send_script_result(message, query)
-        except Exception as error:
-            print(f"[search] {type(error).__name__}: {error}")
-            await message.channel.send(
-                "❌ حدث خطأ مؤقت أثناء البحث. جرّب مرة أخرى بعد قليل."
-            )
-    await bot.process_commands(message)
-
-
-@bot.tree.command(
-    name="scriptsearch",
-    description="تفعيل وإعداد روم بحث Roblox",
-)
-@app_commands.describe(
-    channel="الروم الذي تتم فيه عمليات البحث",
-    enabled="تشغيل أو إيقاف النظام",
-    max_results="عدد النتائج من 1 إلى 20",
-    strict="رفض أي نتيجة لا تطابق اسم اللعبة بدقة",
-)
-@app_commands.default_permissions(manage_guild=True)
-async def scriptsearch_command(
-    interaction: discord.Interaction,
-    channel: discord.TextChannel | None = None,
-    enabled: bool = True,
-    max_results: int = 5,
-    strict: bool = True,
-) -> None:
-    if not interaction.guild:
-        await interaction.response.send_message(
-            "❌ هذا الأمر يعمل داخل السيرفر فقط.",
-            ephemeral=True,
+        data = get_script_search_config(message.guild)
+        channel = get_configured_channel(
+            message.guild,
+            data.get("channel_id"),
         )
-        return
-    if not interaction.user.guild_permissions.manage_guild:
-        await interaction.response.send_message(
-            "❌ تحتاج صلاحية Manage Server.",
-            ephemeral=True,
-        )
-        return
-    if not 1 <= max_results <= 20:
-        await interaction.response.send_message(
-            "❌ عدد النتائج يجب أن يكون بين 1 و20.",
-            ephemeral=True,
-        )
-        return
 
-    current = get_script_search_config(interaction.guild)
-    channel_id = channel.id if channel else current.get("channel_id")
-    if enabled and not channel_id:
-        await interaction.response.send_message(
-            "❌ حدد الروم أول مرة عند تفعيل النظام.",
-            ephemeral=True,
-        )
-        return
+        if (
+            not data.get("enabled")
+            or not channel
+            or message.channel.id != channel.id
+        ):
+            await self.bot.process_commands(message)
+            return
 
-    GUILD_CONFIG[str(interaction.guild.id)] = {
-        "enabled": bool(enabled),
-        "channel_id": channel_id,
-        "max_results": int(max_results),
-        "strict": bool(strict),
-    }
-    save_config()
+        query = clean_script_query(message.content)
 
-    target_channel = get_configured_channel(interaction.guild, channel_id)
-    sources = "ScriptBlox" + (" + Rscripts" if RSCRIPTS_API_KEY else "")
-    state = "مفعّل" if enabled else "متوقف"
-    await interaction.response.send_message(
-        f"🔎 **إعداد بحث Roblox**\n"
-        f"الحالة: **{state}**\n"
-        f"الروم: {target_channel.mention if target_channel else 'غير محدد'}\n"
-        f"النتائج: **{max_results}**\n"
-        f"المطابقة الصارمة: **{'ON' if strict else 'OFF'}**\n"
-        f"المصادر البرمجية: **{sources}**\n"
-        f"اكتشاف Roblox التلقائي: **{'ON' if ENABLE_ROBLOX_DISCOVERY else 'OFF'}**",
-        ephemeral=True,
+        if query:
+            try:
+                async with message.channel.typing():
+                    await send_script_result(message, query)
+
+            except Exception as error:
+                print(
+                    f"[search] {type(error).__name__}: {error}"
+                )
+
+                await message.channel.send(
+                    "❌ حدث خطأ مؤقت أثناء البحث. جرّب مرة أخرى بعد قليل."
+                )
+
+        await self.bot.process_commands(message)
+
+    # -----------------------------------------------------------------------
+    # /scriptsearch
+    # -----------------------------------------------------------------------
+
+    @app_commands.command(
+        name="scriptsearch",
+        description="تفعيل وإعداد روم بحث Roblox",
     )
+    @app_commands.describe(
+        channel="الروم الذي تتم فيه عمليات البحث",
+        enabled="تشغيل أو إيقاف النظام",
+        max_results="عدد النتائج من 1 إلى 20",
+        strict="رفض أي نتيجة لا تطابق اسم اللعبة بدقة",
+    )
+    @app_commands.default_permissions(manage_guild=True)
+    async def scriptsearch_command(
+        self,
+        interaction: discord.Interaction,
+        channel: discord.TextChannel | None = None,
+        enabled: bool = True,
+        max_results: int = 5,
+        strict: bool = True,
+    ) -> None:
 
-
-@bot.tree.command(
-    name="script",
-    description="بحث مباشر عن سكربت للعبة Roblox",
-)
-@app_commands.describe(query="اسم اللعبة بالعربي أو الإنجليزي أو الاختصار")
-async def script_command(
-    interaction: discord.Interaction,
-    query: str,
-) -> None:
-    if not interaction.guild:
-        await interaction.response.send_message(
-            "❌ هذا الأمر يعمل داخل السيرفر فقط.",
-            ephemeral=True,
-        )
-        return
-
-    await interaction.response.defer()
-    try:
-        results, target_name, _confidence = await search_all_sources(
-            query,
-            max_results=get_script_search_config(interaction.guild).get("max_results", 5),
-            strict=True,
-        )
-        if not results:
-            await interaction.followup.send(
-                f"🔎 لا توجد نتائج مطابقة وآمنة للعبة: **{target_name or query}**."
+        if not interaction.guild:
+            await interaction.response.send_message(
+                "❌ هذا الأمر يعمل داخل السيرفر فقط.",
+                ephemeral=True,
             )
             return
 
-        view = ScriptResultView(
-            results,
-            query,
-            interaction.user.id,
-            target_name,
-        )
-        await interaction.followup.send(
-            embed=_build_result_embed(
-                results[0],
-                query,
-                0,
-                len(results),
-                target_name,
-            ),
-            view=view,
-        )
-    except Exception as error:
-        print(f"[/script] {type(error).__name__}: {error}")
-        await interaction.followup.send(
-            "❌ حدث خطأ مؤقت أثناء البحث. جرّب مرة أخرى."
+        if not interaction.user.guild_permissions.manage_guild:
+            await interaction.response.send_message(
+                "❌ تحتاج صلاحية Manage Server.",
+                ephemeral=True,
+            )
+            return
+
+        if not 1 <= max_results <= 20:
+            await interaction.response.send_message(
+                "❌ عدد النتائج يجب أن يكون بين 1 و20.",
+                ephemeral=True,
+            )
+            return
+
+        current = get_script_search_config(
+            interaction.guild
         )
 
+        channel_id = (
+            channel.id
+            if channel
+            else current.get("channel_id")
+        )
 
-@bot.tree.command(
-    name="scriptsearch-status",
-    description="عرض حالة نظام بحث Roblox",
-)
-async def scriptsearch_status(interaction: discord.Interaction) -> None:
-    data = get_script_search_config(interaction.guild)
-    channel = get_configured_channel(interaction.guild, data.get("channel_id"))
-    await interaction.response.send_message(
-        f"🔎 الحالة: **{'مفعّل' if data.get('enabled') else 'متوقف'}**\n"
-        f"الروم: {channel.mention if channel else 'غير محدد'}\n"
-        f"المطابقة الصارمة: **{'ON' if data.get('strict') else 'OFF'}**\n"
-        f"النتائج: **{data.get('max_results', 5)}**",
-        ephemeral=True,
-    )
+        if enabled and not channel_id:
+            await interaction.response.send_message(
+                "❌ حدد الروم أول مرة عند تفعيل النظام.",
+                ephemeral=True,
+            )
+            return
 
+        GUILD_CONFIG[str(interaction.guild.id)] = {
+            "enabled": bool(enabled),
+            "channel_id": channel_id,
+            "max_results": int(max_results),
+            "strict": bool(strict),
+        }
 
-@bot.tree.error
-async def on_app_command_error(
-    interaction: discord.Interaction,
-    error: app_commands.AppCommandError,
-) -> None:
-    print(f"[app-command] {type(error).__name__}: {error}")
+        save_config()
 
-    message = "❌ تعذر تنفيذ الأمر حاليًا."
+        target_channel = get_configured_channel(
+            interaction.guild,
+            channel_id,
+        )
 
-    if interaction.response.is_done():
-        await interaction.followup.send(message, ephemeral=True)
-    else:
+        sources = "ScriptBlox"
+
+        if RSCRIPTS_API_KEY:
+            sources += " + Rscripts"
+
+        state = "مفعّل" if enabled else "متوقف"
+
         await interaction.response.send_message(
-            message,
+            f"🔎 **إعداد بحث Roblox**\n"
+            f"الحالة: **{state}**\n"
+            f"الروم: "
+            f"{target_channel.mention if target_channel else 'غير محدد'}\n"
+            f"النتائج: **{max_results}**\n"
+            f"المطابقة الصارمة: "
+            f"**{'ON' if strict else 'OFF'}**\n"
+            f"المصادر البرمجية: **{sources}**\n"
+            f"اكتشاف Roblox التلقائي: "
+            f"**{'ON' if ENABLE_ROBLOX_DISCOVERY else 'OFF'}**",
+            ephemeral=True,
+        )
+
+    # -----------------------------------------------------------------------
+    # /script
+    # -----------------------------------------------------------------------
+
+    @app_commands.command(
+        name="script",
+        description="بحث مباشر عن لعبة Roblox",
+    )
+    @app_commands.describe(
+        query="اسم اللعبة بالعربي أو الإنجليزي أو الاختصار"
+    )
+    async def script_command(
+        self,
+        interaction: discord.Interaction,
+        query: str,
+    ) -> None:
+
+        if not interaction.guild:
+            await interaction.response.send_message(
+                "❌ هذا الأمر يعمل داخل السيرفر فقط.",
+                ephemeral=True,
+            )
+            return
+
+        await interaction.response.defer()
+
+        try:
+            results, target_name, _confidence = (
+                await search_all_sources(
+                    query,
+                    max_results=get_script_search_config(
+                        interaction.guild
+                    ).get("max_results", 5),
+                    strict=True,
+                )
+            )
+
+            if not results:
+                await interaction.followup.send(
+                    f"🔎 لا توجد نتائج مطابقة للعبة: "
+                    f"**{target_name or query}**."
+                )
+                return
+
+            view = ScriptResultView(
+                results,
+                query,
+                interaction.user.id,
+                target_name,
+            )
+
+            await interaction.followup.send(
+                embed=_build_result_embed(
+                    results[0],
+                    query,
+                    0,
+                    len(results),
+                    target_name,
+                ),
+                view=view,
+            )
+
+        except Exception as error:
+            print(
+                f"[/script] {type(error).__name__}: {error}"
+            )
+
+            await interaction.followup.send(
+                "❌ حدث خطأ مؤقت أثناء البحث. جرّب مرة أخرى."
+            )
+
+    # -----------------------------------------------------------------------
+    # /scriptsearch-status
+    # -----------------------------------------------------------------------
+
+    @app_commands.command(
+        name="scriptsearch-status",
+        description="عرض حالة نظام بحث Roblox",
+    )
+    async def scriptsearch_status(
+        self,
+        interaction: discord.Interaction,
+    ) -> None:
+
+        data = get_script_search_config(
+            interaction.guild
+        )
+
+        channel = get_configured_channel(
+            interaction.guild,
+            data.get("channel_id"),
+        )
+
+        await interaction.response.send_message(
+            f"🔎 الحالة: "
+            f"**{'مفعّل' if data.get('enabled') else 'متوقف'}**\n"
+            f"الروم: "
+            f"{channel.mention if channel else 'غير محدد'}\n"
+            f"المطابقة الصارمة: "
+            f"**{'ON' if data.get('strict') else 'OFF'}**\n"
+            f"النتائج: **{data.get('max_results', 5)}**",
             ephemeral=True,
         )
 
 
-# =========================================================
-# Discord Extension Entry Point
-# =========================================================
+# ---------------------------------------------------------------------------
+# Extension Entry Point
+# ---------------------------------------------------------------------------
 
 async def setup(bot: commands.Bot):
-    """
-    تحميل bot4 كـ Extension داخل البوت الرئيسي.
-    """
-
-    # نقل أوامر التطبيق الموجودة في bot4 إلى البوت الرئيسي
-    for command in bot.tree.get_commands():
-        if command.name not in [cmd.name for cmd in bot.tree.get_commands()]:
-            bot.tree.add_command(command)
+    await bot.add_cog(
+        RobloxSearchCog(bot)
+    )
 
     print("✅ تم تحميل bot4.py كـ Extension")
