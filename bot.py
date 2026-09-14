@@ -1753,8 +1753,6 @@ async def tc_autoclose(ctx, days: int):
 
 AUTO_MESSAGE_RUNTIME = {}
 SCRIPT_SEARCH_COOLDOWN = {}
-SCRIPTBLOX_API = "https://scriptblox.com/api/script/search"
-SCRIPTBLOX_RAW_API = "https://scriptblox.com/api/script/raw"
 
 
 def get_auto_message_config(guild: discord.Guild):
