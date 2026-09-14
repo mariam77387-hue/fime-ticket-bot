@@ -1316,13 +1316,13 @@ class RobloxSearchCog(commands.Cog):
             except Exception as error:
     import traceback
 
-    print("❌ [search] حدث خطأ أثناء البحث:")
+    print("❌ [/script] حدث خطأ أثناء البحث")
     print(f"نوع الخطأ: {type(error).__name__}")
     print(f"الخطأ: {error}")
     traceback.print_exc()
 
-    await message.channel.send(
-        "❌ حدث خطأ مؤقت أثناء البحث. راجع Console لمعرفة السبب."
+    await interaction.followup.send(
+        "❌ حدث خطأ مؤقت أثناء البحث. راجع Render Logs لمعرفة السبب."
     )
 
         await self.bot.process_commands(message)
