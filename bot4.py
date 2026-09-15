@@ -473,6 +473,62 @@ ROBLOX_GAMES: list[tuple[str, list[str]]] = [
     ("Untitled Tag Game", [
         "تاق قيم", "untitled tag game",
     ]),
+    # --- إضافات دفعة ثانية بناءً على طلب المستخدم ---
+    ("Time Bomb", [
+        "تايم بومب", "تايم بامب", "تايمبومب", "تايمبامب",
+        "timebomb", "time bomb",
+    ]),
+    ("Prop Hunt", [
+        "بروب هانت", "براب هنت", "prop hunt",
+    ]),
+    ("Wacky Wizards", [
+        "واكي ويزاردز", "واكي ويزارد", "wacky wizards",
+    ]),
+    ("Anime Adventures", [
+        "انمي ادفنتشرز", "انمي ادفنشرز", "anime adventures", "aa",
+    ]),
+    ("Anime Speed Simulator", [
+        "انمي سبيد سيميوليتر", "anime speed simulator", "ass",
+    ]),
+    ("Peroxide", [
+        "بيروكسايد", "بروكسايد", "peroxide",
+    ]),
+    ("Tapping Legends X", [
+        "تابنق ليجندز اكس", "tapping legends x", "tlx",
+    ]),
+    ("The Backrooms", [
+        "ذا باك رومز", "الباك رومز", "the backrooms", "backrooms",
+    ]),
+    ("Scary Elevator", [
+        "سكيري اليفيتر", "المصعد المخيف", "scary elevator",
+    ]),
+    ("Pumpkin Days", [
+        "بمبكن دايز", "pumpkin days",
+    ]),
+    ("Find the Markers", [
+        "فايند ذا ماركرز", "find the markers", "ftm",
+    ]),
+    ("Doomspire Brickbattle", [
+        "دومسباير بريك باتل", "doomspire brickbattle", "dsbb",
+    ]),
+    ("1 vs All", [
+        "ون في اس اول", "1 vs all",
+    ]),
+    ("Zombie Attack: Last Stand", [
+        "زومبي اتاك لاست ستاند", "zombie attack last stand", "zals",
+    ]),
+    ("Bloody Trapland 2 Reborn", [
+        "بلودي تراب لاند", "bloody trapland 2 reborn", "bt2",
+    ]),
+    ("RoCitizens", [
+        "روسيتيزنز", "rocitizens",
+    ]),
+    ("Basketball Stars", [
+        "باسكت بول ستارز", "basketball stars",
+    ]),
+    ("Untitled Farming Game", [
+        "لعبة الزراعة", "untitled farming game", "ufg",
+    ]),
 ]
 
 
@@ -521,6 +577,64 @@ def without_definite_article(value: str) -> str:
     return " ".join(words)
 
 
+# ---------------------------------------------------------------------------
+# هيكل صوتي عام (Arabic → Latin تقريبي) لدعم مطابقة أي اسم لعبة عربي/إنجليزي
+# دون الحاجة لإضافة alias يدوي لكل تهجئة ممكنة (تايم بومب / تايم بامب / ...).
+# ---------------------------------------------------------------------------
+
+_ARABIC_TO_LATIN = {
+    "ا": "a", "ب": "b", "ت": "t", "ث": "th", "ج": "j", "ح": "h",
+    "خ": "kh", "د": "d", "ذ": "th", "ر": "r", "ز": "z", "س": "s",
+    "ش": "sh", "ص": "s", "ض": "d", "ط": "t", "ظ": "z", "ع": "a",
+    "غ": "gh", "ف": "f", "ق": "q", "ك": "k", "ل": "l", "م": "m",
+    "ن": "n", "ه": "h", "ة": "h", "و": "w", "ي": "y", "ء": "",
+}
+_VOWELS = set("aeiou")
+
+# كلمات حشو عامة (عربي/إنجليزي) لا تحمل معنى مميّزًا لاسم اللعبة، ويجب
+# استبعادها قبل حساب الهيكل الصوتي حتى لا تسبب تطابقات عشوائية بين
+# جمل لا علاقة لها ببعض لمجرد احتوائها كلمات شائعة مثل "لعبة"/"ماب".
+_PHONETIC_STOPWORDS = {
+    "لعبه", "لعبة", "ماب", "سكربت", "كود", "ابغى", "ابي", "اريد",
+    "بحث", "ابحث", "من", "في", "على", "رجاء", "الرجاء", "وجود",
+    "مالها", "اصلا", "شي", "حلو", "script", "code", "map", "game",
+    "please", "the", "a", "an", "search",
+}
+
+
+def _strip_phonetic_stopwords(normalized_text: str) -> str:
+    words = [w for w in normalized_text.split() if w not in _PHONETIC_STOPWORDS]
+    return " ".join(words)
+
+
+def _transliterate_arabic(normalized_text: str) -> str:
+    """تحويل تقريبي من عربي مُطبّع (بعد normalize_search_text) إلى لاتيني.
+    أي حرف لاتيني أصلًا يبقى كما هو، لذلك تعمل على نص عربي أو إنجليزي أو مزيج."""
+    return "".join(_ARABIC_TO_LATIN.get(ch, ch) for ch in normalized_text)
+
+
+def _phonetic_skeleton(value: Any) -> str:
+    """
+    هيكل صوتي مبسّط: إزالة كلمات الحشو، تحويل تقريبي للاتيني، إزالة
+    المسافات وحروف العلة (a/e/i/o/u)، ودمج الحروف المتكررة المتتالية.
+    هذا يجعل تهجئات مختلفة لنفس الكلمة (تايم بومب / تايم بامب / TimeBomb)
+    تتقارب على نفس الهيكل تقريبًا، عوضًا عن الاعتماد الكامل على aliases
+    يدوية، مع حماية من التطابق العشوائي بسبب كلمات حشو مشتركة.
+    """
+    normalized = _strip_phonetic_stopwords(normalize_search_text(value))
+    latin = _transliterate_arabic(normalized).replace(" ", "").casefold()
+    skeleton_chars: list[str] = []
+    prev = ""
+    for ch in latin:
+        if ch in _VOWELS:
+            continue
+        if ch == prev:
+            continue
+        skeleton_chars.append(ch)
+        prev = ch
+    return "".join(skeleton_chars)
+
+
 def clean_script_query(content: str) -> str:
     """إزالة أوامر البحث والكلمات الحشو من دون حذف اسم اللعبة."""
     value = str(content or "").strip()
@@ -549,30 +663,38 @@ def _alias_variants(value: str) -> set[str]:
 _GAME_EXACT_INDEX: dict[str, set[str]] | None = None
 _GAME_ALIASES: dict[str, set[str]] | None = None
 _GAME_CANONICAL_NORMALIZED: dict[str, str] | None = None
+_GAME_SKELETONS: dict[str, set[str]] | None = None
 
 
 def _build_game_indexes() -> None:
-    global _GAME_EXACT_INDEX, _GAME_ALIASES, _GAME_CANONICAL_NORMALIZED
+    global _GAME_EXACT_INDEX, _GAME_ALIASES, _GAME_CANONICAL_NORMALIZED, _GAME_SKELETONS
     if _GAME_EXACT_INDEX is not None:
         return
 
     exact: dict[str, set[str]] = {}
     aliases_by_game: dict[str, set[str]] = {}
     canonical_normalized: dict[str, str] = {}
+    skeletons_by_game: dict[str, set[str]] = {}
 
     for canonical, raw_aliases in ROBLOX_GAMES:
         all_aliases = set(raw_aliases) | {canonical}
         normalized_aliases: set[str] = set()
+        skeleton_set: set[str] = set()
         canonical_normalized[canonical] = normalize_search_text(canonical)
         for alias in all_aliases:
             for variant in _alias_variants(alias):
                 normalized_aliases.add(variant)
                 exact.setdefault(variant, set()).add(canonical)
+                skeleton = _phonetic_skeleton(variant)
+                if len(skeleton) >= 4:
+                    skeleton_set.add(skeleton)
         aliases_by_game[canonical] = normalized_aliases
+        skeletons_by_game[canonical] = skeleton_set
 
     _GAME_EXACT_INDEX = exact
     _GAME_ALIASES = aliases_by_game
     _GAME_CANONICAL_NORMALIZED = canonical_normalized
+    _GAME_SKELETONS = skeletons_by_game
 
 
 def _contains_alias(query: str, alias: str) -> bool:
@@ -640,6 +762,27 @@ def identify_target_game(query: str) -> tuple[str | None, str]:
                 )
                 if ratio > best_by_game.get(canonical, 0.0):
                     best_by_game[canonical] = ratio
+
+    # طبقة إضافية عامة: مقارنة "الهيكل الصوتي" للنص المكتوب (عربي أو
+    # إنجليزي) مع الهيكل الصوتي لاسم كل لعبة وaliases الخاصة بها. هذا ما
+    # يسمح بالتعرف على تهجئات جديدة لم تُضف كـ alias يدوي مسبقًا
+    # (مثال: "تايم بامب" أو "تايمبومب" لنفس "Time Bomb")، بدل الاعتماد
+    # الكامل على قائمة aliases يدوية لكل لعبة.
+    # عتبة أعلى من الطبقة النصية العادية (0.86 بدل 0.84) لأن الهيكل
+    # الصوتي أقصر وأكثر عرضة للتطابق العشوائي، وطول أدنى 4 بدل 3.
+    assert _GAME_SKELETONS is not None
+    SKELETON_THRESHOLD = 0.86
+    query_skeleton = _phonetic_skeleton(text)
+    if len(query_skeleton) >= 4:
+        for window in _query_windows(text, max_words=4):
+            window_skeleton = _phonetic_skeleton(window)
+            if len(window_skeleton) < 4:
+                continue
+            for canonical, skeletons in _GAME_SKELETONS.items():
+                for skeleton in skeletons:
+                    ratio = SequenceMatcher(None, window_skeleton, skeleton).ratio()
+                    if ratio >= SKELETON_THRESHOLD and ratio > best_by_game.get(canonical, 0.0):
+                        best_by_game[canonical] = ratio
 
     ranked = sorted(
         ((ratio, canonical) for canonical, ratio in best_by_game.items()),
