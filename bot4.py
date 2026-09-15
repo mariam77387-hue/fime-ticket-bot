@@ -1759,13 +1759,13 @@ class RobloxSearchCog(commands.Cog):
 
         await interaction.response.defer()
 
-        results, target_name, _confidence = await search_all_sources(
-            query,
-            max_results=get_script_search_config(interaction.guild).get(
-                "max_results", 5
-            ),
-            strict=True,
-        )
+        config = get_script_search_config(interaction.guild)
+
+results, target_name, _confidence = await search_all_sources(
+    query,
+    max_results=config.get("max_results", 5),
+    strict=config.get("strict", False),
+)
 
         if not results:
             await interaction.followup.send(
