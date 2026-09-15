@@ -1263,16 +1263,22 @@ async def search_all_sources(
 
     # اسم اللعبة (وليس الجملة الكاملة التي كتبها العضو) هو كلمة البحث
     # المُرسلة للمصادر، حتى لو كانت الرسالة تحتوي كلمات إضافية.
-    search_query = target_name or query
+        search_query = target_name or query
+
     async with _SEARCH_SEMAPHORE:
         fetched = await asyncio.gather(
             *[
                 _fetch_with_timeout(
-                    fetcher(search_query, max_results, strict), source_name
+                    fetcher(search_query, max_results, strict),
+                    source_name,
                 )
                 for source_name, fetcher in SOURCE_FETCHERS
             ],
-                combined: list[dict[str, Any]] = []
+            return_exceptions=False,
+        )
+
+    combined: list[dict[str, Any]] = []
+
     for source_results in fetched:
         combined.extend(source_results)
 
@@ -1280,6 +1286,26 @@ async def search_all_sources(
 
     if target_name:
         matched_results = []
+
+        for result in combined:
+            game_name = result.get("game_name") or ""
+
+            if _game_matches_target(
+                game_name,
+                target_name,
+                strict=strict,
+            ):
+                matched_results.append(result)
+
+        combined = matched_results
+
+        combined.sort(
+            key=lambda result: _result_score(
+                result,
+                target_name,
+            ),
+            reverse=True,
+        )
 
         for result in combined:
             game_name = result.get("game_name") or ""
