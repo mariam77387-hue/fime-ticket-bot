@@ -1344,14 +1344,23 @@ async def search_all_sources(
         final,
     )
 
+        _SEARCH_CACHE[cache_key] = (
+        time.monotonic(),
+        final,
+    )
+
     return final
-(result: dict[str, Any]) -> str:
+
+
+async def _resolve_script_text(result: dict[str, Any]) -> str:
     raw = result.get("raw_script")
     if raw:
         return str(raw).strip()
+
     raw_url = result.get("raw_url")
     if not raw_url:
         return ""
+
     try:
         raw = await asyncio.wait_for(
             _http_get_text(str(raw_url), timeout=15),
@@ -1360,9 +1369,12 @@ async def search_all_sources(
     except Exception as error:
         print(f"[raw-script] {type(error).__name__}: {error}")
         return ""
+
     raw = str(raw or "").strip()
+
     try:
         parsed = json.loads(raw)
+
         if isinstance(parsed, dict):
             return str(
                 parsed.get("script")
@@ -1370,8 +1382,10 @@ async def search_all_sources(
                 or parsed.get("content")
                 or ""
             ).strip()
+
     except json.JSONDecodeError:
         pass
+
     return raw
 
 
