@@ -1282,15 +1282,27 @@ async def search_all_sources(
     combined = _deduplicate_results(combined)
 
     if target_name:
-        combined = [
-            result
-            for result in combined
-            if _game_matches_target(result.get("game_name", ""), target_name, strict)
-        ]
-        combined.sort(
-            key=lambda result: _result_score(result, target_name),
-            reverse=True,
-        )
+    matched_results = []
+
+    for result in combined:
+        game_name = result.get("game_name") or ""
+
+        if _game_matches_target(
+            game_name,
+            target_name,
+            strict=strict,
+        ):
+            matched_results.append(result)
+
+    combined = matched_results
+
+    combined.sort(
+        key=lambda result: _result_score(
+            result,
+            target_name,
+        ),
+        reverse=True,
+    )
     else:
         combined.sort(
             key=lambda result: (
