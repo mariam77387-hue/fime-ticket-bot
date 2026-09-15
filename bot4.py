@@ -1347,7 +1347,6 @@ _SEARCH_CACHE[cache_key] = (
 return final
 
 
-
 async def _resolve_script_text(result: dict[str, Any]) -> str:
     raw = result.get("raw_script")
     if raw:
