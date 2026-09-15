@@ -807,60 +807,69 @@ def _game_matches_target(
     target_name: str,
     strict: bool = True,
 ) -> bool:
-    """
-    فلترة مرنة بدل التطابق الحرفي الصارم:
-    - لا تشترط أن يحتوي عنوان/اسم النتيجة على اسم اللعبة بصيغته الدقيقة.
-    - تستخدم aliases اللعبة الهدف (نفس قائمة identify_target_game) لقبول
-      أي صياغة معروفة لاسم اللعبة (عربي/إنجليزي/اختصار). هذا المستوى
-      مفعّل دائمًا بغض النظر عن strict، لأن aliases قائمة معروفة وآمنة.
-    - ترفض دائمًا إذا تعرّف النظام بثقة (exact) على أن اسم النتيجة يخص
-      لعبة أخرى مختلفة معروفة محليًا؛ هذا هو ما يمنع تسرّب نتائج ألعاب
-      أخرى، بغض النظر عن قيمة strict.
-    - عند strict=False فقط: يُضاف مستوى إضافي من التشابه التقريبي
-      (SequenceMatcher) لتغطية صياغات غير معروفة محليًا كـ alias.
-      عند strict=True نكتفي بالتطابق الحرفي + aliases، بدون تخمين حر.
-    مطبّقة على جميع الألعاب وليست خاصة بلعبة معيّنة.
-    """
     source = normalize_search_text(game_name)
     target = normalize_search_text(target_name)
+
     if not target:
         return False
 
+    # إذا المصدر لم يرسل اسم اللعبة، لا نحذف النتيجة مباشرة
     if not source:
-        # لا يوجد اسم لعبة من المصدر؛ الاستعلام المُرسل للمصدر هو
-        # اسم اللعبة الهدف أصلًا، فلا نرفض تلقائيًا بسبب حقل فارغ.
         return True
 
+    # تطابق مباشر
     if source == target or compact_text(source) == compact_text(target):
         return True
 
     _build_game_indexes()
     assert _GAME_ALIASES is not None
 
+    # فحص جميع أسماء اللعبة والاختصارات
     target_aliases = _GAME_ALIASES.get(target_name, set())
+
     for alias in target_aliases:
+        if not alias:
+            continue
+
         if _contains_alias(source, alias):
             return True
 
-    detected, confidence = identify_target_game(source)
-    if detected and detected != target_name and confidence == "exact":
-        return False
+        # مقارنة مختصرة
+        source_compact = compact_text(source)
+        alias_compact = compact_text(alias)
 
+        if alias_compact and alias_compact in source_compact:
+            return True
+
+    # نتأكد هل اسم المصدر يشير بوضوح إلى لعبة مختلفة
+    detected, confidence = identify_target_game(source)
+
+    if detected and detected != target_name:
+        if confidence in {"exact", "fuzzy"}:
+            return False
+
+    # إذا strict مفعّل، لا نقبل مطابقة ضعيفة
     if strict:
         return False
 
+    # مطابقة تقريبية احتياطية
     source_words = set(source.split())
     target_words = set(target.split())
+
     shared = source_words & target_words
+
     ratio = max(
         SequenceMatcher(None, source, target).ratio(),
         SequenceMatcher(
-            None, compact_text(source), compact_text(target)
+            None,
+            compact_text(source),
+            compact_text(target),
         ).ratio(),
     )
 
     if shared and ratio >= 0.55:
         return True
+
     return ratio >= 0.75
 
 
