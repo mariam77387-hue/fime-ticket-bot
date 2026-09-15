@@ -1791,7 +1791,7 @@ class RobloxSearchCog(commands.Cog):
         name="script",
         description="بحث مباشر عن لعبة Roblox",
     )
-    @app_commands.describe(
+        @app_commands.describe(
         query="اسم اللعبة بالعربي أو الإنجليزي أو الاختصار"
     )
     async def script_command(
