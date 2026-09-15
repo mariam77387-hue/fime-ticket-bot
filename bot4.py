@@ -77,7 +77,7 @@ DEFAULT_GUILD_CONFIG = {
     "enabled": False,
     "channel_id": None,
     "max_results": 5,
-    "strict": True,
+    "strict": False,
 }
 
 HTTP_HEADERS = {
