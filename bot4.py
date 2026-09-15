@@ -1027,6 +1027,7 @@ SOURCE_FETCHERS = (
 def _result_score(result: dict[str, Any], target_name: str) -> float:
     score = 0.0
     strength = _match_strength(result.get("game_name", ""), target_name)
+
     if strength == "exact":
         score += 100
     elif strength == "alias":
@@ -1040,10 +1041,17 @@ def _result_score(result: dict[str, Any], target_name: str) -> float:
         score += 8
     if not result.get("has_key"):
         score += 2
-    if result.get("risk_level", "").casefold() in {"safe", "low risk", "low"}:
+
+    if (result.get("risk_level") or "").casefold() in {
+        "safe",
+        "low risk",
+        "low",
+    }:
         score += 3
+
     if result.get("source") == "Rscripts":
         score += 0.5
+
     return score
 
 
