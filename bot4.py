@@ -1339,13 +1339,12 @@ async def search_all_sources(
     confidence,
 )
 
-_SEARCH_CACHE[cache_key] = (
-    time.monotonic(),
-    final,
-)
+    _SEARCH_CACHE[cache_key] = (
+        time.monotonic(),
+        final,
+    )
 
-return final
-
+    return final
 
 async def _resolve_script_text(result: dict[str, Any]) -> str:
     raw = result.get("raw_script")
