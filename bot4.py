@@ -1787,7 +1787,7 @@ class RobloxSearchCog(commands.Cog):
     # /script
     # -----------------------------------------------------------------------
 
-            @app_commands.command(
+    @app_commands.command(
         name="script",
         description="بحث مباشر عن لعبة Roblox",
     )
