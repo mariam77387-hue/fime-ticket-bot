@@ -3065,28 +3065,51 @@ async def on_message(message):
     content = message.content.strip().lower()
     channel = message.channel
 
-    if content in {
-        "قفل",
-        "lock"
-    }:
-        if is_lockable_channel(channel):
-            if can_manage_lock(message.author, channel):
-                if bot_can_manage_lock(channel):
-                    success = await lock_any_channel(channel)
+    if content in {"قفل", "lock"}:
+        if (
+            is_lockable_channel(channel)
+            and can_manage_lock(message.author, channel)
+            and bot_can_manage_lock(channel)
+        ):
+            success = await lock_any_channel(channel)
 
-                    if success:
-                        try:
-                            await message.delete()
-                        except discord.HTTPException:
-                            pass
+            if success:
+                try:
+                    await message.delete()
+                except discord.HTTPException:
+                    pass
 
-                        await send_lock_result(
-                            channel,
-                            message.author,
-                            True
-                        )
+                await send_lock_result(
+                    channel,
+                    message.author,
+                    True,
+                )
 
         return
+
+    if content in {"فتح", "unlock"}:
+        if (
+            is_lockable_channel(channel)
+            and can_manage_lock(message.author, channel)
+            and bot_can_manage_lock(channel)
+        ):
+            success = await unlock_any_channel(channel)
+
+            if success:
+                try:
+                    await message.delete()
+                except discord.HTTPException:
+                    pass
+
+                await send_lock_result(
+                    channel,
+                    message.author,
+                    False,
+                )
+
+        return
+
+    await bot.process_commands(message)
 
     if content in {
         "فتح",
