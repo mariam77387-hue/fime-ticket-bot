@@ -1787,7 +1787,7 @@ class RobloxSearchCog(commands.Cog):
     # /script
     # -----------------------------------------------------------------------
 
-    @app_commands.command(
+        @app_commands.command(
         name="script",
         description="بحث مباشر عن لعبة Roblox",
     )
@@ -1810,11 +1810,11 @@ class RobloxSearchCog(commands.Cog):
 
         config = get_script_search_config(interaction.guild)
 
-results, target_name, _confidence = await search_all_sources(
-    query,
-    max_results=config.get("max_results", 5),
-    strict=config.get("strict", False),
-)
+        results, target_name, _confidence = await search_all_sources(
+            query,
+            max_results=config.get("max_results", 5),
+            strict=config.get("strict", False),
+        )
 
         if not results:
             await interaction.followup.send(
@@ -1824,9 +1824,21 @@ results, target_name, _confidence = await search_all_sources(
             )
             return
 
-        view = ScriptResultView(results, query, interaction.user.id, target_name)
+        view = ScriptResultView(
+            results,
+            query,
+            interaction.user.id,
+            target_name,
+        )
+
         await interaction.followup.send(
-            embed=_build_result_embed(results[0], query, 0, len(results), target_name),
+            embed=_build_result_embed(
+                results[0],
+                query,
+                0,
+                len(results),
+                target_name,
+            ),
             view=view,
         )
 
