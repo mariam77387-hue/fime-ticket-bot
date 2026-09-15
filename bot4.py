@@ -1327,15 +1327,29 @@ async def search_all_sources(
             reverse=True,
         )
 
-    combined = matched_results
+        if target_name:
+        matched_results = []
 
-    combined.sort(
-        key=lambda result: _result_score(
-            result,
-            target_name,
-        ),
-        reverse=True,
-    )
+        for result in combined:
+            game_name = result.get("game_name") or ""
+
+            if _game_matches_target(
+                game_name,
+                target_name,
+                strict=strict,
+            ):
+                matched_results.append(result)
+
+        combined = matched_results
+
+        combined.sort(
+            key=lambda result: _result_score(
+                result,
+                target_name,
+            ),
+            reverse=True,
+        )
+
     else:
         combined.sort(
             key=lambda result: (
@@ -1345,6 +1359,16 @@ async def search_all_sources(
             ),
             reverse=True,
         )
+
+    final = (
+        combined[: max(1, min(20, int(max_results)))],
+        target_name,
+        confidence,
+    )
+
+    _SEARCH_CACHE[cache_key] = (time.monotonic(), final)
+
+    return final
 
     final = (combined[: max(1, min(20, int(max_results)))], target_name, confidence)
     _SEARCH_CACHE[cache_key] = (time.monotonic(), final)
