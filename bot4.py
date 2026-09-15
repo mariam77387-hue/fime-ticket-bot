@@ -18,7 +18,9 @@ Discord Roblox Script Search Bot
 * المصدر الخارجي قد يحتوي على كود غير موثوق. البوت يعرضه فقط بعد طلب
   المستخدم، مع تنبيه واضح.
 * لا يتم استخدام scraping للمواقع التي لا تملك API موثقًا؛ هذا يمنع توقف
-  البوت بسبب تغيّر HTML ويقلل المشاكل القانونية/التشغيلية.
+  البوت بسبب تغيّر HTML ويقلل المشاكل القانونية/التشغيلية. هذه المواقع
+  (PUBLIC_SOURCE_SITES) تُعرض كروابط يفتحها المستخدم يدويًا فقط، ولا يتم
+  جلب أو تحليل محتواها من طرف البوت.
 """
 
 from __future__ import annotations
@@ -29,9 +31,9 @@ import json
 import os
 import re
 import time
+import traceback
 import uuid
 from difflib import SequenceMatcher
-from email.utils import parsedate_to_datetime
 from pathlib import Path
 from typing import Any, Iterable
 from urllib.error import HTTPError, URLError
@@ -62,8 +64,8 @@ RSCRIPTS_API_BASE = "https://api.rscripts.net"
 ROBLOX_SEARCH_API = "https://apis.roblox.com/search-api/omni-search"
 
 # هذه المواقع لا تملك API عامًا موثقًا في النسخة الحالية.
-# لا يتم عمل scraping لها تلقائيًا؛ يمكن إظهارها للمستخدم كمصادر يفتحها يدويًا
-# بعد إضافة التكامل الرسمي المناسب.
+# لا يتم عمل scraping لها؛ تُعرض فقط كروابط إضافية يفتحها المستخدم بنفسه
+# عندما لا نجد نتيجة مؤكدة من المصادر البرمجية (ScriptBlox / Rscripts).
 PUBLIC_SOURCE_SITES = {
     "Cheater.fun": "https://cheater.fun/",
     "Scriptrb": "https://scriptrb.com/",
@@ -79,9 +81,12 @@ DEFAULT_GUILD_CONFIG = {
 }
 
 HTTP_HEADERS = {
-    "User-Agent": "RobloxScriptSearchBot/2.0 (+Discord)",
+    "User-Agent": "RobloxScriptSearchBot/2.1 (+Discord)",
     "Accept": "application/json, text/plain;q=0.9, */*;q=0.8",
 }
+
+# مهلة كل مصدر بحث على حدة، حتى لو تأخر مصدر واحد لا يعلّق البحث كله.
+SOURCE_FETCH_TIMEOUT = 9.0
 
 
 # ---------------------------------------------------------------------------
@@ -175,7 +180,8 @@ ROBLOX_GAMES: list[tuple[str, list[str]]] = [
     ]),
     ("Natural Disaster Survival", [
         "ناشورال ديزاستر", "ديزاستر", "الكوارث", "ماب الكوارث",
-        "natural disaster survival", "nds",
+        "natural disaster survival", "nds", "natural disasters",
+        "كوارث طبيعية",
     ]),
     ("MeepCity", [
         "ميب سيتي", "ميبستي", "ميب", "meepcity", "meep city",
@@ -200,8 +206,8 @@ ROBLOX_GAMES: list[tuple[str, list[str]]] = [
         "ايلاندز", "سكاي بلوك", "islands", "skyblock",
     ]),
     ("Welcome to Bloxburg", [
-        "بلوكسبيرق", "بلوكس بيرج", "بلوكسبورج", "bloxburg",
-        "welcome to bloxburg",
+        "بلوكسبيرق", "بلوكس بيرج", "بلوكسبورج", "بلكسبرق",
+        "bloxburg", "welcome to bloxburg",
     ]),
     ("Royale High", [
         "رويال هاي", "رويال", "royale high",
@@ -322,12 +328,6 @@ ROBLOX_GAMES: list[tuple[str, list[str]]] = [
     ("Lumber Tycoon 2", [
         "لومبر", "قطع الخشب", "lumber tycoon 2", "lt2",
     ]),
-    ("Pet Simulator 99", [
-        "بت سيم 99", "pet sim 99", "ps99",
-    ]),
-    ("Bloxburg", [
-        "بلكسبرق", "bloxburg",
-    ]),
     ("SCP: Roleplay", [
         "اس سي بي", "scp", "scp roleplay",
     ]),
@@ -357,9 +357,6 @@ ROBLOX_GAMES: list[tuple[str, list[str]]] = [
     ]),
     ("Epic Minigames", [
         "ايبك ميني قيمز", "العاب مصغرة", "epic minigames",
-    ]),
-    ("Natural Disaster Survival", [
-        "natural disasters", "كوارث طبيعية",
     ]),
     ("Survive the Disasters 2", [
         "سرفايف ذا ديزاسترز", "survive the disasters 2", "std2",
@@ -399,6 +396,82 @@ ROBLOX_GAMES: list[tuple[str, list[str]]] = [
     ]),
     ("Easy Obby", [
         "اوبي", "obby", "easy obby",
+    ]),
+    # --- إضافات: ألعاب أنمي/RPG وقتالية منتشرة كانت ناقصة ---
+    ("Project Slayers", [
+        "بروجكت سلاير", "بروجكت سلايرز", "project slayers", "ps",
+    ]),
+    ("Demonfall", [
+        "ديمون فول", "ديمونفول", "demonfall", "demon fall",
+    ]),
+    ("Type Soul", [
+        "تايب سول", "type soul",
+    ]),
+    ("A Universal Time", [
+        "يونيفرسال تايم", "ايه يونيفرسال تايم", "a universal time", "aut",
+    ]),
+    ("Sol's RNG", [
+        "سولز ار ان جي", "سول ار ان جي", "sol's rng", "sols rng", "solsrng",
+    ]),
+    ("Deepwoken", [
+        "ديبووكن", "ديب ووكن", "deepwoken",
+    ]),
+    ("Grand Piece Online", [
+        "جراند بيس اونلاين", "gpo", "grand piece online",
+    ]),
+    ("Haze Piece", [
+        "هيز بيس", "haze piece",
+    ]),
+    ("Blue Lock Rivals", [
+        "بلو لوك رايفلز", "blue lock rivals",
+    ]),
+    ("World Zero", [
+        "ورلد زيرو", "world zero",
+    ]),
+    ("Saitama Battlegrounds", [
+        "سايتاما ساحات القتال", "saitama battlegrounds",
+    ]),
+    ("Weapon Fighting Simulator", [
+        "ويبن فايتنق سيم", "weapon fighting simulator", "wfs",
+    ]),
+    ("Prison Life", [
+        "بريزن لايف", "prison life",
+    ]),
+    ("Zombie Uprising", [
+        "زومبي ابرايزنق", "zombie uprising",
+    ]),
+    ("Superhero Tycoon", [
+        "سوبر هيرو تايكون", "superhero tycoon",
+    ]),
+    ("Project Mugetsu", [
+        "بروجكت موجيتسو", "project mugetsu", "pm",
+    ]),
+    ("Blox Piece", [
+        "بلوكس بيس", "blox piece",
+    ]),
+    ("Untitled Attack on Titan", [
+        "اتاك اون تايتن", "untitled attack on titan", "uaot", "aot",
+    ]),
+    ("Rogue Lineage", [
+        "روج لينيج", "rogue lineage",
+    ]),
+    ("Trade Roulette", [
+        "تريد روليت", "trade roulette",
+    ]),
+    ("Da Hood Original", [
+        "دا هود اورجنال", "da hood original",
+    ]),
+    ("Pet Sim 99", [
+        "بت سيم ٩٩", "pet sim 99",
+    ]),
+    ("Elemental Battlegrounds", [
+        "المنتال ساحات القتال", "elemental battlegrounds", "ebg",
+    ]),
+    ("Ability Wars", [
+        "ابيليتي وارز", "ability wars",
+    ]),
+    ("Untitled Tag Game", [
+        "تاق قيم", "untitled tag game",
     ]),
 ]
 
@@ -526,6 +599,8 @@ def identify_target_game(query: str) -> tuple[str | None, str]:
         exact  = alias أو اسم رسمي واضح
         fuzzy  = خطأ إملائي بسيط
         none   = لا توجد مطابقة آمنة
+
+    (بدون تغيير عن النسخة الأصلية بناءً على طلب المستخدم)
     """
     _build_game_indexes()
     assert _GAME_EXACT_INDEX is not None
@@ -535,13 +610,11 @@ def identify_target_game(query: str) -> tuple[str | None, str]:
     if not text:
         return None, "none"
 
-    # المطابقة الكاملة أولًا، مع رفض alias متعارض بين لعبتين.
     for candidate in (text, compact_text(text), without_definite_article(text)):
         owners = _GAME_EXACT_INDEX.get(candidate, set())
         if len(owners) == 1:
             return next(iter(owners)), "exact"
 
-    # اسم اللعبة قد يكون وسط جملة مثل: "ابغى سكربت بلوكس فروت بدون كي".
     exact_hits: list[tuple[int, str]] = []
     for canonical, aliases in _GAME_ALIASES.items():
         for alias in aliases:
@@ -554,8 +627,6 @@ def identify_target_game(query: str) -> tuple[str | None, str]:
         if len(winners) == 1:
             return next(iter(winners)), "exact"
 
-    # Fuzzy على نوافذ كلمات، وليس على الجملة كلها؛ لذلك الكلمات الزائدة
-    # مثل "ابغى سكربت" لا تقلل دقة التعرف.
     best_by_game: dict[str, float] = {}
     for window in _query_windows(text):
         window_compact = compact_text(window)
@@ -570,8 +641,6 @@ def identify_target_game(query: str) -> tuple[str | None, str]:
                 if ratio > best_by_game.get(canonical, 0.0):
                     best_by_game[canonical] = ratio
 
-    # لا نقبل نتيجة fuzzy قريبة إذا كانت المنافسة بنفس القوة؛ هذا أهم من
-    # إظهار نتيجة خاطئة من لعبة مختلفة.
     ranked = sorted(
         ((ratio, canonical) for canonical, ratio in best_by_game.items()),
         reverse=True,
@@ -585,32 +654,77 @@ def identify_target_game(query: str) -> tuple[str | None, str]:
 
 
 def translate_game_alias(query: str) -> str:
+    # (بدون تغيير عن النسخة الأصلية بناءً على طلب المستخدم)
     name, _confidence = identify_target_game(query)
     return name or clean_script_query(query)
 
 
 def _game_matches_target(game_name: str, target_name: str) -> bool:
-    """فلترة محافظة: النتيجة غير المعروفة تُرفض بدل إظهار لعبة أخرى."""
+    """
+    فلترة مرنة بدل التطابق الحرفي الصارم:
+    - لا تشترط أن يحتوي عنوان/اسم النتيجة على اسم اللعبة بصيغته الدقيقة.
+    - تستخدم aliases اللعبة الهدف (نفس قائمة identify_target_game) لقبول
+      أي صياغة معروفة لاسم اللعبة (عربي/إنجليزي/اختصار).
+    - ترفض فقط إذا تعرّف النظام بثقة (exact) على أن اسم النتيجة يخص لعبة
+      أخرى مختلفة معروفة محليًا؛ هذا هو ما يمنع تسرّب نتائج ألعاب أخرى.
+    - غير ذلك تستخدم مطابقة تقريبية أكثر تسامحًا من السابق.
+    ملطبّقة على جميع الألعاب وليست خاصة بلعبة معيّنة.
+    """
     source = normalize_search_text(game_name)
     target = normalize_search_text(target_name)
-    if not source or not target:
+    if not target:
         return False
+
+    if not source:
+        # لا يوجد اسم لعبة من المصدر؛ الاستعلام المُرسل للمصدر هو
+        # اسم اللعبة الهدف أصلًا، فلا نرفض تلقائيًا بسبب حقل فارغ.
+        return True
+
     if source == target or compact_text(source) == compact_text(target):
         return True
 
+    _build_game_indexes()
+    assert _GAME_ALIASES is not None
+
+    target_aliases = _GAME_ALIASES.get(target_name, set())
+    for alias in target_aliases:
+        if _contains_alias(source, alias):
+            return True
+
     detected, confidence = identify_target_game(source)
-    if detected == target_name and confidence in {"exact", "fuzzy"}:
-        return True
-    if detected and detected != target_name:
+    if detected and detected != target_name and confidence == "exact":
         return False
 
-    # يسمح باختلافات بسيطة في اسم اللعبة الذي يعيده المصدر، لكن لا يسمح
-    # بمقارنة قصيرة جدًا أو بأسماء لا تتشارك كلمة ذات معنى.
     source_words = set(source.split())
     target_words = set(target.split())
     shared = source_words & target_words
-    ratio = SequenceMatcher(None, source, target).ratio()
-    return bool(shared) and ratio >= 0.90
+    ratio = max(
+        SequenceMatcher(None, source, target).ratio(),
+        SequenceMatcher(
+            None, compact_text(source), compact_text(target)
+        ).ratio(),
+    )
+
+    if shared and ratio >= 0.55:
+        return True
+    return ratio >= 0.75
+
+
+def _match_strength(game_name: str, target_name: str) -> str:
+    """يميّز قوة المطابقة لأغراض الترتيب فقط (exact/alias مقابل fuzzy)."""
+    source = normalize_search_text(game_name)
+    target = normalize_search_text(target_name)
+    if not source or not target:
+        return "none"
+    if source == target or compact_text(source) == compact_text(target):
+        return "exact"
+
+    _build_game_indexes()
+    assert _GAME_ALIASES is not None
+    for alias in _GAME_ALIASES.get(target_name, set()):
+        if _contains_alias(source, alias):
+            return "alias"
+    return "fuzzy"
 
 
 # ---------------------------------------------------------------------------
@@ -698,8 +812,6 @@ async def discover_roblox_game(query: str) -> str | None:
     raw = clean_script_query(query)
     normalized = normalize_search_text(raw)
     if not normalized or _contains_arabic(normalized):
-        # الأسماء العربية/المعرّبة تُحل غالبًا من القائمة المحلية. إرسالها
-        # إلى API الإنجليزي يعطي نتائج عشوائية أكثر مما يفيد.
         return None
 
     cache_key = compact_text(normalized)
@@ -719,7 +831,10 @@ async def discover_roblox_game(query: str) -> str | None:
         )
         result: str | None = None
         try:
-            data, _headers = await _http_get_json(url, timeout=8, retries=0)
+            data, _headers = await asyncio.wait_for(
+                _http_get_json(url, timeout=8, retries=0),
+                timeout=SOURCE_FETCH_TIMEOUT,
+            )
             candidates: list[str] = []
             for group in (data or {}).get("searchResults", []) if isinstance(data, dict) else []:
                 if not isinstance(group, dict):
@@ -743,6 +858,8 @@ async def discover_roblox_game(query: str) -> str | None:
                     best_name = name
             if best_name and best_ratio >= 0.86:
                 result = best_name
+        except asyncio.TimeoutError:
+            print("[roblox-discovery] timeout")
         except Exception as error:
             print(f"[roblox-discovery] {type(error).__name__}: {error}")
 
@@ -786,6 +903,17 @@ def _empty_result(
     }
 
 
+async def _fetch_with_timeout(coro, source_name: str) -> list[dict[str, Any]]:
+    try:
+        return await asyncio.wait_for(coro, timeout=SOURCE_FETCH_TIMEOUT)
+    except asyncio.TimeoutError:
+        print(f"[{source_name}] انتهت المهلة قبل الرد")
+        return []
+    except Exception as error:
+        print(f"[{source_name}] {type(error).__name__}: {error}")
+        return []
+
+
 async def fetch_scriptblox_results(
     search_query: str,
     max_results: int,
@@ -797,15 +925,11 @@ async def fetch_scriptblox_results(
         f"&strict={'true' if strict else 'false'}"
         "&sortBy=updatedAt&order=desc"
     )
-    try:
-        data, _headers = await _http_get_json(
-            f"{SCRIPTBLOX_SEARCH_API}?{params}",
-            timeout=15,
-            retries=1,
-        )
-    except Exception as error:
-        print(f"[ScriptBlox] {type(error).__name__}: {error}")
-        return []
+    data, _headers = await _http_get_json(
+        f"{SCRIPTBLOX_SEARCH_API}?{params}",
+        timeout=15,
+        retries=1,
+    )
 
     result = data.get("result") if isinstance(data, dict) else None
     scripts = result.get("scripts", []) if isinstance(result, dict) else []
@@ -853,16 +977,12 @@ async def fetch_rscripts_results(
         "Authorization": f"Bearer {RSCRIPTS_API_KEY}",
         "Accept": "application/json",
     }
-    try:
-        data, _headers = await _http_get_json(
-            f"{RSCRIPTS_API_BASE}/v1/search?{params}",
-            headers=headers,
-            timeout=15,
-            retries=1,
-        )
-    except Exception as error:
-        print(f"[Rscripts] {type(error).__name__}: {error}")
-        return []
+    data, _headers = await _http_get_json(
+        f"{RSCRIPTS_API_BASE}/v1/search?{params}",
+        headers=headers,
+        timeout=15,
+        retries=1,
+    )
 
     if not isinstance(data, dict) or not data.get("success"):
         return []
@@ -892,6 +1012,12 @@ async def fetch_rscripts_results(
     return normalized
 
 
+# ملاحظة عن cheater.fun / scriptrb.com / robscript.com:
+# هذه المواقع ليس لديها API موثق حاليًا، لذلك لا يوجد لها fetcher هنا —
+# عمل scraping غير موثّق عليها هش وقد ينكسر مع أي تحديث HTML، وهذا هو
+# السبب الأصلي في استبعادها من البحث الآلي. بدلًا من ذلك تُعرض للمستخدم
+# كروابط "مصادر إضافية يدويًا" في send_script_result أدناه عندما لا نجد
+# نتيجة مؤكدة، دون أن يقوم البوت بجلب أو تحليل محتواها.
 SOURCE_FETCHERS = (
     ("ScriptBlox", fetch_scriptblox_results),
     ("Rscripts", fetch_rscripts_results),
@@ -900,8 +1026,14 @@ SOURCE_FETCHERS = (
 
 def _result_score(result: dict[str, Any], target_name: str) -> float:
     score = 0.0
-    if _game_matches_target(result.get("game_name", ""), target_name):
+    strength = _match_strength(result.get("game_name", ""), target_name)
+    if strength == "exact":
         score += 100
+    elif strength == "alias":
+        score += 85
+    elif strength == "fuzzy":
+        score += 55
+
     if result.get("verified"):
         score += 12
     if not result.get("is_patched"):
@@ -941,9 +1073,9 @@ async def search_all_sources(
     strict: bool = True,
 ) -> tuple[list[dict[str, Any]], str | None, str]:
     """
-    البحث المتوازي ثم الفلترة الصارمة.
-    مهم: إذا عُرفت اللعبة ولم تحمل النتيجة اسم لعبة مطابقًا، يتم رفضها.
-    لا يوجد fallback يعرض نتائج غير مرتبطة.
+    البحث المتوازي ثم الفلترة المرنة (اسم اللعبة هو query البحث، وليس
+    شرط مطابقة حرفية للنتيجة). النتائج التي لا ترتبط باللعبة المطلوبة
+    تُستبعد سواء كانت مطابقة حرفيًا أو لا، عبر _game_matches_target.
     """
     query = clean_script_query(original_query)
     target_name, confidence = identify_target_game(query)
@@ -960,27 +1092,27 @@ async def search_all_sources(
     if cached and time.monotonic() - cached[0] < _SEARCH_CACHE_TTL:
         return cached[1]
 
+    # اسم اللعبة (وليس الجملة الكاملة التي كتبها العضو) هو كلمة البحث
+    # المُرسلة للمصادر، حتى لو كانت الرسالة تحتوي كلمات إضافية.
     search_query = target_name or query
     async with _SEARCH_SEMAPHORE:
         fetched = await asyncio.gather(
             *[
-                fetcher(search_query, max_results, strict)
-                for _name, fetcher in SOURCE_FETCHERS
+                _fetch_with_timeout(
+                    fetcher(search_query, max_results, strict), source_name
+                )
+                for source_name, fetcher in SOURCE_FETCHERS
             ],
-            return_exceptions=True,
+            return_exceptions=False,
         )
 
     combined: list[dict[str, Any]] = []
-    for (source_name, _fetcher), source_results in zip(SOURCE_FETCHERS, fetched):
-        if isinstance(source_results, Exception):
-            print(f"[{source_name}] {type(source_results).__name__}: {source_results}")
-            continue
+    for source_results in fetched:
         combined.extend(source_results)
 
     combined = _deduplicate_results(combined)
 
     if target_name:
-        # لا نعرض نتيجة لا تحمل اسمًا يطابق اللعبة المطلوبة.
         combined = [
             result
             for result in combined
@@ -991,7 +1123,6 @@ async def search_all_sources(
             reverse=True,
         )
     else:
-        # بدون لعبة معروفة، نرتب النتائج فقط ولا ندّعي أنها تخص لعبة محددة.
         combined.sort(
             key=lambda result: (
                 bool(result.get("verified")),
@@ -1014,7 +1145,10 @@ async def _resolve_script_text(result: dict[str, Any]) -> str:
     if not raw_url:
         return ""
     try:
-        raw = await _http_get_text(str(raw_url), timeout=15)
+        raw = await asyncio.wait_for(
+            _http_get_text(str(raw_url), timeout=15),
+            timeout=SOURCE_FETCH_TIMEOUT,
+        )
     except Exception as error:
         print(f"[raw-script] {type(error).__name__}: {error}")
         return ""
@@ -1087,6 +1221,16 @@ def get_configured_channel(
 # ---------------------------------------------------------------------------
 
 
+def _embed_color(result: dict[str, Any]) -> discord.Color:
+    if result.get("is_patched"):
+        return discord.Color.red()
+    if result.get("has_key"):
+        return discord.Color.orange()
+    if result.get("verified"):
+        return discord.Color.green()
+    return discord.Color.blurple()
+
+
 def _build_result_embed(
     result: dict[str, Any],
     query_label: str,
@@ -1111,8 +1255,7 @@ def _build_result_embed(
         lines.append(f"🛡 مستوى الأمان المعلن من المصدر: **{result['risk_level']}**")
     lines.extend([
         "",
-        f"🔗 [فتح صفحة السكربت]({result.get('url') or PUBLIC_SOURCE_SITES['ScriptBlox']})",
-        f"📡 المصدر: **{result.get('source', 'غير معروف')}**",
+        f"🔗 [فتح صفحة السكربت]({result.get('url') or 'https://scriptblox.com/'})",
         "⚠️ لا تشغّل كودًا من مصدر غير موثوق قبل مراجعته.",
     ])
     if total > 1:
@@ -1121,8 +1264,10 @@ def _build_result_embed(
     embed = discord.Embed(
         title="🔎 نتيجة بحث Roblox",
         description="\n".join(lines),
-        color=discord.Color.blurple(),
+        color=_embed_color(result),
+        timestamp=discord.utils.utcnow(),
     )
+    embed.set_footer(text=f"المصدر: {result.get('source', 'غير معروف')}")
     if result.get("game_image"):
         embed.set_thumbnail(url=str(result["game_image"]))
     if result.get("script_image"):
@@ -1233,6 +1378,19 @@ class ScriptResultView(discord.ui.View):
                 child.disabled = True
 
 
+def _manual_sources_view(target_name: str | None) -> discord.ui.View | None:
+    """
+    أزرار روابط فقط (لا يتم جلب أي محتوى منها) لمواقع لا تملك API موثقًا،
+    تُعرض فقط عندما لا نجد نتيجة مؤكدة من المصادر البرمجية.
+    """
+    if not PUBLIC_SOURCE_SITES:
+        return None
+    view = discord.ui.View(timeout=None)
+    for name, url in PUBLIC_SOURCE_SITES.items():
+        view.add_item(discord.ui.Button(label=name, url=url, style=discord.ButtonStyle.link))
+    return view
+
+
 async def send_script_result(message: discord.Message, query: str) -> None:
     guild = message.guild
     data = get_script_search_config(guild)
@@ -1246,7 +1404,7 @@ async def send_script_result(message: discord.Message, query: str) -> None:
         if target_name:
             extra = (
                 f"تعرفت على اللعبة: **{target_name}**، "
-                "لكن لم أجد نتيجة تحمل اسم اللعبة نفسه."
+                "لكن لم أجد نتيجة مرتبطة بها في المصادر المفعّلة."
             )
         else:
             extra = (
@@ -1254,8 +1412,10 @@ async def send_script_result(message: discord.Message, query: str) -> None:
                 "اكتب الاسم الإنجليزي أو الاسم العربي مع كلمة مميزة أخرى."
             )
         await message.channel.send(
-            f"🔎 لا توجد نتائج مناسبة لـ `{query}`.\n{extra}\n"
-            "لن أعرض نتائج من لعبة مختلفة حتى لا تحصل على نتيجة مضللة."
+            f"🔎 لا توجد نتائج مؤكدة لـ `{query}`.\n{extra}\n"
+            "لن أعرض نتائج من لعبة مختلفة حتى لا تحصل على نتيجة مضللة.\n"
+            "يمكنك تجربة المواقع التالية يدويًا (لا يتم فحص محتواها من قبل البوت):",
+            view=_manual_sources_view(target_name),
         )
         return
 
@@ -1312,18 +1472,17 @@ class RobloxSearchCog(commands.Cog):
             try:
                 async with message.channel.typing():
                     await send_script_result(message, query)
-
             except Exception as error:
-    import traceback
-
-    print("❌ [/script] حدث خطأ أثناء البحث")
-    print(f"نوع الخطأ: {type(error).__name__}")
-    print(f"الخطأ: {error}")
-    traceback.print_exc()
-
-    await interaction.followup.send(
-        "❌ حدث خطأ مؤقت أثناء البحث. راجع Render Logs لمعرفة السبب."
-    )
+                print("❌ [auto-search] حدث خطأ أثناء البحث")
+                print(f"نوع الخطأ: {type(error).__name__}")
+                print(f"الخطأ: {error}")
+                traceback.print_exc()
+                try:
+                    await message.channel.send(
+                        "❌ حدث خطأ مؤقت أثناء البحث. راجع Logs لمعرفة السبب."
+                    )
+                except discord.DiscordException:
+                    pass
 
         await self.bot.process_commands(message)
 
@@ -1339,7 +1498,7 @@ class RobloxSearchCog(commands.Cog):
         channel="الروم الذي تتم فيه عمليات البحث",
         enabled="تشغيل أو إيقاف النظام",
         max_results="عدد النتائج من 1 إلى 20",
-        strict="رفض أي نتيجة لا تطابق اسم اللعبة بدقة",
+        strict="رفض أي نتيجة لا ترتبط باللعبة",
     )
     @app_commands.default_permissions(manage_guild=True)
     async def scriptsearch_command(
@@ -1350,7 +1509,6 @@ class RobloxSearchCog(commands.Cog):
         max_results: int = 5,
         strict: bool = True,
     ) -> None:
-
         if not interaction.guild:
             await interaction.response.send_message(
                 "❌ هذا الأمر يعمل داخل السيرفر فقط.",
@@ -1372,15 +1530,8 @@ class RobloxSearchCog(commands.Cog):
             )
             return
 
-        current = get_script_search_config(
-            interaction.guild
-        )
-
-        channel_id = (
-            channel.id
-            if channel
-            else current.get("channel_id")
-        )
+        current = get_script_search_config(interaction.guild)
+        channel_id = channel.id if channel else current.get("channel_id")
 
         if enabled and not channel_id:
             await interaction.response.send_message(
@@ -1395,32 +1546,22 @@ class RobloxSearchCog(commands.Cog):
             "max_results": int(max_results),
             "strict": bool(strict),
         }
-
         save_config()
 
-        target_channel = get_configured_channel(
-            interaction.guild,
-            channel_id,
-        )
-
+        target_channel = get_configured_channel(interaction.guild, channel_id)
         sources = "ScriptBlox"
-
         if RSCRIPTS_API_KEY:
             sources += " + Rscripts"
-
         state = "مفعّل" if enabled else "متوقف"
 
         await interaction.response.send_message(
             f"🔎 **إعداد بحث Roblox**\n"
             f"الحالة: **{state}**\n"
-            f"الروم: "
-            f"{target_channel.mention if target_channel else 'غير محدد'}\n"
+            f"الروم: {target_channel.mention if target_channel else 'غير محدد'}\n"
             f"النتائج: **{max_results}**\n"
-            f"المطابقة الصارمة: "
-            f"**{'ON' if strict else 'OFF'}**\n"
+            f"المطابقة الصارمة: **{'ON' if strict else 'OFF'}**\n"
             f"المصادر البرمجية: **{sources}**\n"
-            f"اكتشاف Roblox التلقائي: "
-            f"**{'ON' if ENABLE_ROBLOX_DISCOVERY else 'OFF'}**",
+            f"اكتشاف Roblox التلقائي: **{'ON' if ENABLE_ROBLOX_DISCOVERY else 'OFF'}**",
             ephemeral=True,
         )
 
@@ -1440,7 +1581,6 @@ class RobloxSearchCog(commands.Cog):
         interaction: discord.Interaction,
         query: str,
     ) -> None:
-
         if not interaction.guild:
             await interaction.response.send_message(
                 "❌ هذا الأمر يعمل داخل السيرفر فقط.",
@@ -1450,50 +1590,27 @@ class RobloxSearchCog(commands.Cog):
 
         await interaction.response.defer()
 
-        try:
-            results, target_name, _confidence = (
-                await search_all_sources(
-                    query,
-                    max_results=get_script_search_config(
-                        interaction.guild
-                    ).get("max_results", 5),
-                    strict=True,
-                )
-            )
+        results, target_name, _confidence = await search_all_sources(
+            query,
+            max_results=get_script_search_config(interaction.guild).get(
+                "max_results", 5
+            ),
+            strict=True,
+        )
 
-            if not results:
-                await interaction.followup.send(
-                    f"🔎 لا توجد نتائج مطابقة للعبة: "
-                    f"**{target_name or query}**."
-                )
-                return
-
-            view = ScriptResultView(
-                results,
-                query,
-                interaction.user.id,
-                target_name,
-            )
-
+        if not results:
             await interaction.followup.send(
-                embed=_build_result_embed(
-                    results[0],
-                    query,
-                    0,
-                    len(results),
-                    target_name,
-                ),
-                view=view,
+                f"🔎 لا توجد نتائج مؤكدة للعبة: **{target_name or query}**.\n"
+                "يمكنك تجربة المواقع التالية يدويًا:",
+                view=_manual_sources_view(target_name),
             )
+            return
 
-        except Exception as error:
-            print(
-                f"[/script] {type(error).__name__}: {error}"
-            )
-
-            await interaction.followup.send(
-                "❌ حدث خطأ مؤقت أثناء البحث. جرّب مرة أخرى."
-            )
+        view = ScriptResultView(results, query, interaction.user.id, target_name)
+        await interaction.followup.send(
+            embed=_build_result_embed(results[0], query, 0, len(results), target_name),
+            view=view,
+        )
 
     # -----------------------------------------------------------------------
     # /scriptsearch-status
@@ -1503,30 +1620,37 @@ class RobloxSearchCog(commands.Cog):
         name="scriptsearch-status",
         description="عرض حالة نظام بحث Roblox",
     )
-    async def scriptsearch_status(
-        self,
-        interaction: discord.Interaction,
-    ) -> None:
-
-        data = get_script_search_config(
-            interaction.guild
-        )
-
-        channel = get_configured_channel(
-            interaction.guild,
-            data.get("channel_id"),
-        )
+    async def scriptsearch_status(self, interaction: discord.Interaction) -> None:
+        data = get_script_search_config(interaction.guild)
+        channel = get_configured_channel(interaction.guild, data.get("channel_id"))
 
         await interaction.response.send_message(
-            f"🔎 الحالة: "
-            f"**{'مفعّل' if data.get('enabled') else 'متوقف'}**\n"
-            f"الروم: "
-            f"{channel.mention if channel else 'غير محدد'}\n"
-            f"المطابقة الصارمة: "
-            f"**{'ON' if data.get('strict') else 'OFF'}**\n"
+            f"🔎 الحالة: **{'مفعّل' if data.get('enabled') else 'متوقف'}**\n"
+            f"الروم: {channel.mention if channel else 'غير محدد'}\n"
+            f"المطابقة الصارمة: **{'ON' if data.get('strict') else 'OFF'}**\n"
             f"النتائج: **{data.get('max_results', 5)}**",
             ephemeral=True,
         )
+
+    # -----------------------------------------------------------------------
+    # معالج أخطاء موحّد لكل أوامر Slash في هذا الـ Cog
+    # -----------------------------------------------------------------------
+
+    async def cog_app_command_error(
+        self,
+        interaction: discord.Interaction,
+        error: app_commands.AppCommandError,
+    ) -> None:
+        print(f"[app_command_error] {type(error).__name__}: {error}")
+        traceback.print_exc()
+        message = "❌ حدث خطأ غير متوقع أثناء تنفيذ الأمر."
+        try:
+            if interaction.response.is_done():
+                await interaction.followup.send(message, ephemeral=True)
+            else:
+                await interaction.response.send_message(message, ephemeral=True)
+        except discord.DiscordException:
+            pass
 
 
 # ---------------------------------------------------------------------------
@@ -1534,8 +1658,5 @@ class RobloxSearchCog(commands.Cog):
 # ---------------------------------------------------------------------------
 
 async def setup(bot: commands.Bot):
-    await bot.add_cog(
-        RobloxSearchCog(bot)
-    )
-
+    await bot.add_cog(RobloxSearchCog(bot))
     print("✅ تم تحميل bot4.py كـ Extension")
