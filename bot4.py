@@ -1272,27 +1272,34 @@ async def search_all_sources(
                 )
                 for source_name, fetcher in SOURCE_FETCHERS
             ],
-            return_exceptions=False,
-        )
-
-    combined: list[dict[str, Any]] = []
+                combined: list[dict[str, Any]] = []
     for source_results in fetched:
         combined.extend(source_results)
 
     combined = _deduplicate_results(combined)
 
     if target_name:
-    matched_results = []
+        matched_results = []
 
-    for result in combined:
-        game_name = result.get("game_name") or ""
+        for result in combined:
+            game_name = result.get("game_name") or ""
 
-        if _game_matches_target(
-            game_name,
-            target_name,
-            strict=strict,
-        ):
-            matched_results.append(result)
+            if _game_matches_target(
+                game_name,
+                target_name,
+                strict=strict,
+            ):
+                matched_results.append(result)
+
+        combined = matched_results
+
+        combined.sort(
+            key=lambda result: _result_score(
+                result,
+                target_name,
+            ),
+            reverse=True,
+        )
 
     combined = matched_results
 
