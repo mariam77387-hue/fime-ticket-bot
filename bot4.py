@@ -659,16 +659,24 @@ def translate_game_alias(query: str) -> str:
     return name or clean_script_query(query)
 
 
-def _game_matches_target(game_name: str, target_name: str) -> bool:
+def _game_matches_target(
+    game_name: str,
+    target_name: str,
+    strict: bool = True,
+) -> bool:
     """
     فلترة مرنة بدل التطابق الحرفي الصارم:
     - لا تشترط أن يحتوي عنوان/اسم النتيجة على اسم اللعبة بصيغته الدقيقة.
     - تستخدم aliases اللعبة الهدف (نفس قائمة identify_target_game) لقبول
-      أي صياغة معروفة لاسم اللعبة (عربي/إنجليزي/اختصار).
-    - ترفض فقط إذا تعرّف النظام بثقة (exact) على أن اسم النتيجة يخص لعبة
-      أخرى مختلفة معروفة محليًا؛ هذا هو ما يمنع تسرّب نتائج ألعاب أخرى.
-    - غير ذلك تستخدم مطابقة تقريبية أكثر تسامحًا من السابق.
-    ملطبّقة على جميع الألعاب وليست خاصة بلعبة معيّنة.
+      أي صياغة معروفة لاسم اللعبة (عربي/إنجليزي/اختصار). هذا المستوى
+      مفعّل دائمًا بغض النظر عن strict، لأن aliases قائمة معروفة وآمنة.
+    - ترفض دائمًا إذا تعرّف النظام بثقة (exact) على أن اسم النتيجة يخص
+      لعبة أخرى مختلفة معروفة محليًا؛ هذا هو ما يمنع تسرّب نتائج ألعاب
+      أخرى، بغض النظر عن قيمة strict.
+    - عند strict=False فقط: يُضاف مستوى إضافي من التشابه التقريبي
+      (SequenceMatcher) لتغطية صياغات غير معروفة محليًا كـ alias.
+      عند strict=True نكتفي بالتطابق الحرفي + aliases، بدون تخمين حر.
+    مطبّقة على جميع الألعاب وليست خاصة بلعبة معيّنة.
     """
     source = normalize_search_text(game_name)
     target = normalize_search_text(target_name)
@@ -693,6 +701,9 @@ def _game_matches_target(game_name: str, target_name: str) -> bool:
 
     detected, confidence = identify_target_game(source)
     if detected and detected != target_name and confidence == "exact":
+        return False
+
+    if strict:
         return False
 
     source_words = set(source.split())
@@ -917,12 +928,18 @@ async def _fetch_with_timeout(coro, source_name: str) -> list[dict[str, Any]]:
 async def fetch_scriptblox_results(
     search_query: str,
     max_results: int,
-    strict: bool,
+    _strict: bool,
 ) -> list[dict[str, Any]]:
+    # مهم: لا نمرر إعداد "strict" الخاص بالسيرفر إلى ScriptBlox API نفسه.
+    # كان هذا هو السبب الفعلي لعدم ظهور نتائج مثل Evade: ScriptBlox كانت
+    # تضيّق النتائج من عندها *قبل* ما تصل لمنطق المطابقة عندنا، فحتى لو
+    # كانت مطابقتنا المحلية مرنة 100% ما كان عندها شي تشتغل عليه.
+    # الآن نطلب دائمًا أوسع نتائج ممكنة من المصدر، والفلترة/الصرامة الحقيقية
+    # تتم محليًا عبر _game_matches_target بحسب إعداد السيرفر.
     params = (
         f"q={quote_plus(search_query)}"
         f"&max={max(1, min(20, int(max_results)))}"
-        f"&strict={'true' if strict else 'false'}"
+        "&strict=false"
         "&sortBy=updatedAt&order=desc"
     )
     data, _headers = await _http_get_json(
@@ -1027,7 +1044,6 @@ SOURCE_FETCHERS = (
 def _result_score(result: dict[str, Any], target_name: str) -> float:
     score = 0.0
     strength = _match_strength(result.get("game_name", ""), target_name)
-
     if strength == "exact":
         score += 100
     elif strength == "alias":
@@ -1041,17 +1057,10 @@ def _result_score(result: dict[str, Any], target_name: str) -> float:
         score += 8
     if not result.get("has_key"):
         score += 2
-
-    if (result.get("risk_level") or "").casefold() in {
-        "safe",
-        "low risk",
-        "low",
-    }:
+    if result.get("risk_level", "").casefold() in {"safe", "low risk", "low"}:
         score += 3
-
     if result.get("source") == "Rscripts":
         score += 0.5
-
     return score
 
 
@@ -1124,7 +1133,7 @@ async def search_all_sources(
         combined = [
             result
             for result in combined
-            if _game_matches_target(result.get("game_name", ""), target_name)
+            if _game_matches_target(result.get("game_name", ""), target_name, strict)
         ]
         combined.sort(
             key=lambda result: _result_score(result, target_name),
