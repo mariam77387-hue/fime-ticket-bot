@@ -1235,41 +1235,50 @@ _SEARCH_CACHE: dict[str, tuple[float, tuple[list[dict[str, Any]], str | None, st
 _SEARCH_CACHE_TTL = 45
 _SEARCH_SEMAPHORE = asyncio.Semaphore(4)
 
-
 async def search_all_sources(
     original_query: str,
     max_results: int = 5,
     strict: bool = True,
 ) -> tuple[list[dict[str, Any]], str | None, str]:
     """
-    البحث المتوازي ثم الفلترة المرنة (اسم اللعبة هو query البحث، وليس
-    شرط مطابقة حرفية للنتيجة). النتائج التي لا ترتبط باللعبة المطلوبة
-    تُستبعد سواء كانت مطابقة حرفيًا أو لا، عبر _game_matches_target.
+    البحث المتوازي ثم فلترة النتائج حسب اللعبة المتعرّف عليها.
     """
+
     query = clean_script_query(original_query)
+
     target_name, confidence = identify_target_game(query)
+
     if not target_name:
         discovered = await discover_roblox_game(query)
+
         if discovered:
             target_name, confidence = discovered, "discovered"
 
     if not query:
         return [], target_name, confidence
 
-    cache_key = f"{compact_text(target_name or query)}|{max_results}|{strict}"
+    cache_key = (
+        f"{compact_text(target_name or query)}"
+        f"|{max_results}|{strict}"
+    )
+
     cached = _SEARCH_CACHE.get(cache_key)
+
     if cached and time.monotonic() - cached[0] < _SEARCH_CACHE_TTL:
         return cached[1]
 
-    # اسم اللعبة (وليس الجملة الكاملة التي كتبها العضو) هو كلمة البحث
-    # المُرسلة للمصادر، حتى لو كانت الرسالة تحتوي كلمات إضافية.
-        search_query = target_name or query
+    # نرسل اسم اللعبة للمصادر بدل الجملة كاملة
+    search_query = target_name or query
 
     async with _SEARCH_SEMAPHORE:
         fetched = await asyncio.gather(
             *[
                 _fetch_with_timeout(
-                    fetcher(search_query, max_results, strict),
+                    fetcher(
+                        search_query,
+                        max_results,
+                        strict,
+                    ),
                     source_name,
                 )
                 for source_name, fetcher in SOURCE_FETCHERS
@@ -1284,8 +1293,9 @@ async def search_all_sources(
 
     combined = _deduplicate_results(combined)
 
+    # إذا تم التعرف على اللعبة، نفلتر النتائج حسبها
     if target_name:
-        matched_results = []
+        matched_results: list[dict[str, Any]] = []
 
         for result in combined:
             game_name = result.get("game_name") or ""
@@ -1307,49 +1317,7 @@ async def search_all_sources(
             reverse=True,
         )
 
-        for result in combined:
-            game_name = result.get("game_name") or ""
-
-            if _game_matches_target(
-                game_name,
-                target_name,
-                strict=strict,
-            ):
-                matched_results.append(result)
-
-        combined = matched_results
-
-        combined.sort(
-            key=lambda result: _result_score(
-                result,
-                target_name,
-            ),
-            reverse=True,
-        )
-
-        if target_name:
-        matched_results = []
-
-        for result in combined:
-            game_name = result.get("game_name") or ""
-
-            if _game_matches_target(
-                game_name,
-                target_name,
-                strict=strict,
-            ):
-                matched_results.append(result)
-
-        combined = matched_results
-
-        combined.sort(
-            key=lambda result: _result_score(
-                result,
-                target_name,
-            ),
-            reverse=True,
-        )
-
+    # إذا لم يتم التعرف على لعبة محددة
     else:
         combined.sort(
             key=lambda result: (
@@ -1361,21 +1329,23 @@ async def search_all_sources(
         )
 
     final = (
-        combined[: max(1, min(20, int(max_results)))],
+        combined[
+            : max(
+                1,
+                min(20, int(max_results)),
+            )
+        ],
         target_name,
         confidence,
     )
 
-    _SEARCH_CACHE[cache_key] = (time.monotonic(), final)
+    _SEARCH_CACHE[cache_key] = (
+        time.monotonic(),
+        final,
+    )
 
     return final
-
-    final = (combined[: max(1, min(20, int(max_results)))], target_name, confidence)
-    _SEARCH_CACHE[cache_key] = (time.monotonic(), final)
-    return final
-
-
-async def _resolve_script_text(result: dict[str, Any]) -> str:
+(result: dict[str, Any]) -> str:
     raw = result.get("raw_script")
     if raw:
         return str(raw).strip()
