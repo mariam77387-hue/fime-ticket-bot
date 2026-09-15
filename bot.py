@@ -3391,12 +3391,6 @@ if __name__ == "__main__":
                 print(f"❌ تعذر تحميل bot3.py: {error}")
                 raise
 
-            try:
-                await bot.load_extension("bot4")
-                print("✅ تم تحميل نظام Roblox Script Search من bot4.py")
-            except Exception as error:
-                print(f"❌ تعذر تحميل bot4.py: {error}")
-                raise
 
             keep_alive()
             await bot.start(TOKEN)
