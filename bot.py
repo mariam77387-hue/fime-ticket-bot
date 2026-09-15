@@ -1034,23 +1034,23 @@ class ConfirmCloseView(discord.ui.View):
 
     @discord.ui.button(
         label="تأكيد الإغلاق ✅",
-        style=discord.ButtonStyle.red
+        style=discord.ButtonStyle.red,
     )
     async def confirm(
         self,
-        interaction,
-        button
+        interaction: discord.Interaction,
+        button: discord.ui.Button,
     ):
         if not is_staff(interaction.user):
             await interaction.response.send_message(
                 "❌ إغلاق التذاكر متاح لفريق الإدارة فقط.",
-                ephemeral=True
+                ephemeral=True,
             )
             return
 
         await interaction.response.send_message(
             "🔒 جارٍ إغلاق التذكرة...",
-            ephemeral=True
+            ephemeral=True,
         )
 
         await close_ticket_channel(
