@@ -192,8 +192,7 @@ GAME_ALIASES = {
         "قفزة",
     ],
 
-    "stands awakening": [
-        "stands awakening",
+        "stands awakening": [
         "stands awakening",
         "stands",
         "ستاندز",
@@ -209,8 +208,18 @@ GAME_ALIASES = {
         "ايمبوت",
         "ايم",
     ],
-}
 
+    "doors": [
+        "doors",
+        "door",
+        "دورز",
+        "باب",
+        "الباب",
+        "رعب",
+        "ماب الرعب",
+        "ماب رعب",
+    ],
+}
 
 # ============================================================
 # TEXT NORMALIZATION
