@@ -42,8 +42,8 @@ from discord.ext import commands
 # CONFIG
 # ============================================================
 
-FIME_API_URL = "https://fime-scripts.onrender.com/api/scripts"
-FIME_WEBSITE_URL = "https://fime-scripts.onrender.com"
+FIME_API_URL = "https://cheater.fun/"
+FIME_WEBSITE_URL = "https://cheater.fun/"
 
 DATABASE = "script_search.db"
 
