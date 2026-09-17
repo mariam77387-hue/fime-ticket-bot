@@ -87,7 +87,8 @@ DEFAULT_GUILD_CONFIG = {
         "interval_seconds": 30
     },
 
-    "script_search": {
+    
+        "script_search": {
         "enabled": False,
         "channel_id": None,
         "max_results": 5,
@@ -101,8 +102,6 @@ DEFAULT_GUILD_CONFIG = {
         "categories": {},
         "total_duration_seconds": 0
     }
-}
-    "stats": {"opened": 0, "closed": 0, "claimed": 0, "categories": {}, "total_duration_seconds": 0},
 }
 
 LEGACY_KEYS = tuple(DEFAULT_GUILD_CONFIG.keys() - {"next_ticket_number", "log_channel_id", "welcome_channel_id"})
