@@ -28,44 +28,80 @@ DEFAULT_CONFIG = {
     "embed_title": "نظام التذاكر 🎫",
     "embed_description": "اضغط على الزر تحت لفتح تذكرة جديدة والتواصل مع فريق الإدارة.",
     "embed_color": "5865F2",
+
     "category_name": "Tickets",
     "staff_role_name": "Staff",
     "log_channel_name": "ticket-logs",
+
     "auto_close_days": 7,
+
     "admin_role_name": "skibidi admin",
-    "welcome_message": "👋 منور/ه مرحبا بك في 𝐓𝐞𝐚𝐦 𝐅𝐢𝐦𝐞🌀\n\"{display_name}\" |\n~\n👋 Welcome to 𝐓𝐞𝐚𝐦 𝐅𝐢𝐦𝐞 🌀",
+
+    "welcome_message": (
+        "👋 منور/ه مرحبا بك في 𝐓𝐞𝐚𝐦 𝐅𝐢𝐦𝐞🌀\n"
+        "\"{display_name}\" |\n"
+        "~\n"
+        "👋 Welcome to 𝐓𝐞𝐚𝐦 𝐅𝐢𝐦𝐞 🌀"
+    ),
+
     "welcome_enabled": True,
+
     "guilds": {}
 }
 
+
 DEFAULT_GUILD_CONFIG = {
     "next_ticket_number": 1,
+
     "log_channel_id": None,
     "welcome_channel_id": None,
+
     "category_name": "Tickets",
     "staff_role_name": "Staff",
     "log_channel_name": "ticket-logs",
+
     "auto_close_days": 7,
+
     "embed_title": "نظام التذاكر 🎫",
     "embed_description": "اضغط على الزر تحت لفتح تذكرة جديدة والتواصل مع فريق الإدارة.",
     "embed_color": "5865F2",
+
     "admin_role_name": "skibidi admin",
-    "welcome_message": "👋 منور/ه مرحبا بك في 𝐓𝐞𝐚𝐦 𝐅𝐢𝐦𝐞🌀\n\"{display_name}\" |\n~\n👋 Welcome to 𝐓𝐞𝐚𝐦 𝐅𝐢𝐦𝐞 🌀",
+
+    "welcome_message": (
+        "👋 منور/ه مرحبا بك في 𝐓𝐞𝐚𝐦 𝐅𝐢𝐦𝐞🌀\n"
+        "\"{display_name}\" |\n"
+        "~\n"
+        "👋 Welcome to 𝐓𝐞𝐚𝐦 𝐅𝐢𝐦𝐞 🌀"
+    ),
+
     "welcome_enabled": True,
+
     "thread_lock_states": {},
+
     "auto_message": {
         "enabled": False,
         "channel_id": None,
         "mode": "every_message",
         "message": "",
-        "interval_seconds": 30,
+        "interval_seconds": 30
     },
+
     "script_search": {
         "enabled": False,
         "channel_id": None,
         "max_results": 5,
-        "strict": False,
+        "strict": False
     },
+
+    "stats": {
+        "opened": 0,
+        "closed": 0,
+        "claimed": 0,
+        "categories": {},
+        "total_duration_seconds": 0
+    }
+}
     "stats": {"opened": 0, "closed": 0, "claimed": 0, "categories": {}, "total_duration_seconds": 0},
 }
 
