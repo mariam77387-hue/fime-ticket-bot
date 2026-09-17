@@ -39,9 +39,9 @@ REQUEST_TIMEOUT = 10
 # كل مصدر:
 # https://cheater.fun/
 # {
-#     "name": "اسم المصدر",
-#     "url": "رابط الصفحة",
-#     "games": ["اسم اللعبة", "اسم آخر"]
+#     "name": "chearer.fun",
+#     "url": "https://cheater.fun/"
+#     "games": ["https://cheater.fun/"]
 # }
 #
 # لا تحتاج API.
