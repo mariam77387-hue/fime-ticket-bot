@@ -3516,13 +3516,21 @@ if __name__ == "__main__":
                 raise
 
             # =====================================================
-            # تشغيل Flask / Keep Alive
+            # تشغيل Web Server / Keep Alive
+            # يستخدم Waitress داخل keep_alive.py
             # =====================================================
-            keep_alive()
+            try:
+                keep_alive()
+                print("✅ تم تشغيل Keep Alive باستخدام Waitress.")
+            except Exception as error:
+                print(f"❌ تعذر تشغيل Keep Alive: {error}")
+                raise
 
             # =====================================================
-            # تشغيل البوت
+            # تشغيل Discord Bot
             # =====================================================
+            print("🤖 جاري تشغيل Team Fime Bot...")
+
             await bot.start(TOKEN)
 
     asyncio.run(main())
