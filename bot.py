@@ -3279,78 +3279,137 @@ async def before_auto_cleanup():
 # Ready
 # =========================================================
 
-_views_registered = False
-_commands_synced = False
-
-
-@bot.event
-async def on_ready():
-    global _views_registered
-    global _commands_synced
-
-    if not _commands_synced:
-        try:
-            synced = await bot.tree.sync()
-
-            print(
-                f"✅ تمت مزامنة {len(synced)} من أوامر Slash."
-            )
-
-            _commands_synced = True
-
-        except Exception as error:
-            print(
-                f"❌ تعذر مزامنة أوامر Slash: {error}"
-            )
-
-    if not _views_registered:
-        bot.add_view(OpenTicketView())
-        bot.add_view(TicketActionView())
-
-        _views_registered = True
-
-        print(
-            "✅ تم تسجيل Persistent Views."
-        )
-
-    if not auto_cleanup.is_running():
-        auto_cleanup.start()
-
-        print(
-            "✅ تم تشغيل Auto Cleanup."
-        )
-
-    if not auto_message_loop.is_running():
-        auto_message_loop.start()
-
-        print(
-            "✅ تم تشغيل Auto Message System."
-        )
-
-    print(
-        f"🤖 Logged in as {bot.user} "
-        f"(ID: {bot.user.id})"
-    )
-
-    print(
-        "✅ البوت جاهز ويعمل."
-    )
-
-
 @bot.tree.error
 async def on_app_command_error(interaction, error):
-    if isinstance(error, app_commands.CheckFailure):
-        message = "❌ هذا الأمر للإداريين فقط. تحتاج Administrator أو رتبة `skibidi admin`."
+
+    import traceback
+
+    print("=" * 70)
+    print("❌ DISCORD APP COMMAND ERROR")
+    print(f"Type: {type(error).__name__}")
+    print(f"Error: {error}")
+    print("TRACEBACK:")
+    traceback.print_exception(
+        type(error),
+        error,
+        error.__traceback__
+    )
+    print("=" * 70)
+
+    # --------------------------------------------------------
+    # استخراج الخطأ الأصلي إذا كان AppCommandError
+    # --------------------------------------------------------
+
+    original_error = getattr(
+        error,
+        "original",
+        None
+    )
+
+    if original_error:
+
+        print("🔎 ORIGINAL ERROR")
+        print(
+            f"Type: {type(original_error).__name__}"
+        )
+        print(
+            f"Error: {original_error}"
+        )
+
+        traceback.print_exception(
+            type(original_error),
+            original_error,
+            original_error.__traceback__
+        )
+
+    # --------------------------------------------------------
+    # صلاحيات
+    # --------------------------------------------------------
+
+    if isinstance(
+        error,
+        app_commands.CheckFailure
+    ):
+
+        message = (
+            "❌ هذا الأمر للإداريين فقط.\n"
+            "تحتاج Administrator أو رتبة `skibidi admin`."
+        )
+
     else:
-        print(f"❌ App Command Error: {error}")
-        message = "❌ صار خطأ غير متوقع أثناء تنفيذ الأمر."
+
+        real_error = (
+            original_error
+            if original_error
+            else error
+        )
+
+        error_text = str(real_error)
+
+        # حماية من تسريب المفتاح
+        api_key = os.getenv(
+            "OPENAI_API_KEY",
+            ""
+        )
+
+        if api_key:
+            error_text = error_text.replace(
+                api_key,
+                "[API_KEY_HIDDEN]"
+            )
+
+        # إخفاء مفاتيح OpenAI المحتملة
+        error_text = re.sub(
+            r"sk-[A-Za-z0-9_\-]+",
+            "[API_KEY_HIDDEN]",
+            error_text
+        )
+
+        if len(error_text) > 1800:
+            error_text = (
+                error_text[:1800]
+                + "..."
+            )
+
+        message = (
+            "## ❌ خطأ حقيقي في أمر Discord\n\n"
+            f"**النوع:** `{type(real_error).__name__}`\n\n"
+            f"**الخطأ:**\n"
+            f"```text\n"
+            f"{error_text}\n"
+            f"```"
+        )
+
+    # --------------------------------------------------------
+    # إرسال الخطأ
+    # --------------------------------------------------------
+
     try:
+
         if interaction.response.is_done():
-            await interaction.followup.send(message, ephemeral=True)
+
+            await interaction.followup.send(
+                message,
+                ephemeral=True
+            )
+
         else:
-            await interaction.response.send_message(message, ephemeral=True)
-    except discord.HTTPException:
-        pass
+
+            await interaction.response.send_message(
+                message,
+                ephemeral=True
+            )
+
+    except discord.HTTPException as send_error:
+
+        print(
+            "❌ تعذر إرسال خطأ App Command إلى Discord:"
+        )
+
+        print(
+            f"{type(send_error).__name__}: "
+            f"{send_error}"
+        )
 
 # =========================================================
 # أخطاء عامة
