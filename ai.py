@@ -1,7 +1,7 @@
 # ============================================================
 # Team Fime AI
 # ai.py
-# Clean + Stable Version
+# Stable + Diagnostic Version
 # ============================================================
 
 import os
@@ -20,7 +20,26 @@ from openai import AsyncOpenAI
 # CONFIG
 # ============================================================
 
-OPENAI_API_KEY = os.getenv("OPENAI_API_KEY", "").strip()
+OPENAI_API_KEY = os.getenv(
+    "OPENAI_API_KEY",
+    ""
+).strip()
+
+# Remove accidental quotes around the key
+if (
+    len(OPENAI_API_KEY) >= 2
+    and OPENAI_API_KEY[0] == '"'
+    and OPENAI_API_KEY[-1] == '"'
+):
+    OPENAI_API_KEY = OPENAI_API_KEY[1:-1].strip()
+
+if (
+    len(OPENAI_API_KEY) >= 2
+    and OPENAI_API_KEY[0] == "'"
+    and OPENAI_API_KEY[-1] == "'"
+):
+    OPENAI_API_KEY = OPENAI_API_KEY[1:-1].strip()
+
 
 AI_MODEL = os.getenv(
     "AI_MODEL",
@@ -181,16 +200,48 @@ class FimeAI(commands.Cog):
     def __init__(self, bot):
 
         self.bot = bot
-
         self.client = None
-
         self.memory = MemoryManager()
+
+        # ----------------------------------------------------
+        # Validate API key encoding
+        # ----------------------------------------------------
+
+        self.api_key_encoding_error = None
+
+        if OPENAI_API_KEY:
+
+            try:
+
+                # HTTP Authorization headers require ASCII-safe
+                # API key content.
+                OPENAI_API_KEY.encode("ascii")
+
+            except UnicodeEncodeError as error:
+
+                self.api_key_encoding_error = error
+
+                print("=" * 60)
+                print("❌ OPENAI API KEY ENCODING ERROR")
+                print(
+                    "The OPENAI_API_KEY contains non-ASCII characters."
+                )
+                print(
+                    f"Type: {type(error).__name__}"
+                )
+                print(
+                    f"Error: {error}"
+                )
+                print("=" * 60)
 
         # ----------------------------------------------------
         # Create OpenAI client
         # ----------------------------------------------------
 
-        if OPENAI_API_KEY:
+        if (
+            OPENAI_API_KEY
+            and not self.api_key_encoding_error
+        ):
 
             try:
 
@@ -200,39 +251,54 @@ class FimeAI(commands.Cog):
 
             except Exception as error:
 
+                print("=" * 60)
+                print("❌ FAILED TO CREATE OPENAI CLIENT")
                 print(
-                    "❌ Failed to create OpenAI client:"
+                    f"Type: {type(error).__name__}"
                 )
-
                 print(
-                    f"{type(error).__name__}: {error}"
+                    f"Error: {self.clean_error(error)}"
                 )
+                traceback.print_exc()
+                print("=" * 60)
 
         # ----------------------------------------------------
         # Startup info
         # ----------------------------------------------------
 
         print("=" * 60)
-        print("🧠 Team Fime AI")
+        print("Team Fime AI")
         print("=" * 60)
 
         print(
-            "🔑 API Key:",
+            "API Key:",
             "موجود" if OPENAI_API_KEY else "مفقود"
         )
 
         print(
-            f"🤖 Model: {AI_MODEL}"
+            f"Model: {AI_MODEL}"
         )
 
         print(
-            f"📢 AI Channel: {AI_CHANNEL_ID}"
+            f"AI Channel: {AI_CHANNEL_ID}"
         )
 
         print(
-            "🧠 Client:",
+            "Client:",
             "جاهز" if self.client else "فشل"
         )
+
+        if self.api_key_encoding_error:
+
+            print(
+                "API Key Encoding: INVALID"
+            )
+
+        else:
+
+            print(
+                "API Key Encoding: OK"
+            )
 
         print("=" * 60)
 
@@ -248,14 +314,13 @@ class FimeAI(commands.Cog):
         if not text:
             text = repr(error)
 
-        # Hide API key
         if OPENAI_API_KEY:
+
             text = text.replace(
                 OPENAI_API_KEY,
                 "[API_KEY_HIDDEN]"
             )
 
-        # Hide OpenAI-like keys
         text = re.sub(
             r"sk-[A-Za-z0-9_\-]+",
             "[API_KEY_HIDDEN]",
@@ -280,6 +345,12 @@ class FimeAI(commands.Cog):
 
             raise RuntimeError(
                 "OPENAI_API_KEY غير موجود."
+            )
+
+        if self.api_key_encoding_error:
+
+            raise RuntimeError(
+                "OPENAI_API_KEY يحتوي على أحرف غير صالحة للـHTTP Header."
             )
 
         if self.client is None:
@@ -352,6 +423,7 @@ class FimeAI(commands.Cog):
             )
 
             if request_id:
+
                 print(
                     f"Request ID: {request_id}"
                 )
@@ -412,7 +484,6 @@ class FimeAI(commands.Cog):
         if not content:
             return
 
-        # Don't send slash commands to AI
         if content.startswith("/"):
             return
 
@@ -438,12 +509,12 @@ class FimeAI(commands.Cog):
 
             await message.reply(
                 "💀 صار خلل في تشغيل الذكاء.\n"
-                "استخدم `/ai-status` للتشخيص."
+                "استخدم `/ai-status` للتشخيص.",
+                mention_author=False
             )
 
             return
 
-        # Discord message limit
         if len(answer) <= 1900:
 
             await message.reply(
@@ -453,7 +524,6 @@ class FimeAI(commands.Cog):
 
             return
 
-        # Split long messages
         for i in range(
             0,
             len(answer),
@@ -467,7 +537,6 @@ class FimeAI(commands.Cog):
 
     # ========================================================
     # /ai-status
-    # REAL SLASH COMMAND
     # ========================================================
 
     @app_commands.command(
@@ -483,18 +552,26 @@ class FimeAI(commands.Cog):
     ):
 
         print("=" * 60)
-        print("🔍 AI STATUS COMMAND RECEIVED")
-        print(
-            f"User: {interaction.user}"
-        )
-        print(
-            f"Guild: "
-            f"{interaction.guild.id if interaction.guild else 'DM'}"
-        )
+        print("AI STATUS COMMAND RECEIVED")
+
+        try:
+
+            print(
+                f"User ID: {interaction.user.id}"
+            )
+
+            print(
+                f"Guild ID: "
+                f"{interaction.guild.id if interaction.guild else 'DM'}"
+            )
+
+        except Exception:
+            pass
+
         print("=" * 60)
 
         # ----------------------------------------------------
-        # First response
+        # Defer
         # ----------------------------------------------------
 
         try:
@@ -506,7 +583,7 @@ class FimeAI(commands.Cog):
         except Exception as error:
 
             print("=" * 60)
-            print("❌ DISCORD DEFER ERROR")
+            print("DISCORD DEFER ERROR")
             print(
                 f"Type: {type(error).__name__}"
             )
@@ -518,54 +595,71 @@ class FimeAI(commands.Cog):
 
             return
 
-
         # ----------------------------------------------------
-        # Basic configuration test
+        # Status values
         # ----------------------------------------------------
 
         api_key_status = (
-            "🟢 موجود"
+            "موجود"
             if OPENAI_API_KEY
-            else "🔴 مفقود"
+            else "مفقود"
         )
 
         client_status = (
-            "🟢 جاهز"
+            "جاهز"
             if self.client
-            else "🔴 غير جاهز"
+            else "غير جاهز"
         )
 
-
         # ----------------------------------------------------
-        # If no API key
+        # API KEY MISSING
         # ----------------------------------------------------
 
         if not OPENAI_API_KEY:
 
             await interaction.followup.send(
 
-                "## 🧠 Team Fime AI Status\n\n"
-                "🔴 **API Key:** مفقود\n\n"
-                "أضف `OPENAI_API_KEY` في Environment Variables.",
+                "## Team Fime AI Status\n\n"
+                "API Key: مفقود\n\n"
+                "أضف OPENAI_API_KEY في Environment Variables.",
 
                 ephemeral=True
             )
 
             return
 
+        # ----------------------------------------------------
+        # API KEY ENCODING ERROR
+        # ----------------------------------------------------
+
+        if self.api_key_encoding_error:
+
+            await interaction.followup.send(
+
+                "## Team Fime AI Status\n\n"
+                "API Key: موجود\n"
+                "API Key Encoding: غير صالح\n\n"
+                "المفتاح يحتوي على أحرف غير ASCII. "
+                "أعد إدخال OPENAI_API_KEY في Render بدون "
+                "مسافات أو علامات اقتباس أو رموز إضافية.",
+
+                ephemeral=True
+            )
+
+            return
 
         # ----------------------------------------------------
-        # If client failed
+        # CLIENT ERROR
         # ----------------------------------------------------
 
         if not self.client:
 
             await interaction.followup.send(
 
-                "## 🧠 Team Fime AI Status\n\n"
-                f"🔑 API Key: {api_key_status}\n"
-                f"🧠 Client: {client_status}\n\n"
-                "❌ فشل إنشاء OpenAI Client.\n"
+                "## Team Fime AI Status\n\n"
+                f"API Key: {api_key_status}\n"
+                f"Client: {client_status}\n\n"
+                "فشل إنشاء OpenAI Client.\n"
                 "راجع Render Logs.",
 
                 ephemeral=True
@@ -573,19 +667,22 @@ class FimeAI(commands.Cog):
 
             return
 
-
         # ----------------------------------------------------
-        # REAL API TEST
+        # REAL OPENAI API TEST
         # ----------------------------------------------------
 
         try:
 
             print(
-                "🔍 Sending REAL request to OpenAI..."
+                "Sending REAL OpenAI diagnostic request..."
             )
 
-            start_time = asyncio.get_running_loop().time()
+            start_time = (
+                asyncio.get_running_loop().time()
+            )
 
+            # ASCII-only diagnostic request.
+            # This isolates HTTP/API problems from Unicode text.
             response = await asyncio.wait_for(
 
                 self.client.responses.create(
@@ -625,7 +722,7 @@ class FimeAI(commands.Cog):
             )
 
             print(
-                "✅ OpenAI diagnostic request succeeded."
+                "OpenAI diagnostic request succeeded."
             )
 
             # ------------------------------------------------
@@ -633,27 +730,27 @@ class FimeAI(commands.Cog):
             # ------------------------------------------------
 
             result = (
-                "## 🧠 Team Fime AI Status\n\n"
+                "## Team Fime AI Status\n\n"
 
-                "### ⚙️ Configuration\n"
-                f"🔑 API Key: {api_key_status}\n"
-                f"🤖 Model: `{AI_MODEL}`\n"
-                f"🧠 Client: {client_status}\n\n"
+                "### Configuration\n"
+                f"API Key: {api_key_status}\n"
+                f"Model: `{AI_MODEL}`\n"
+                f"Client: {client_status}\n\n"
 
-                "### 🟢 OpenAI API\n"
+                "### OpenAI API\n"
                 "الاتصال بـ OpenAI ناجح.\n\n"
 
-                f"⏱️ Response Time: "
+                f"Response Time: "
                 f"`{elapsed:.2f}s`\n"
 
-                f"📨 Response: "
+                f"Response: "
                 f"`{output or 'No output_text'}`"
             )
 
             if request_id:
 
                 result += (
-                    f"\n🆔 Request ID: "
+                    f"\nRequest ID: "
                     f"`{request_id}`"
                 )
 
@@ -662,7 +759,6 @@ class FimeAI(commands.Cog):
                 ephemeral=True
             )
 
-
         # ----------------------------------------------------
         # TIMEOUT
         # ----------------------------------------------------
@@ -670,23 +766,22 @@ class FimeAI(commands.Cog):
         except asyncio.TimeoutError:
 
             print(
-                "❌ OpenAI diagnostic timed out."
+                "OpenAI diagnostic request timed out."
             )
 
             await interaction.followup.send(
 
-                "## 🧠 Team Fime AI Status\n\n"
+                "## Team Fime AI Status\n\n"
 
-                f"🔑 API Key: {api_key_status}\n"
-                f"🤖 Model: `{AI_MODEL}`\n"
-                f"🧠 Client: {client_status}\n\n"
+                f"API Key: {api_key_status}\n"
+                f"Model: `{AI_MODEL}`\n"
+                f"Client: {client_status}\n\n"
 
-                "🔴 **OpenAI API Timeout**\n\n"
+                "OpenAI API Timeout\n\n"
                 "الاتصال أخذ أكثر من 25 ثانية.",
 
                 ephemeral=True
             )
-
 
         # ----------------------------------------------------
         # OPENAI / PYTHON ERROR
@@ -695,6 +790,7 @@ class FimeAI(commands.Cog):
         except Exception as error:
 
             error_type = type(error).__name__
+
             error_message = self.clean_error(
                 error
             )
@@ -718,7 +814,7 @@ class FimeAI(commands.Cog):
             )
 
             print("=" * 60)
-            print("❌ OPENAI DIAGNOSTIC FAILED")
+            print("OPENAI DIAGNOSTIC FAILED")
             print(
                 f"Type: {error_type}"
             )
@@ -727,16 +823,19 @@ class FimeAI(commands.Cog):
             )
 
             if status_code:
+
                 print(
                     f"Status Code: {status_code}"
                 )
 
             if request_id:
+
                 print(
                     f"Request ID: {request_id}"
                 )
 
             if error_code:
+
                 print(
                     f"Error Code: {error_code}"
                 )
@@ -746,20 +845,20 @@ class FimeAI(commands.Cog):
             print("=" * 60)
 
             result = (
-                "## 🧠 Team Fime AI Status\n\n"
+                "## Team Fime AI Status\n\n"
 
-                f"🔑 API Key: {api_key_status}\n"
-                f"🤖 Model: `{AI_MODEL}`\n"
-                f"🧠 Client: {client_status}\n\n"
+                f"API Key: {api_key_status}\n"
+                f"Model: `{AI_MODEL}`\n"
+                f"Client: {client_status}\n\n"
 
-                "### 🔴 OpenAI Error\n\n"
+                "### OpenAI Error\n\n"
 
-                f"**Type:** `{error_type}`\n\n"
+                f"Type: `{error_type}`\n\n"
 
-                f"**Message:**\n"
-                f"```text\n"
+                "Message:\n"
+                "```text\n"
                 f"{error_message}\n"
-                f"```"
+                "```"
             )
 
             if status_code:
@@ -854,6 +953,15 @@ class FimeAI(commands.Cog):
         interaction: discord.Interaction
     ):
 
+        if interaction.guild is None:
+
+            await interaction.response.send_message(
+                "هذا الأمر يعمل داخل السيرفر فقط.",
+                ephemeral=True
+            )
+
+            return
+
         channel = interaction.guild.get_channel(
             AI_CHANNEL_ID
         )
@@ -879,7 +987,6 @@ class FimeAI(commands.Cog):
 
 async def setup(bot):
 
-    # Prevent accidental duplicate loading
     for cog in bot.cogs.values():
 
         if isinstance(cog, FimeAI):
