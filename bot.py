@@ -41,15 +41,15 @@ DEFAULT_CONFIG = {
     "admin_role_name": "skibidi admin",
 
     "welcome_message": (
-        "👋 منور/ه مرحبا بك في 𝐓𝐞𝐚𝐦 𝐅𝐢𝐦𝐞🌀\n"
-        "\"{display_name}\" |\n"
-        "~\n"
-        "👋 Welcome to 𝐓𝐞𝐚𝐦 𝐅𝐢𝐦𝐞 🌀"
-    ),
+    "👋 منور/ه مرحبا بك في 𝐓𝐞𝐚𝐦 𝐅𝐢𝐦𝐞🌀\n"
+    "\"{display_name}\" |\n"
+    "~\n"
+    "👋 Welcome to 𝐓𝐞𝐚𝐦 𝐅𝐢𝐦𝐞 🌀"
+),
 
-    "welcome_enabled": True,
+"welcome_enabled": True,
 
-    "guilds": {}
+"guilds": {}
 }
 
 
@@ -80,6 +80,16 @@ DEFAULT_GUILD_CONFIG = {
 
     "welcome_enabled": True,
 
+    # =====================================================
+    # نظام منشن الأعضاء عند الدخول
+    # =====================================================
+    "join_mention": {
+        "enabled": False,
+        "channel_id": None,
+        "message": "السكربتات هنا جميعاً .",
+        "delete_after": 2
+    },
+
     "thread_lock_states": {},
 
     "auto_message": {
@@ -90,8 +100,7 @@ DEFAULT_GUILD_CONFIG = {
         "interval_seconds": 30
     },
 
-    
-        "script_search": {
+    "script_search": {
         "enabled": False,
         "channel_id": None,
         "max_results": 5,
@@ -107,66 +116,117 @@ DEFAULT_GUILD_CONFIG = {
     }
 }
 
-LEGACY_KEYS = tuple(DEFAULT_GUILD_CONFIG.keys() - {"next_ticket_number", "log_channel_id", "welcome_channel_id"})
+LEGACY_KEYS = tuple(
+    DEFAULT_GUILD_CONFIG.keys()
+    - {"next_ticket_number", "log_channel_id", "welcome_channel_id"}
+)
 
 def load_config():
     if not os.path.exists(CONFIG_FILE):
         return deepcopy(DEFAULT_CONFIG)
+
     try:
         with open(CONFIG_FILE, "r", encoding="utf-8") as file:
             data = json.load(file)
+
         loaded = deepcopy(DEFAULT_CONFIG)
+
         if isinstance(data, dict):
             loaded.update(data)
+
         if not isinstance(loaded.get("guilds"), dict):
             loaded["guilds"] = {}
+
         return loaded
+
     except (json.JSONDecodeError, OSError) as error:
         print(f"⚠️ تعذر قراءة config.json: {error}")
         return deepcopy(DEFAULT_CONFIG)
 
+
 def save_config():
     temp_file = f"{CONFIG_FILE}.tmp"
+
     try:
         with open(temp_file, "w", encoding="utf-8") as file:
-            json.dump(config, file, ensure_ascii=False, indent=2)
+            json.dump(
+                config,
+                file,
+                ensure_ascii=False,
+                indent=2
+            )
+
         os.replace(temp_file, CONFIG_FILE)
+
     except OSError as error:
         print(f"❌ تعذر حفظ config.json: {error}")
+
         try:
             if os.path.exists(temp_file):
                 os.remove(temp_file)
         except OSError:
             pass
 
+
 config = load_config()
+
 
 def make_guild_config():
     result = deepcopy(DEFAULT_GUILD_CONFIG)
+
     for key in LEGACY_KEYS:
         if key in config:
             result[key] = deepcopy(config[key])
+
     return result
 
-OLD_WELCOME_MESSAGE = "👋 منور/ه مرحبا بك في 𝐓𝐞𝐚𝐦 𝐅𝐢𝐦𝐞🌀\n{mention}"
-NEW_WELCOME_MESSAGE = "👋 منور/ه مرحبا بك في 𝐓𝐞𝐚𝐦 𝐅𝐢𝐦𝐞🌀\n\"{display_name}\" |\n~\n👋 Welcome to 𝐓𝐞𝐚𝐦 𝐅𝐢𝐦𝐞 🌀"
+
+OLD_WELCOME_MESSAGE = (
+    "👋 منور/ه مرحبا بك في 𝐓𝐞𝐚𝐦 𝐅𝐢𝐦𝐞🌀\n"
+    "{mention}"
+)
+
+NEW_WELCOME_MESSAGE = (
+    "👋 منور/ه مرحبا بك في 𝐓𝐞𝐚𝐦 𝐅𝐢𝐦𝐞🌀\n"
+    "\"{display_name}\" |\n"
+    "~\n"
+    "👋 Welcome to 𝐓𝐞𝐚𝐦 𝐅𝐢𝐦𝐞 🌀"
+)
+
 
 def get_guild_config(guild_id: int):
     guilds = config.setdefault("guilds", {})
     key = str(guild_id)
     changed = False
+
     if not isinstance(guilds.get(key), dict):
         guilds[key] = make_guild_config()
         changed = True
+
     else:
         current = guilds[key]
+
         for name, default in DEFAULT_GUILD_CONFIG.items():
             if name not in current:
                 current[name] = deepcopy(default)
                 changed = True
+
         if current.get("welcome_message") == OLD_WELCOME_MESSAGE:
             current["welcome_message"] = NEW_WELCOME_MESSAGE
             changed = True
+
+        # تحديث إعدادات Join Mention تلقائيًا للسيرفرات القديمة
+        if not isinstance(current.get("join_mention"), dict):
+            current["join_mention"] = deepcopy(
+                DEFAULT_GUILD_CONFIG["join_mention"]
+            )
+            changed = True
+        else:
+            for name, default in DEFAULT_GUILD_CONFIG["join_mention"].items():
+                if name not in current["join_mention"]:
+                    current["join_mention"][name] = deepcopy(default)
+                    changed = True
+
         if not isinstance(current.get("stats"), dict):
             current["stats"] = deepcopy(DEFAULT_GUILD_CONFIG["stats"])
             changed = True
@@ -175,57 +235,11 @@ def get_guild_config(guild_id: int):
                 if stat_name not in current["stats"]:
                     current["stats"][stat_name] = deepcopy(stat_default)
                     changed = True
+
     if changed:
         save_config()
+
     return guilds[key]
-
-def get_setting(guild: discord.Guild, key: str, fallback=None):
-    if guild is None:
-        return fallback
-    return get_guild_config(guild.id).get(key, fallback)
-
-def set_setting(guild: discord.Guild, key: str, value):
-    get_guild_config(guild.id)[key] = value
-    save_config()
-
-def get_next_ticket_number(guild: discord.Guild):
-    guild_config = get_guild_config(guild.id)
-    try:
-        number = max(1, int(guild_config.get("next_ticket_number", 1)))
-    except (TypeError, ValueError):
-        number = 1
-    guild_config["next_ticket_number"] = number + 1
-    save_config()
-    return number
-
-def get_stats(guild: discord.Guild):
-    cfg = get_guild_config(guild.id)
-    stats = cfg.setdefault("stats", deepcopy(DEFAULT_GUILD_CONFIG["stats"]))
-    return stats
-
-def increment_ticket_open_stats(guild: discord.Guild, category_value: str):
-    stats = get_stats(guild)
-    stats["opened"] = int(stats.get("opened", 0)) + 1
-    categories = stats.setdefault("categories", {})
-    categories[category_value] = int(categories.get(category_value, 0)) + 1
-    save_config()
-
-def increment_claim_stats(guild: discord.Guild):
-    stats = get_stats(guild)
-    stats["claimed"] = int(stats.get("claimed", 0)) + 1
-    save_config()
-
-def increment_close_stats(guild: discord.Guild, duration_seconds: float = 0):
-    stats = get_stats(guild)
-    stats["closed"] = int(stats.get("closed", 0)) + 1
-    stats["total_duration_seconds"] = float(stats.get("total_duration_seconds", 0)) + max(0, duration_seconds)
-    save_config()
-
-def top_stats_text(mapping, limit=5):
-    if not mapping:
-        return "لا توجد بيانات بعد."
-    pairs = sorted(mapping.items(), key=lambda item: int(item[1]), reverse=True)[:limit]
-    return "\n".join(f"{get_category_label(k)} — **{v}**" for k, v in pairs)
 
 
 # =========================================================
@@ -1264,38 +1278,404 @@ async def embed_cmd_error(ctx, error):
 
 DEFAULT_WELCOME_MESSAGE = NEW_WELCOME_MESSAGE
 
+
 def render_welcome_message(guild, member):
-    template = get_setting(guild, "welcome_message", DEFAULT_WELCOME_MESSAGE) or DEFAULT_WELCOME_MESSAGE
+    template = get_setting(
+        guild,
+        "welcome_message",
+        DEFAULT_WELCOME_MESSAGE
+    ) or DEFAULT_WELCOME_MESSAGE
+
     values = {
         "{mention}": member.mention,
         "{username}": member.name,
         "{display_name}": member.display_name,
         "{server}": guild.name,
     }
+
     for key, value in values.items():
         template = str(template).replace(key, value)
+
     return template[:2000]
+
 
 async def get_welcome_channel(guild):
     if guild is None:
         return None
+
     channel_id = get_setting(guild, "welcome_channel_id")
+
     if not channel_id:
         return None
+
     try:
         channel = guild.get_channel(int(channel_id))
     except (TypeError, ValueError):
         channel = None
+
     if channel is None:
         try:
             channel = await guild.fetch_channel(int(channel_id))
-        except (discord.NotFound, discord.Forbidden, discord.HTTPException, TypeError, ValueError):
+        except (
+            discord.NotFound,
+            discord.Forbidden,
+            discord.HTTPException,
+            TypeError,
+            ValueError
+        ):
             return None
+
     return channel if isinstance(channel, discord.TextChannel) else None
+
+
+# =========================================================
+# نظام Join Mention
+# =========================================================
+
+def get_join_mention_config(guild):
+    cfg = get_guild_config(guild.id)
+
+    join_cfg = cfg.get("join_mention")
+
+    if not isinstance(join_cfg, dict):
+        join_cfg = deepcopy(DEFAULT_GUILD_CONFIG["join_mention"])
+        cfg["join_mention"] = join_cfg
+        save_config()
+
+    return join_cfg
+
+
+def render_join_mention_message(guild, member):
+    join_cfg = get_join_mention_config(guild)
+
+    template = str(
+        join_cfg.get(
+            "message",
+            "السكربتات هنا جميعاً ."
+        )
+    ).strip()
+
+    if not template:
+        template = "السكربتات هنا جميعاً ."
+
+    values = {
+        "{mention}": member.mention,
+        "{username}": member.name,
+        "{display_name}": member.display_name,
+        "{server}": guild.name,
+    }
+
+    for key, value in values.items():
+        template = template.replace(key, value)
+
+    # إذا المالك ما حط {mention} بنفسه،
+    # البوت يضيف منشن العضو تلقائيًا.
+    if "{mention}" not in str(
+        join_cfg.get("message", "")
+    ):
+        template = f"{member.mention} {template}"
+
+    return template[:2000]
+
+
+class JoinMentionChannelSelect(discord.ui.ChannelSelect):
+    def __init__(self, owner_id):
+        self.owner_id = owner_id
+
+        super().__init__(
+            placeholder="اختر روم منشن الأعضاء...",
+            min_values=1,
+            max_values=1,
+            channel_types=[discord.ChannelType.text],
+        )
+
+    async def callback(self, interaction):
+        if interaction.user.id != self.owner_id:
+            await interaction.response.send_message(
+                "❌ هذه القائمة ليست لك.",
+                ephemeral=True
+            )
+            return
+
+        if interaction.guild is None:
+            await interaction.response.send_message(
+                "❌ هذا الأمر يعمل داخل السيرفر فقط.",
+                ephemeral=True
+            )
+            return
+
+        selected = self.values[0]
+        channel_id = getattr(selected, "id", None)
+
+        if not channel_id:
+            await interaction.response.send_message(
+                "❌ تعذر تحديد الروم.",
+                ephemeral=True
+            )
+            return
+
+        channel = interaction.guild.get_channel(channel_id)
+
+        if channel is None:
+            try:
+                channel = await interaction.guild.fetch_channel(channel_id)
+            except (
+                discord.NotFound,
+                discord.Forbidden,
+                discord.HTTPException
+            ):
+                channel = None
+
+        if not isinstance(channel, discord.TextChannel):
+            await interaction.response.send_message(
+                "❌ اختر روم نصي عادي.",
+                ephemeral=True
+            )
+            return
+
+        me = interaction.guild.me
+
+        if me is None:
+            await interaction.response.send_message(
+                "❌ ما قدرت أحدد البوت داخل السيرفر.",
+                ephemeral=True
+            )
+            return
+
+        permissions = channel.permissions_for(me)
+
+        missing = []
+
+        if not permissions.view_channel:
+            missing.append("View Channel")
+
+        if not permissions.send_messages:
+            missing.append("Send Messages")
+
+        if not permissions.manage_messages:
+            missing.append("Manage Messages")
+
+        if missing:
+            await interaction.response.send_message(
+                "❌ البوت ناقصه صلاحيات في هذا الروم:\n"
+                + "\n".join(f"• `{x}`" for x in missing),
+                ephemeral=True
+            )
+            return
+
+        set_setting(
+            interaction.guild,
+            "join_mention.channel_id",
+            channel.id
+        )
+
+        # احتياط إذا set_setting لا يدعم المسارات المتداخلة
+        cfg = get_join_mention_config(interaction.guild)
+        cfg["channel_id"] = channel.id
+        cfg["enabled"] = True
+        save_config()
+
+        await interaction.response.edit_message(
+            content=(
+                "✅ **تم تحديد روم Join Mention**\n\n"
+                f"📍 الروم: {channel.mention}\n"
+                "🟢 النظام مفعل الآن.\n"
+                "⏱️ الرسالة تختفي بعد ثانيتين."
+            ),
+            view=None
+        )
+
+
+class JoinMentionChannelSelectView(discord.ui.View):
+    def __init__(self, owner_id):
+        super().__init__(timeout=120)
+        self.add_item(JoinMentionChannelSelect(owner_id))
+
+
+@bot.tree.command(
+    name="joinmention",
+    description="إعداد منشن الأعضاء عند دخولهم للسيرفر"
+)
+@app_commands.check(lambda interaction: interaction.user.id == 1388514481444880549)
+@app_commands.describe(
+    channel="الروم الذي سيتم إرسال المنشن فيه",
+    message="الرسالة التي تظهر مع المنشن"
+)
+async def joinmention_command(
+    interaction,
+    channel: discord.TextChannel = None,
+    message: str = None
+):
+    if interaction.guild is None:
+        await interaction.response.send_message(
+            "❌ هذا الأمر يعمل داخل السيرفر فقط.",
+            ephemeral=True
+        )
+        return
+
+    cfg = get_join_mention_config(interaction.guild)
+
+    # إذا لم يحدد المالك رومًا، نفتح قائمة الاختيار.
+    if channel is None:
+        await interaction.response.send_message(
+            "📍 **اختيار روم Join Mention**\n\n"
+            "اختر الروم الذي تريد أن يظهر فيه منشن العضو عند دخوله:",
+            view=JoinMentionChannelSelectView(interaction.user.id),
+            ephemeral=True
+        )
+        return
+
+    me = interaction.guild.me
+
+    if me is None:
+        await interaction.response.send_message(
+            "❌ ما قدرت أحدد البوت داخل السيرفر.",
+            ephemeral=True
+        )
+        return
+
+    permissions = channel.permissions_for(me)
+
+    if not permissions.view_channel:
+        await interaction.response.send_message(
+            "❌ البوت ما عنده `View Channel` في هذا الروم.",
+            ephemeral=True
+        )
+        return
+
+    if not permissions.send_messages:
+        await interaction.response.send_message(
+            "❌ البوت ما عنده `Send Messages` في هذا الروم.",
+            ephemeral=True
+        )
+        return
+
+    if not permissions.manage_messages:
+        await interaction.response.send_message(
+            "❌ البوت يحتاج `Manage Messages` عشان يحذف رسالة المنشن بعد ثانيتين.",
+            ephemeral=True
+        )
+        return
+
+    cfg["enabled"] = True
+    cfg["channel_id"] = channel.id
+
+    if message is not None:
+        message = message.strip()
+
+        if not message:
+            await interaction.response.send_message(
+                "❌ الرسالة ما تقدر تكون فاضية.",
+                ephemeral=True
+            )
+            return
+
+        cfg["message"] = message
+
+    cfg["delete_after"] = 2
+
+    save_config()
+
+    await interaction.response.send_message(
+        "✅ **تم إعداد Join Mention بنجاح**\n\n"
+        f"📍 الروم: {channel.mention}\n"
+        f"💬 الرسالة: `{cfg['message']}`\n"
+        "⏱️ مدة ظهور الرسالة: **ثانيتان**\n"
+        "🟢 الحالة: مفعل",
+        ephemeral=True
+    )
+
+
+@bot.tree.command(
+    name="joinmentionoff",
+    description="إيقاف منشن الأعضاء عند الدخول"
+)
+@app_commands.check(lambda interaction: interaction.user.id == 1388514481444880549)
+async def joinmentionoff_command(interaction):
+    if interaction.guild is None:
+        await interaction.response.send_message(
+            "❌ هذا الأمر يعمل داخل السيرفر فقط.",
+            ephemeral=True
+        )
+        return
+
+    cfg = get_join_mention_config(interaction.guild)
+    cfg["enabled"] = False
+    save_config()
+
+    await interaction.response.send_message(
+        "🔴 تم إيقاف نظام Join Mention.",
+        ephemeral=True
+    )
+
+
+@bot.tree.command(
+    name="joinmentionstatus",
+    description="عرض حالة نظام Join Mention"
+)
+@app_commands.check(lambda interaction: interaction.user.id == 1388514481444880549)
+async def joinmentionstatus_command(interaction):
+    if interaction.guild is None:
+        await interaction.response.send_message(
+            "❌ هذا الأمر يعمل داخل السيرفر فقط.",
+            ephemeral=True
+        )
+        return
+
+    cfg = get_join_mention_config(interaction.guild)
+
+    channel = None
+
+    if cfg.get("channel_id"):
+        channel = interaction.guild.get_channel(
+            int(cfg["channel_id"])
+        )
+
+    embed = discord.Embed(
+        title="📢 Join Mention",
+        color=discord.Color.green()
+        if cfg.get("enabled") and channel
+        else discord.Color.red()
+    )
+
+    embed.add_field(
+        name="الحالة",
+        value="🟢 مفعل" if cfg.get("enabled") else "🔴 متوقف",
+        inline=True
+    )
+
+    embed.add_field(
+        name="الروم",
+        value=channel.mention if channel else "❌ غير محدد",
+        inline=True
+    )
+
+    embed.add_field(
+        name="المدة",
+        value="ثانيتان",
+        inline=True
+    )
+
+    embed.add_field(
+        name="الرسالة",
+        value=str(cfg.get("message", "غير محددة"))[:1024],
+        inline=False
+    )
+
+    await interaction.response.send_message(
+        embed=embed,
+        ephemeral=True
+    )
+
+
+# =========================================================
+# نظام اختيار روم الترحيب الحالي
+# =========================================================
 
 class WelcomeChannelSelect(discord.ui.ChannelSelect):
     def __init__(self, owner_id):
         self.owner_id = owner_id
+
         super().__init__(
             placeholder="اختر روم الترحيب...",
             min_values=1,
@@ -1305,53 +1685,89 @@ class WelcomeChannelSelect(discord.ui.ChannelSelect):
 
     async def callback(self, interaction):
         if interaction.user.id != self.owner_id:
-            await interaction.response.send_message("❌ هذه القائمة ليست لك.", ephemeral=True)
-            return
-        if interaction.guild is None:
-            await interaction.response.send_message("❌ هذا الأمر يعمل داخل السيرفر فقط.", ephemeral=True)
+            await interaction.response.send_message(
+                "❌ هذه القائمة ليست لك.",
+                ephemeral=True
+            )
             return
 
-        # مهم: selected من ChannelSelect قد يكون AppCommandChannel، وليس TextChannel.
+        if interaction.guild is None:
+            await interaction.response.send_message(
+                "❌ هذا الأمر يعمل داخل السيرفر فقط.",
+                ephemeral=True
+            )
+            return
+
         selected = self.values[0]
         channel_id = getattr(selected, "id", None)
+
         if not channel_id:
-            await interaction.response.send_message("❌ تعذر تحديد الروم.", ephemeral=True)
+            await interaction.response.send_message(
+                "❌ تعذر تحديد الروم.",
+                ephemeral=True
+            )
             return
 
         channel = interaction.guild.get_channel(channel_id)
+
         if channel is None:
             try:
                 channel = await interaction.guild.fetch_channel(channel_id)
-            except (discord.NotFound, discord.Forbidden, discord.HTTPException):
+            except (
+                discord.NotFound,
+                discord.Forbidden,
+                discord.HTTPException
+            ):
                 channel = None
 
         if not isinstance(channel, discord.TextChannel):
-            await interaction.response.send_message("❌ اختر روم نصي عادي.", ephemeral=True)
+            await interaction.response.send_message(
+                "❌ اختر روم نصي عادي.",
+                ephemeral=True
+            )
             return
 
         me = interaction.guild.me
+
         if me is None:
-            await interaction.response.send_message("❌ ما قدرت أحدد البوت داخل السيرفر.", ephemeral=True)
+            await interaction.response.send_message(
+                "❌ ما قدرت أحدد البوت داخل السيرفر.",
+                ephemeral=True
+            )
             return
 
         permissions = channel.permissions_for(me)
         missing = []
+
         if not permissions.view_channel:
             missing.append("View Channel")
+
         if not permissions.send_messages:
             missing.append("Send Messages")
+
         if not permissions.embed_links:
             missing.append("Embed Links")
 
         if missing:
             await interaction.response.send_message(
-                "❌ البوت ناقصه صلاحيات في هذا الروم:\n" + "\n".join(f"• `{x}`" for x in missing),
+                "❌ البوت ناقصه صلاحيات في هذا الروم:\n"
+                + "\n".join(f"• `{x}`" for x in missing),
                 ephemeral=True
             )
             return
 
-        set_setting(interaction.guild, "welcome_channel_id", channel.id)
-        set_setting(interaction.guild, "welcome_enabled", True)
+        set_setting(
+            interaction.guild,
+            "welcome_channel_id",
+            channel.id
+        )
+
+        set_setting(
+            interaction.guild,
+            "welcome_enabled",
+            True
+        )
+
         await interaction.response.edit_message(
             content=(
                 "✅ **تم تحديد روم الترحيب**\n\n"
@@ -1362,114 +1778,347 @@ class WelcomeChannelSelect(discord.ui.ChannelSelect):
             view=None
         )
 
+
 class WelcomeChannelSelectView(discord.ui.View):
     def __init__(self, owner_id):
         super().__init__(timeout=120)
-        self.add_item(WelcomeChannelSelect(owner_id))
+        self.add_item(
+            WelcomeChannelSelect(owner_id)
+        )
 
-@bot.tree.command(name="welcome", description="اختيار روم الترحيب وتفعيل الترحيب")
+
+@bot.tree.command(
+    name="welcome",
+    description="اختيار روم الترحيب وتفعيل الترحيب"
+)
 @app_commands.check(lambda interaction: is_admin(interaction.user))
 async def welcome_command(interaction):
     await interaction.response.send_message(
-        "👋 **إعداد الترحيب**\n\nاختر الروم الذي تريد أن تظهر فيه رسائل الترحيب:",
-        view=WelcomeChannelSelectView(interaction.user.id),
+        "👋 **إعداد الترحيب**\n\n"
+        "اختر الروم الذي تريد أن تظهر فيه رسائل الترحيب:",
+        view=WelcomeChannelSelectView(
+            interaction.user.id
+        ),
         ephemeral=True
     )
 
-@bot.tree.command(name="testwelcome", description="اختبار رسالة الترحيب")
+
+@bot.tree.command(
+    name="testwelcome",
+    description="اختبار رسالة الترحيب"
+)
 @app_commands.check(lambda interaction: is_admin(interaction.user))
 async def test_welcome_command(interaction):
     channel = await get_welcome_channel(interaction.guild)
+
     if channel is None:
-        await interaction.response.send_message("❌ ما تم تحديد روم ترحيب. استخدم `/welcome` أولًا.", ephemeral=True)
+        await interaction.response.send_message(
+            "❌ ما تم تحديد روم ترحيب. استخدم `/welcome` أولًا.",
+            ephemeral=True
+        )
         return
+
     me = interaction.guild.me
     permissions = channel.permissions_for(me) if me else None
-    if not permissions or not permissions.view_channel or not permissions.send_messages:
-        await interaction.response.send_message(f"❌ البوت لا يستطيع الكتابة في {channel.mention}.", ephemeral=True)
+
+    if (
+        not permissions
+        or not permissions.view_channel
+        or not permissions.send_messages
+    ):
+        await interaction.response.send_message(
+            f"❌ البوت لا يستطيع الكتابة في {channel.mention}.",
+            ephemeral=True
+        )
         return
+
     try:
         await channel.send(
-            render_welcome_message(interaction.guild, interaction.user),
-            allowed_mentions=discord.AllowedMentions(users=True, roles=False, everyone=False)
+            render_welcome_message(
+                interaction.guild,
+                interaction.user
+            ),
+            allowed_mentions=discord.AllowedMentions(
+                users=True,
+                roles=False,
+                everyone=False
+            )
         )
+
     except discord.Forbidden:
-        await interaction.response.send_message("❌ Discord رفض الإرسال في روم الترحيب.", ephemeral=True)
+        await interaction.response.send_message(
+            "❌ Discord رفض الإرسال في روم الترحيب.",
+            ephemeral=True
+        )
         return
+
     except discord.HTTPException as error:
         print(f"❌ Welcome Test Error: {error}")
-        await interaction.response.send_message("❌ صار خطأ أثناء اختبار الترحيب.", ephemeral=True)
-        return
-    await interaction.response.send_message(f"✅ تم إرسال الاختبار إلى {channel.mention}.", ephemeral=True)
 
-@bot.tree.command(name="welcomestatus", description="عرض حالة نظام الترحيب")
+        await interaction.response.send_message(
+            "❌ صار خطأ أثناء اختبار الترحيب.",
+            ephemeral=True
+        )
+        return
+
+    await interaction.response.send_message(
+        f"✅ تم إرسال الاختبار إلى {channel.mention}.",
+        ephemeral=True
+    )
+
+
+@bot.tree.command(
+    name="welcomestatus",
+    description="عرض حالة نظام الترحيب"
+)
 @app_commands.check(lambda interaction: is_admin(interaction.user))
 async def welcome_status_command(interaction):
     channel = await get_welcome_channel(interaction.guild)
-    enabled = bool(get_setting(interaction.guild, "welcome_enabled", True))
+    enabled = bool(
+        get_setting(
+            interaction.guild,
+            "welcome_enabled",
+            True
+        )
+    )
+
     embed = discord.Embed(
         title="👋 حالة الترحيب",
-        color=discord.Color.green() if channel and enabled else discord.Color.red()
+        color=(
+            discord.Color.green()
+            if channel and enabled
+            else discord.Color.red()
+        )
     )
-    embed.add_field(name="الحالة", value="🟢 مفعل" if channel and enabled else "🔴 غير مفعل", inline=True)
-    embed.add_field(name="الروم", value=channel.mention if channel else "❌ غير محدد", inline=True)
-    embed.add_field(name="المتغيرات", value="`{mention}` `{username}` `{display_name}` `{server}`", inline=False)
-    await interaction.response.send_message(embed=embed, ephemeral=True)
 
-@bot.tree.command(name="welcomeoff", description="إيقاف رسائل الترحيب مع الاحتفاظ بالروم المحدد")
+    embed.add_field(
+        name="الحالة",
+        value="🟢 مفعل" if channel and enabled else "🔴 غير مفعل",
+        inline=True
+    )
+
+    embed.add_field(
+        name="الروم",
+        value=channel.mention if channel else "❌ غير محدد",
+        inline=True
+    )
+
+    embed.add_field(
+        name="المتغيرات",
+        value="`{mention}` `{username}` `{display_name}` `{server}`",
+        inline=False
+    )
+
+    await interaction.response.send_message(
+        embed=embed,
+        ephemeral=True
+    )
+
+
+@bot.tree.command(
+    name="welcomeoff",
+    description="إيقاف رسائل الترحيب مع الاحتفاظ بالروم المحدد"
+)
 @app_commands.check(lambda interaction: is_admin(interaction.user))
 async def welcome_off_command(interaction):
-    set_setting(interaction.guild, "welcome_enabled", False)
-    await interaction.response.send_message("🔴 تم إيقاف الترحيب. يمكنك تشغيله من جديد باستخدام `/welcome`.", ephemeral=True)
+    set_setting(
+        interaction.guild,
+        "welcome_enabled",
+        False
+    )
+
+    await interaction.response.send_message(
+        "🔴 تم إيقاف الترحيب. يمكنك تشغيله من جديد باستخدام `/welcome`.",
+        ephemeral=True
+    )
 
 
 @bot.event
 async def on_member_join(member):
+    # =====================================================
+    # البوتات
+    # =====================================================
     if member.bot:
-        bot_role = discord.utils.find(lambda r: r.name.strip().casefold() == "bot", member.guild.roles)
+        bot_role = discord.utils.find(
+            lambda r: r.name.strip().casefold() == "bot",
+            member.guild.roles
+        )
+
         if bot_role:
             try:
-                await member.add_roles(bot_role, reason="Auto role on bot join")
-            except (discord.Forbidden, discord.HTTPException) as error:
+                await member.add_roles(
+                    bot_role,
+                    reason="Auto role on bot join"
+                )
+            except (
+                discord.Forbidden,
+                discord.HTTPException
+            ) as error:
                 print(f"⚠️ Bot Auto Role Error: {error}")
+
         return
 
-    member_role = discord.utils.find(lambda r: r.name.strip().casefold() == "member", member.guild.roles)
+    # =====================================================
+    # رتبة Member
+    # =====================================================
+    member_role = discord.utils.find(
+        lambda r: r.name.strip().casefold() == "member",
+        member.guild.roles
+    )
+
     if member_role:
         try:
-            await member.add_roles(member_role, reason="Auto role on member join")
-        except (discord.Forbidden, discord.HTTPException) as error:
+            await member.add_roles(
+                member_role,
+                reason="Auto role on member join"
+            )
+        except (
+            discord.Forbidden,
+            discord.HTTPException
+        ) as error:
             print(f"⚠️ Auto Role Error: {error}")
 
-    if not get_setting(member.guild, "welcome_enabled", True):
+    # =====================================================
+    # Join Mention
+    # =====================================================
+    try:
+        join_cfg = get_join_mention_config(member.guild)
+
+        if join_cfg.get("enabled") and join_cfg.get("channel_id"):
+            join_channel = member.guild.get_channel(
+                int(join_cfg["channel_id"])
+            )
+
+            if join_channel is None:
+                try:
+                    join_channel = await member.guild.fetch_channel(
+                        int(join_cfg["channel_id"])
+                    )
+                except (
+                    discord.NotFound,
+                    discord.Forbidden,
+                    discord.HTTPException,
+                    TypeError,
+                    ValueError
+                ):
+                    join_channel = None
+
+            if isinstance(join_channel, discord.TextChannel):
+                me = member.guild.me
+
+                if me:
+                    permissions = join_channel.permissions_for(me)
+
+                    if (
+                        permissions.view_channel
+                        and permissions.send_messages
+                        and permissions.manage_messages
+                    ):
+                        try:
+                            join_message = await join_channel.send(
+                                render_join_mention_message(
+                                    member.guild,
+                                    member
+                                ),
+                                allowed_mentions=discord.AllowedMentions(
+                                    users=True,
+                                    roles=False,
+                                    everyone=False
+                                )
+                            )
+
+                            # يختفي المنشن بعد ثانيتين
+                            await asyncio.sleep(
+                                float(
+                                    join_cfg.get(
+                                        "delete_after",
+                                        2
+                                    )
+                                )
+                            )
+
+                            try:
+                                await join_message.delete()
+                            except (
+                                discord.NotFound,
+                                discord.Forbidden,
+                                discord.HTTPException
+                            ):
+                                pass
+
+                        except (
+                            discord.Forbidden,
+                            discord.HTTPException
+                        ) as error:
+                            print(
+                                f"⚠️ Join Mention Error: {error}"
+                            )
+
+    except Exception as error:
+        print(
+            f"⚠️ Join Mention System Error: {error}"
+        )
+
+    # =====================================================
+    # الترحيب الأساسي - بدون تغيير
+    # =====================================================
+    if not get_setting(
+        member.guild,
+        "welcome_enabled",
+        True
+    ):
         return
+
     channel = await get_welcome_channel(member.guild)
+
     if channel is None:
         return
+
     me = member.guild.me
+
     if me is None:
         return
+
     permissions = channel.permissions_for(me)
+
     if not permissions.view_channel or not permissions.send_messages:
-        print(f"⚠️ البوت لا يملك صلاحية إرسال الترحيب في #{channel.name}.")
+        print(
+            f"⚠️ البوت لا يملك صلاحية إرسال الترحيب في #{channel.name}."
+        )
         return
+
     try:
         await channel.send(
-            render_welcome_message(member.guild, member),
-            allowed_mentions=discord.AllowedMentions(users=True, roles=False, everyone=False)
+            render_welcome_message(
+                member.guild,
+                member
+            ),
+            allowed_mentions=discord.AllowedMentions(
+                users=True,
+                roles=False,
+                everyone=False
+            )
         )
+
         await send_ticket_log(
             member.guild,
             "👋 دخول عضو جديد",
-            f"**العضو:** {member.mention}\n**الاسم:** {member.display_name}",
+            f"**العضو:** {member.mention}\n"
+            f"**الاسم:** {member.display_name}",
             discord.Color.green()
         )
-    except (discord.Forbidden, discord.HTTPException) as error:
+
+    except (
+        discord.Forbidden,
+        discord.HTTPException
+    ) as error:
         print(f"❌ Welcome Error: {error}")
+
 
 class LogChannelSelect(discord.ui.ChannelSelect):
     def __init__(self, owner_id):
         self.owner_id = owner_id
+
         super().__init__(
             placeholder="اختر روم الـLogs...",
             min_values=1,
@@ -1479,63 +2128,148 @@ class LogChannelSelect(discord.ui.ChannelSelect):
 
     async def callback(self, interaction):
         if interaction.user.id != self.owner_id:
-            await interaction.response.send_message("❌ هذه القائمة ليست لك.", ephemeral=True)
+            await interaction.response.send_message(
+                "❌ هذه القائمة ليست لك.",
+                ephemeral=True
+            )
             return
+
         selected = self.values[0]
         channel_id = getattr(selected, "id", None)
-        channel = interaction.guild.get_channel(channel_id) if channel_id else None
+
+        channel = (
+            interaction.guild.get_channel(channel_id)
+            if channel_id
+            else None
+        )
+
         if channel is None and channel_id:
             try:
-                channel = await interaction.guild.fetch_channel(channel_id)
-            except (discord.NotFound, discord.Forbidden, discord.HTTPException):
+                channel = await interaction.guild.fetch_channel(
+                    channel_id
+                )
+            except (
+                discord.NotFound,
+                discord.Forbidden,
+                discord.HTTPException
+            ):
                 channel = None
+
         if not isinstance(channel, discord.TextChannel):
-            await interaction.response.send_message("❌ اختر روم نصي عادي.", ephemeral=True)
+            await interaction.response.send_message(
+                "❌ اختر روم نصي عادي.",
+                ephemeral=True
+            )
             return
+
         me = interaction.guild.me
-        permissions = channel.permissions_for(me) if me else None
-        if not permissions or not permissions.view_channel or not permissions.send_messages or not permissions.embed_links:
-            await interaction.response.send_message("❌ البوت يحتاج View Channel + Send Messages + Embed Links في روم الـLogs.", ephemeral=True)
+
+        permissions = (
+            channel.permissions_for(me)
+            if me
+            else None
+        )
+
+        if (
+            not permissions
+            or not permissions.view_channel
+            or not permissions.send_messages
+            or not permissions.embed_links
+        ):
+            await interaction.response.send_message(
+                "❌ البوت يحتاج View Channel + Send Messages + Embed Links في روم الـLogs.",
+                ephemeral=True
+            )
             return
+
         test_embed = discord.Embed(
             title="📋 Logs جاهزة",
-            description="تم اختبار روم الـLogs بنجاح. سيتم استخدامه الآن لتسجيل أحداث البوت.",
+            description=(
+                "تم اختبار روم الـLogs بنجاح. "
+                "سيتم استخدامه الآن لتسجيل أحداث البوت."
+            ),
             color=discord.Color.green(),
             timestamp=datetime.now(timezone.utc)
         )
+
         try:
             await channel.send(embed=test_embed)
+
         except discord.Forbidden:
-            await interaction.response.send_message("❌ Discord رفض الإرسال في روم الـLogs. راجع صلاحيات البوت.", ephemeral=True)
-            return
-        except discord.HTTPException as error:
-            print(f"❌ Logs Test Error: {error}")
-            await interaction.response.send_message("❌ صار خطأ أثناء اختبار روم الـLogs.", ephemeral=True)
+            await interaction.response.send_message(
+                "❌ Discord رفض الإرسال في روم الـLogs. راجع صلاحيات البوت.",
+                ephemeral=True
+            )
             return
 
-        set_setting(interaction.guild, "log_channel_id", channel.id)
-        await interaction.response.edit_message(content=f"✅ تم تحديد روم الـLogs: {channel.mention}\n🟢 تم إرسال رسالة اختبار بنجاح.", view=None)
+        except discord.HTTPException as error:
+            print(f"❌ Logs Test Error: {error}")
+
+            await interaction.response.send_message(
+                "❌ صار خطأ أثناء اختبار روم الـLogs.",
+                ephemeral=True
+            )
+            return
+
+        set_setting(
+            interaction.guild,
+            "log_channel_id",
+            channel.id
+        )
+
+        await interaction.response.edit_message(
+            content=(
+                f"✅ تم تحديد روم الـLogs: {channel.mention}\n"
+                "🟢 تم إرسال رسالة اختبار بنجاح."
+            ),
+            view=None
+        )
+
 
 class LogChannelSelectView(discord.ui.View):
     def __init__(self, owner_id):
         super().__init__(timeout=120)
-        self.add_item(LogChannelSelect(owner_id))
+        self.add_item(
+            LogChannelSelect(owner_id)
+        )
 
-@bot.tree.command(name="log", description="اختيار روم الـLogs")
+
+@bot.tree.command(
+    name="log",
+    description="اختيار روم الـLogs"
+)
 @app_commands.check(lambda interaction: is_admin(interaction.user))
 async def log_command(interaction):
-    await interaction.response.send_message("📋 **إعداد الـLogs**\n\nاختر الروم الذي تريد إرسال Logs البوت إليه:", view=LogChannelSelectView(interaction.user.id), ephemeral=True)
-
-@bot.tree.command(name="logstatus", description="عرض حالة روم الـLogs")
-@app_commands.check(lambda interaction: is_admin(interaction.user))
-async def log_status_command(interaction):
-    channel = get_log_channel(interaction.guild)
     await interaction.response.send_message(
-        f"📋 روم الـLogs: {channel.mention}" if channel else "❌ لم يتم تحديد روم Logs صحيح. استخدم `/log`.",
+        "📋 **إعداد الـLogs**\n\n"
+        "اختر الروم الذي تريد إرسال Logs البوت إليه:",
+        view=LogChannelSelectView(
+            interaction.user.id
+        ),
         ephemeral=True
     )
 
-@bot.tree.command(name="botstatus", description="فحص إعدادات البوت وصلاحياته")
+
+@bot.tree.command(
+    name="logstatus",
+    description="عرض حالة روم الـLogs"
+)
+@app_commands.check(lambda interaction: is_admin(interaction.user))
+async def log_status_command(interaction):
+    channel = get_log_channel(interaction.guild)
+
+    await interaction.response.send_message(
+        f"📋 روم الـLogs: {channel.mention}"
+        if channel
+        else "❌ لم يتم تحديد روم Logs صحيح. استخدم `/log`.",
+        ephemeral=True
+    )
+
+
+@bot.tree.command(
+    name="botstatus",
+    description="فحص إعدادات البوت وصلاحياته"
+)
 @app_commands.check(lambda interaction: is_admin(interaction.user))
 async def bot_status_command(interaction):
     guild = interaction.guild
@@ -1545,74 +2279,307 @@ async def bot_status_command(interaction):
     category = get_ticket_category(guild)
     logs = get_log_channel(guild)
     welcome = await get_welcome_channel(guild)
-    embed = discord.Embed(title="🩺 فحص البوت", color=discord.Color.green())
-    embed.add_field(name="👑 Admin", value=admin.mention if admin else "❌ غير موجودة", inline=True)
-    embed.add_field(name="🛡️ Staff", value=staff.mention if staff else "❌ غير موجودة", inline=True)
-    embed.add_field(name="🎫 Category", value=category.name if category else "❌ غير موجودة", inline=True)
-    embed.add_field(name="📋 Logs", value=logs.mention if logs else "❌ غير محدد", inline=True)
-    embed.add_field(name="👋 Welcome", value=welcome.mention if welcome else "❌ غير محدد", inline=True)
-    if me:
-        checks=[("View Channel",me.guild_permissions.view_channel),("Send Messages",me.guild_permissions.send_messages),("Manage Channels",me.guild_permissions.manage_channels),("Manage Roles",me.guild_permissions.manage_roles),("Manage Messages",me.guild_permissions.manage_messages),("Manage Threads",me.guild_permissions.manage_threads),("Embed Links",me.guild_permissions.embed_links),("Attach Files",me.guild_permissions.attach_files)]
-        missing=[name for name,ok in checks if not ok]
-        embed.add_field(name="🔐 الصلاحيات", value="✅ الأساسية موجودة" if not missing else "⚠️ ناقص:\n"+"\n".join(f"• `{x}`" for x in missing), inline=False)
-    await interaction.response.send_message(embed=embed, ephemeral=True)
 
-@bot.tree.command(name="stats", description="عرض إحصائيات نظام التذاكر")
+    embed = discord.Embed(
+        title="🩺 فحص البوت",
+        color=discord.Color.green()
+    )
+
+    embed.add_field(
+        name="👑 Admin",
+        value=admin.mention if admin else "❌ غير موجودة",
+        inline=True
+    )
+
+    embed.add_field(
+        name="🛡️ Staff",
+        value=staff.mention if staff else "❌ غير موجودة",
+        inline=True
+    )
+
+    embed.add_field(
+        name="🎫 Category",
+        value=category.name if category else "❌ غير موجودة",
+        inline=True
+    )
+
+    embed.add_field(
+        name="📋 Logs",
+        value=logs.mention if logs else "❌ غير محدد",
+        inline=True
+    )
+
+    embed.add_field(
+        name="👋 Welcome",
+        value=welcome.mention if welcome else "❌ غير محدد",
+        inline=True
+    )
+
+    if me:
+        checks = [
+            ("View Channel", me.guild_permissions.view_channel),
+            ("Send Messages", me.guild_permissions.send_messages),
+            ("Manage Channels", me.guild_permissions.manage_channels),
+            ("Manage Roles", me.guild_permissions.manage_roles),
+            ("Manage Messages", me.guild_permissions.manage_messages),
+            ("Manage Threads", me.guild_permissions.manage_threads),
+            ("Embed Links", me.guild_permissions.embed_links),
+            ("Attach Files", me.guild_permissions.attach_files),
+        ]
+
+        missing = [
+            name
+            for name, ok in checks
+            if not ok
+        ]
+
+        embed.add_field(
+            name="🔐 الصلاحيات",
+            value=(
+                "✅ الأساسية موجودة"
+                if not missing
+                else "⚠️ ناقص:\n"
+                + "\n".join(
+                    f"• `{x}`"
+                    for x in missing
+                )
+            ),
+            inline=False
+        )
+
+    await interaction.response.send_message(
+        embed=embed,
+        ephemeral=True
+    )
+
+
+@bot.tree.command(
+    name="stats",
+    description="عرض إحصائيات نظام التذاكر"
+)
 @app_commands.check(lambda interaction: is_admin(interaction.user))
 async def stats_command(interaction):
     guild = interaction.guild
     stats = get_stats(guild)
+
     opened = int(stats.get("opened", 0))
     closed = int(stats.get("closed", 0))
     claimed = int(stats.get("claimed", 0))
-    open_now = sum(1 for channel in guild.text_channels if is_ticket_channel(channel))
-    total_duration = float(stats.get("total_duration_seconds", 0))
-    avg_minutes = (total_duration / closed / 60) if closed else 0
 
-    embed = discord.Embed(title="📊 إحصائيات التذاكر", color=discord.Color.blurple(), timestamp=datetime.now(timezone.utc))
-    embed.add_field(name="🎫 المفتوحة الآن", value=str(open_now), inline=True)
-    embed.add_field(name="📈 إجمالي التذاكر", value=str(opened), inline=True)
-    embed.add_field(name="🔒 المغلقة", value=str(closed), inline=True)
-    embed.add_field(name="👤 الاستلامات", value=str(claimed), inline=True)
-    embed.add_field(name="⏱️ متوسط مدة التذكرة", value=f"{avg_minutes:.1f} دقيقة", inline=True)
-    embed.add_field(name="📂 حسب النوع", value=top_stats_text(stats.get("categories", {})), inline=False)
-    await interaction.response.send_message(embed=embed, ephemeral=True)
+    open_now = sum(
+        1
+        for channel in guild.text_channels
+        if is_ticket_channel(channel)
+    )
 
-@bot.tree.command(name="dashboard", description="لوحة إدارة نظام التذاكر")
+    total_duration = float(
+        stats.get(
+            "total_duration_seconds",
+            0
+        )
+    )
+
+    avg_minutes = (
+        total_duration / closed / 60
+        if closed
+        else 0
+    )
+
+    embed = discord.Embed(
+        title="📊 إحصائيات التذاكر",
+        color=discord.Color.blurple(),
+        timestamp=datetime.now(timezone.utc)
+    )
+
+    embed.add_field(
+        name="🎫 المفتوحة الآن",
+        value=str(open_now),
+        inline=True
+    )
+
+    embed.add_field(
+        name="📈 إجمالي التذاكر",
+        value=str(opened),
+        inline=True
+    )
+
+    embed.add_field(
+        name="🔒 المغلقة",
+        value=str(closed),
+        inline=True
+    )
+
+    embed.add_field(
+        name="👤 الاستلامات",
+        value=str(claimed),
+        inline=True
+    )
+
+    embed.add_field(
+        name="⏱️ متوسط مدة التذكرة",
+        value=f"{avg_minutes:.1f} دقيقة",
+        inline=True
+    )
+
+    embed.add_field(
+        name="📂 حسب النوع",
+        value=top_stats_text(
+            stats.get("categories", {})
+        ),
+        inline=False
+    )
+
+    await interaction.response.send_message(
+        embed=embed,
+        ephemeral=True
+    )
+
+
+@bot.tree.command(
+    name="dashboard",
+    description="لوحة إدارة نظام التذاكر"
+)
 @app_commands.check(lambda interaction: is_admin(interaction.user))
 async def dashboard_command(interaction):
     guild = interaction.guild
     stats = get_stats(guild)
-    open_now = sum(1 for channel in guild.text_channels if is_ticket_channel(channel))
-    embed = discord.Embed(title="🎛️ Ticket Dashboard", description="لوحة سريعة لإدارة ومراقبة نظام التذاكر.", color=discord.Color.blurple())
-    embed.add_field(name="🎫 Open", value=str(open_now), inline=True)
-    embed.add_field(name="📈 Total", value=str(stats.get("opened", 0)), inline=True)
-    embed.add_field(name="🔒 Closed", value=str(stats.get("closed", 0)), inline=True)
-    embed.add_field(name="👤 Claimed", value=str(stats.get("claimed", 0)), inline=True)
+
+    open_now = sum(
+        1
+        for channel in guild.text_channels
+        if is_ticket_channel(channel)
+    )
+
+    embed = discord.Embed(
+        title="🎛️ Ticket Dashboard",
+        description="لوحة سريعة لإدارة ومراقبة نظام التذاكر.",
+        color=discord.Color.blurple()
+    )
+
+    embed.add_field(
+        name="🎫 Open",
+        value=str(open_now),
+        inline=True
+    )
+
+    embed.add_field(
+        name="📈 Total",
+        value=str(stats.get("opened", 0)),
+        inline=True
+    )
+
+    embed.add_field(
+        name="🔒 Closed",
+        value=str(stats.get("closed", 0)),
+        inline=True
+    )
+
+    embed.add_field(
+        name="👤 Claimed",
+        value=str(stats.get("claimed", 0)),
+        inline=True
+    )
+
     logs_channel = get_log_channel(guild)
     welcome_channel = await get_welcome_channel(guild)
-    embed.add_field(name="📋 Logs", value=logs_channel.mention if logs_channel else "❌ غير محدد", inline=True)
-    embed.add_field(name="👋 Welcome", value=welcome_channel.mention if welcome_channel else "❌ غير محدد", inline=True)
-    await interaction.response.send_message(embed=embed, ephemeral=True)
+
+    embed.add_field(
+        name="📋 Logs",
+        value=(
+            logs_channel.mention
+            if logs_channel
+            else "❌ غير محدد"
+        ),
+        inline=True
+    )
+
+    embed.add_field(
+        name="👋 Welcome",
+        value=(
+            welcome_channel.mention
+            if welcome_channel
+            else "❌ غير محدد"
+        ),
+        inline=True
+    )
+
+    await interaction.response.send_message(
+        embed=embed,
+        ephemeral=True
+    )
 
 
-@bot.tree.command(name="ticketinfo", description="عرض معلومات التذكرة الحالية")
+@bot.tree.command(
+    name="ticketinfo",
+    description="عرض معلومات التذكرة الحالية"
+)
 async def ticket_info_command(interaction):
-    channel=interaction.channel
-    if not isinstance(channel, discord.TextChannel) or not is_ticket_channel(channel):
-        await interaction.response.send_message("❌ هذا الأمر يعمل داخل التذاكر فقط.", ephemeral=True)
-        return
-    owner=get_ticket_owner_id(channel)
-    category=get_ticket_category_value(channel)
-    claimed=get_ticket_claimed_id(channel)
-    embed=discord.Embed(title="🎫 معلومات التذكرة", color=discord.Color.blurple())
-    embed.add_field(name="👤 صاحب التذكرة", value=f"<@{owner}>" if owner else "غير معروف", inline=True)
-    embed.add_field(name="📂 النوع", value=get_category_label(category) if category else "غير معروف", inline=True)
-    embed.add_field(name="👤 المستلم", value=f"<@{claimed}>" if claimed else "لم يتم الاستلام", inline=True)
-    embed.add_field(name="🆔 ID", value=str(channel.id), inline=False)
-    embed.add_field(name="📅 الإنشاء", value=discord.utils.format_dt(channel.created_at, style="F"), inline=True)
-    await interaction.response.send_message(embed=embed, ephemeral=True)
+    channel = interaction.channel
 
+    if (
+        not isinstance(channel, discord.TextChannel)
+        or not is_ticket_channel(channel)
+    ):
+        await interaction.response.send_message(
+            "❌ هذا الأمر يعمل داخل التذاكر فقط.",
+            ephemeral=True
+        )
+        return
+
+    owner = get_ticket_owner_id(channel)
+    category = get_ticket_category_value(channel)
+    claimed = get_ticket_claimed_id(channel)
+
+    embed = discord.Embed(
+        title="🎫 معلومات التذكرة",
+        color=discord.Color.blurple()
+    )
+
+    embed.add_field(
+        name="👤 صاحب التذكرة",
+        value=f"<@{owner}>" if owner else "غير معروف",
+        inline=True
+    )
+
+    embed.add_field(
+        name="📂 النوع",
+        value=(
+            get_category_label(category)
+            if category
+            else "غير معروف"
+        ),
+        inline=True
+    )
+
+    embed.add_field(
+        name="👤 المستلم",
+        value=(
+            f"<@{claimed}>"
+            if claimed
+            else "لم يتم الاستلام"
+        ),
+        inline=True
+    )
+
+    embed.add_field(
+        name="🆔 ID",
+        value=str(channel.id),
+        inline=False
+    )
+
+    embed.add_field(
+        name="📅 الإنشاء",
+        value=discord.utils.format_dt(
+            channel.created_at,
+            style="F"
+        ),
+        inline=True
+    )
+
+    await interaction.response.send_message(
+        embed=embed,
+        ephemeral=True
+    )
 # =========================================================
 # Ticket Config
 # =========================================================
