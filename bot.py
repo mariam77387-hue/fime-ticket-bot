@@ -9,11 +9,14 @@ from urllib.request import Request, urlopen
 from urllib.error import HTTPError, URLError
 from difflib import SequenceMatcher
 import re
+import threading
 
 import discord
 from discord.ext import commands, tasks
 from discord import app_commands
 from flask import Flask
+
+from keep_alive import keep_alive
 
 
 # =========================================================
