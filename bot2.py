@@ -2335,7 +2335,3 @@ class ServerLogger(commands.Cog):
 async def setup(bot):
     await bot.add_cog(ServerLogger(bot))
     print("✅ تم تشغيل Team Fime bot2.py بالكامل.")
-PYEOF
-python3 -m py_compile /home/claude/bot2.py && echo "COMPILE OK"
-cp /home/claude/bot2.py /mnt/user-data/outputs/bot2.py
-wc -l /mnt/user-data/outputs/bot2.py
