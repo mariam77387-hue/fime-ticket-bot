@@ -1,4 +1,4 @@
-import asyncio
+
 import json
 import os
 import re
@@ -63,7 +63,6 @@ LOG_COLORS = {
     "protection": discord.Color.red(),
     "moderation": discord.Color.red(),
     "level": discord.Color.gold(),
-    "ai": discord.Color.blurple(),
 }
 
 EVENT_LABELS = {
@@ -78,31 +77,30 @@ EVENT_LABELS = {
     "voice_leave": "🔇 خروج من الفويس",
     "voice_move": "🔀 نقل في الفويس",
     "thread_create": "🧵 إنشاء Thread",
-    "thread_delete": "🗑️ حذف Thread",
+    "thread_delete": "🗑 حذف Thread",
     "thread_update": "📝 تعديل Thread",
     "category_create": "📁 إنشاء Category",
-    "category_delete": "🗑️ حذف Category",
+    "category_delete": "🗑 حذف Category",
     "category_update": "📝 تعديل Category",
     "emoji_create": "😀 إنشاء Emoji",
-    "emoji_delete": "🗑️ حذف Emoji",
+    "emoji_delete": "🗑 حذف Emoji",
     "emoji_update": "😀 تعديل Emoji",
-    "sticker_create": "🏷️ إنشاء Sticker",
-    "sticker_delete": "🗑️ حذف Sticker",
-    "sticker_update": "🏷️ تعديل Sticker",
-    "member_update": "✏️ تعديل عضو",
+    "sticker_create": "🏷 إنشاء Sticker",
+    "sticker_delete": "🗑 حذف Sticker",
+    "sticker_update": "🏷 تعديل Sticker",
+    "member_update": "✏ تعديل عضو",
     "ban": "🔨 حظر عضو",
     "unban": "🔓 فك حظر عضو",
-    "message_delete": "🗑️ حذف رسالة",
-    "message_bulk_delete": "🗑️ حذف رسائل",
-    "message_edit": "✏️ تعديل رسالة",
+    "message_delete": "🗑 حذف رسالة",
+    "message_bulk_delete": "🗑 حذف رسائل",
+    "message_edit": "✏ تعديل رسالة",
     "invite_create": "🔗 إنشاء دعوة",
     "invite_delete": "🔗 حذف دعوة",
-    "guild_update": "⚙️ تعديل السيرفر",
-    "warning": "⚠️ تحذير",
-    "protection": "🛡️ حماية",
-    "moderation": "⚖️ عقوبة",
+    "guild_update": "⚙ تعديل السيرفر",
+    "warning": "⚠ تحذير",
+    "protection": "🛡 حماية",
+    "moderation": "⚖ عقوبة",
     "level": "⭐ Level",
-    "ai": "🤖 AI",
 }
 
 ENABLED_DEFAULTS = {key: True for key in EVENT_LABELS}
@@ -176,12 +174,6 @@ def guild_config(guild):
     # Permanent invite
     cfg.setdefault("permanent_invite_code", None)
     cfg.setdefault("permanent_invite_channel_id", None)
-
-    # AI
-    ai = cfg.setdefault("ai", {})
-    ai.setdefault("enabled", False)
-    ai.setdefault("channel_id", None)
-    ai.setdefault("system_prompt", "أنت مساعد مفيد وودود داخل سيرفر Discord. كن مختصرًا وواضحًا. إذا سأل المستخدم عن سكربتات أو إعدادات البوت، أعطه شرحًا آمنًا ومباشرًا.")
 
     # Warnings
     cfg.setdefault("warnings", {})
@@ -395,7 +387,7 @@ class ServerLogger(commands.Cog):
                     )
                     count += 1
                 except Exception as error:
-                    print(f"⚠️ تعذر استعادة panel {panel_id}: {error}")
+                    print(f"⚠ تعذر استعادة panel {panel_id}: {error}")
 
         print(f"✅ تم استعادة {count} لوحة أزرار.")
 
@@ -566,7 +558,6 @@ class ServerLogger(commands.Cog):
 
         cfg = guild_config(interaction.guild)
         protection = cfg["protection"]
-        ai = cfg["ai"]
 
         embed.add_field(
             name="📋 Logs",
@@ -579,18 +570,13 @@ class ServerLogger(commands.Cog):
             inline=False,
         )
         embed.add_field(
-            name="⚖️ Moderation",
+            name="⚖ Moderation",
             value="`/warn` • `/warnings` • `/clearwarnings` • `/timeout` • `/ban` • `/unban` • `/kick`",
             inline=False,
         )
         embed.add_field(
-            name="🛡️ Protection",
+            name="🛡 Protection",
             value=f"{'🟢 مفعلة' if protection['enabled'] else '🔴 معطلة'}",
-            inline=True,
-        )
-        embed.add_field(
-            name="🤖 AI",
-            value=f"{'🟢 مفعلة' if ai['enabled'] else '🔴 معطلة'}",
             inline=True,
         )
         embed.add_field(
@@ -599,7 +585,7 @@ class ServerLogger(commands.Cog):
             inline=True,
         )
         embed.add_field(
-            name="🏷️ Roles",
+            name="🏷 Roles",
             value="`/roles` • `/roleinfo`",
             inline=True,
         )
@@ -710,7 +696,7 @@ class ServerLogger(commands.Cog):
             )
 
         embed = discord.Embed(
-            title="🏷️ رتب السيرفر",
+            title="🏷 رتب السيرفر",
             description="\n".join(lines) if lines else "لا توجد رتب.",
             color=discord.Color.blurple(),
         )
@@ -726,7 +712,7 @@ class ServerLogger(commands.Cog):
                 permissions.append(name.replace("_", " ").title())
 
         embed = discord.Embed(
-            title=f"🏷️ {role.name}",
+            title=f"🏷 {role.name}",
             color=role.color if role.color.value else discord.Color.blurple(),
         )
         embed.add_field(name="🆔 ID", value=f"`{role.id}`", inline=True)
@@ -834,7 +820,7 @@ class ServerLogger(commands.Cog):
             return
         if channel is None:
             set_value(interaction.guild, ["level_channel_id"], None)
-            await interaction.response.send_message("♻️ تم إلغاء روم إعلانات اللفل. ستعود رسائل اللفل إلى اللوق.", ephemeral=True)
+            await interaction.response.send_message("♻ تم إلغاء روم إعلانات اللفل. ستعود رسائل اللفل إلى اللوق.", ephemeral=True)
             return
         set_value(interaction.guild, ["level_channel_id"], channel.id)
         await interaction.response.send_message(f"✅ روم اللفل أصبح {channel.mention}.", ephemeral=True)
@@ -922,7 +908,7 @@ class ServerLogger(commands.Cog):
             return
 
         self.set_user_xp(interaction.guild, member.id, 0)
-        await interaction.response.send_message(f"♻️ تم تصفير Level وXP لـ {member.mention}.")
+        await interaction.response.send_message(f"♻ تم تصفير Level وXP لـ {member.mention}.")
 
     @app_commands.command(name="levelreward", description="تحديد رتبة كمكافأة لمستوى")
     @app_commands.describe(level="رقم المستوى", role="الرتبة")
@@ -988,7 +974,7 @@ class ServerLogger(commands.Cog):
         warning = self.add_warning(interaction.guild, member, interaction.user, reason)
 
         await interaction.response.send_message(
-            f"⚠️ تم تسجيل تحذير على {member.mention}.\n"
+            f"⚠ تم تسجيل تحذير على {member.mention}.\n"
             f"**السبب:** {reason}\n"
             f"**رقم التحذير:** `{warning['id']}`"
         )
@@ -1026,7 +1012,7 @@ class ServerLogger(commands.Cog):
             )
 
         embed = discord.Embed(
-            title=f"⚠️ تحذيرات {member}",
+            title=f"⚠ تحذيرات {member}",
             description="\n\n".join(lines),
             color=discord.Color.orange(),
         )
@@ -1375,7 +1361,7 @@ class ServerLogger(commands.Cog):
         await self.send_log(
             message.guild,
             "protection",
-            f"🛡️ تم تفعيل الحماية على {member.mention}.",
+            f"🛡 تم تفعيل الحماية على {member.mention}.",
             fields=[
                 ("السبب", reason, True),
                 ("العقوبة", f"Timeout {int(seconds)} ثانية", True),
@@ -1468,7 +1454,7 @@ class ServerLogger(commands.Cog):
         cfg = guild_config(interaction.guild)["protection"]
 
         embed = discord.Embed(
-            title="🛡️ Server Protection",
+            title="🛡 Server Protection",
             color=discord.Color.red(),
         )
         embed.add_field(name="النظام", value="🟢 ON" if cfg["enabled"] else "🔴 OFF", inline=True)
@@ -1493,7 +1479,7 @@ class ServerLogger(commands.Cog):
 
         set_value(interaction.guild, ["protection", "enabled"], enabled)
         await interaction.response.send_message(
-            f"🛡️ الحماية الآن: {'🟢 مفعلة' if enabled else '🔴 معطلة'}"
+            f"🛡 الحماية الآن: {'🟢 مفعلة' if enabled else '🔴 معطلة'}"
         )
 
     @app_commands.command(name="antispam", description="تعديل Anti-Spam")
@@ -1543,7 +1529,7 @@ class ServerLogger(commands.Cog):
 
         update_guild_config(interaction.guild, writer)
         await interaction.response.send_message(
-            f"🛡️ Anti-Spam تم ضبطه: **{limit} رسائل خلال {window} ثواني** → Timeout **{label}**.",
+            f"🛡 Anti-Spam تم ضبطه: **{limit} رسائل خلال {window} ثواني** → Timeout **{label}**.",
             ephemeral=True,
         )
 
@@ -1721,15 +1707,15 @@ class ServerLogger(commands.Cog):
         status = (
             "🆕 تم إنشاء رابط دائم جديد."
             if created
-            else "♾️ تم استخدام الرابط الدائم المحفوظ."
+            else "♾ تم استخدام الرابط الدائم المحفوظ."
         )
 
         await interaction.followup.send(
             "🔗 **رابط الدعوة الدائم لسيرفر Team Fime**\n"
             f"https://discord.gg/{invite.code}\n\n"
             f"{status}\n"
-            "♾️ بدون انتهاء\n"
-            "♾️ بدون حد لعدد الاستخدامات",
+            "♾ بدون انتهاء\n"
+            "♾ بدون حد لعدد الاستخدامات",
             ephemeral=True
         )
 
@@ -1755,7 +1741,7 @@ class ServerLogger(commands.Cog):
         await interaction.response.send_message(
             "🔗 **رابط سيرفر Team Fime**\n"
             f"https://discord.gg/{invite.code}\n\n"
-            "♾️ رابط دائم"
+            "♾ رابط دائم"
         )
 
 
@@ -1785,7 +1771,7 @@ class ServerLogger(commands.Cog):
         await interaction.response.send_message(
             "🤖 **دعوة Team Fime Bot**\n\n"
             "اضغط على الزر بالأسفل لإضافة البوت إلى سيرفرك.\n"
-            "🛡️ البوت سيطلب صلاحية Administrator.",
+            "🛡 البوت سيطلب صلاحية Administrator.",
             view=view,
             ephemeral=True
         )
@@ -1869,7 +1855,7 @@ class ServerLogger(commands.Cog):
             if value in ("links", "both"):
                 p["exempt_link_role_ids"] = [x for x in p.setdefault("exempt_link_role_ids", []) if int(x) != role.id]
         update_guild_config(interaction.guild, writer)
-        await interaction.response.send_message(f"♻️ تم إلغاء استثناء {role.mention}.", ephemeral=True)
+        await interaction.response.send_message(f"♻ تم إلغاء استثناء {role.mention}.", ephemeral=True)
 
     @app_commands.command(name="protectionexemptlist", description="عرض الرتب المستثناة من الحماية")
     @app_commands.default_permissions(administrator=True)
@@ -1880,269 +1866,9 @@ class ServerLogger(commands.Cog):
         p = guild_config(interaction.guild)["protection"]
         spam_roles = [interaction.guild.get_role(int(x)) for x in p.get("exempt_spam_role_ids", [])]
         link_roles = [interaction.guild.get_role(int(x)) for x in p.get("exempt_link_role_ids", [])]
-        embed = discord.Embed(title="🛡️ Protection Exempt Roles", color=discord.Color.blurple())
+        embed = discord.Embed(title="🛡 Protection Exempt Roles", color=discord.Color.blurple())
         embed.add_field(name="Spam / Repeat", value=", ".join(r.mention for r in spam_roles if r) or "لا يوجد", inline=False)
         embed.add_field(name="Links", value=", ".join(r.mention for r in link_roles if r) or "لا يوجد", inline=False)
-        await interaction.response.send_message(embed=embed, ephemeral=True)
-
-    # =====================================================
-    # AI Chat — Team Fime Assistant
-    # =====================================================
-
-    # معلومات السيرفر التي يعرفها المساعد حتى بدون API.
-    AI_SERVER_GUIDE = {
-        "scripts": "<#{scripts}>",
-        "search": "<#{search}>",
-        "updates": "<#{updates}>",
-        "human_help": "<#{human_help}>",
-        "chat": "<#{chat}>",
-        "delta_key": "<#{delta_key}>",
-        "rules": "<#{rules}>",
-        "minecraft": "<#{minecraft}>",
-    }
-
-    AI_CHANNEL_IDS = {
-        "scripts": 1537157629963538432,
-        "search": 1537546827593818154,
-        "updates": 1537167568950001664,
-        "human_help": 1537177338545053756,
-        "chat": 1529802314729964230,
-        "delta_key": 1530187925474771164,
-        "rules": 1537173539826835597,
-        "minecraft": 1537396033661829180,
-    }
-
-    def _ai_channels(self):
-        return {
-            key: f"<#{channel_id}>"
-            for key, channel_id in self.AI_CHANNEL_IDS.items()
-        }
-
-    def _normalize_ai_text(self, text):
-        text = (text or "").strip().lower()
-        replacements = {
-            "أ": "ا", "إ": "ا", "آ": "ا",
-            "ة": "ه", "ى": "ي",
-            "ؤ": "و", "ئ": "ي",
-        }
-        for old, new in replacements.items():
-            text = text.replace(old, new)
-        text = re.sub(r"[\u064b-\u065f\u0670]", "", text)
-        text = re.sub(r"\s+", " ", text)
-        return text
-
-    def local_ai_response(self, text):
-        """مساعد محلي فعلي: يعرف أقسام Team Fime ويرد مباشرة بدون كلام تقني."""
-        t = self._normalize_ai_text(text)
-        ch = self._ai_channels()
-
-        # ترحيب / تعريف المساعد — بدون كشف طريقة تشغيله للمستخدم.
-        if (
-            t in {"طلسم", "هلا", "هلا والله", "السلام عليكم", "السلام عليكم ورحمة الله",
-                 "مرحبا", "مراحب", "الو", "hello", "hi", "hey"}
-            or any(x in t for x in ["من انت", "وش انت", "منو انت", "وش تسوي", "وش تقدر تسوي"])
-        ):
-            return "هلا 👋 أنا مساعد 𝐓𝐞𝐚𝐦 𝐅𝐢𝐦𝐞، موجود عشان أجاوبك على أسئلتك وأدلك على المكان الصحيح في السيرفر. اكتب سؤالك مباشرة."
-
-        # السكربتات / Delta.
-        if any(x in t for x in [
-            "وين احط السكربت", "وين احط سكربت", "كيف احط السكربت", "كيف احط سكربت",
-            "مكان السكربت", "مكان سكربت", "ارسله وين", "احط السكربت وين",
-            "وين ارسل السكربت", "كيف ارسل السكربت",
-        ]):
-            return f"حط السكربت في روم السكربتات {ch['scripts']} . وإذا ما عرفت الطريقة أو واجهتك مشكلة، توجه لروم حل المشاكل {ch['human_help']} وبنساعدك."
-
-        if any(x in t for x in ["دلتا", "delta", "مفتاح دلتا", "key دلتا", "مفتاح delta"]):
-            return f"إذا تقصد مفتاح دلتا، تلقى كل ما يخصه في {ch['delta_key']}."
-
-        # البحث عن سكربت.
-        if any(x in t for x in [
-            "ابحث عن سكربت", "البحث عن سكربت", "ابي سكربت", "ابغى سكربت",
-            "وين السكربت", "وين القى سكربت", "دور لي سكربت", "سكريبت",
-        ]) and not any(x in t for x in ["وين احط", "كيف احط"]):
-            return f"للبحث عن سكربت استخدم روم البحث {ch['search']}."
-
-        # تحديثات السكربتات.
-        if any(x in t for x in ["تحديث السكربت", "تحديثات السكربت", "اخر تحديث", "اخر تحديث للسكربت", "التحديث عن السكربت"]):
-            return f"تحديثات السكربتات تنزل في روم التحديثات {ch['updates']}."
-
-        # Minecraft.
-        if any(x in t for x in ["ماينكرفت", "ماين كرفت", "minecraft", "ماينكرافت"]):
-            return f"كل ما يخص Minecraft موجود في روم ماينكرفت {ch['minecraft']}."
-
-        # القوانين.
-        if any(x in t for x in ["القوانين", "قوانين السيرفر", "قوانين", "rules"]):
-            return f"تقدر تشوف قوانين السيرفر هنا {ch['rules']}."
-
-        # الشات.
-        if any(x in t for x in ["الشات", "وين الشات", "روم الشات", "chat"]):
-            return f"الشات العام هنا {ch['chat']}."
-
-        # التذاكر / الدعم.
-        if any(x in t for x in ["تذكره", "تذكرة", "ticket", "دعم فني", "الدعم"]):
-            return "إذا تحتاج دعم إداري، افتح تذكرة من نظام التذاكر في السيرفر."
-
-        # اللفلات.
-        if any(x in t for x in ["لفل", "لفلات", "level", "xp", "خبره"]):
-            return "نظام اللفل يعطيك XP من نشاطك في الشات والفويس، وكل ما ارتفع مستواك تقدر توصل لمكافآت اللفل المحددة في السيرفر."
-
-        # أوامر البوت / الحماية.
-        if any(x in t for x in ["اوامر البوت", "اوامر البوت", "commands", "وش اوامر البوت"]):
-            return "إذا تقصد أوامر الإدارة والبوت، استخدم أمر /commands عشان تشوف الأنظمة المتوفرة."
-
-        if any(x in t for x in ["حمايه", "حماية", "anti spam", "سبام", "حظر الروابط"]):
-            return "الحماية تشمل مكافحة السبام وتكرار الرسائل والروابط والمنشنات، ويتم التحكم فيها من أوامر الإدارة."
-
-        if any(x in t for x in ["مساعده", "مساعدة", "help", "ما عرفت", "ماعرف", "مو فاهم", "ما فهمت", "مشكله", "مشكلة", "مشكلتي"]):
-            return f"إذا ما لقيت جواب لمشكلتك، توجه لروم المساعدة البشرية {ch['human_help']} وبيساعدك أحد من الفريق."
-
-        # لا تخترع جوابًا عند عدم معرفة السؤال.
-        return f"ما عندي جواب مؤكد على سؤالك حاليًا. توجه لروم المساعدة البشرية {ch['human_help']} وبيساعدك الفريق هناك."
-
-    def build_ai_system_prompt(self, system_prompt):
-        ch = self._ai_channels()
-        guide = f"""
-أنت مساعد 𝐓𝐞𝐚𝐦 𝐅𝐢𝐦𝐞 داخل Discord.
-
-أسلوبك:
-- تكلم بالعربية البسيطة والطبيعية، وبلهجة خليجية خفيفة إذا كان المستخدم يتكلم بها.
-- لا تتكلم عن API Key أو النموذج أو أنك مساعد محلي أو سحابي، إلا إذا سأل المستخدم عن ذلك بشكل مباشر.
-- لا تقل للمستخدم إنك تحتاج API أو إنك لا تملك نموذجًا.
-- جاوب مباشرة وباختصار، بدون مقدمات تقنية أو حشو.
-- لا تخترع أسماء رومات أو معلومات غير موجودة في الدليل.
-- إذا كان السؤال عن مكان شيء في السيرفر، استخدم منشن الروم الصحيح من الدليل.
-- إذا لم تكن متأكدًا من الإجابة، لا تخمّن؛ وجّه المستخدم إلى روم المساعدة البشرية.
-
-دليل Team Fime:
-- السكربتات: {ch['scripts']}
-- البحث عن سكربت: {ch['search']}
-- تحديثات السكربتات: {ch['updates']}
-- المساعدة البشرية: {ch['human_help']}
-- الشات: {ch['chat']}
-- مفتاح/رابط Delta: {ch['delta_key']}
-- القوانين: {ch['rules']}
-- Minecraft: {ch['minecraft']}
-
-قاعدة مهمة:
-إذا سأل المستخدم "وين أحط السكربت؟" أو سؤالًا مشابهًا عن مكان السكربت، وجّهه إلى روم السكربتات {ch['scripts']}. وإذا كان يسأل عن مشكلة أو لا يعرف الطريقة، وجّهه إلى {ch['human_help']}.
-إذا لم تعرف الإجابة، استخدم هذه الصيغة بمعنى قريب منها: "ما عندي جواب مؤكد على سؤالك حاليًا. توجه لروم المساعدة البشرية {ch['human_help']} وبيساعدك الفريق هناك."
-
-{system_prompt}
-"""
-        return guide.strip()
-
-    async def openai_response(self, user_text, system_prompt):
-        # الأسئلة التي نعرفها بشكل مؤكد تأخذ جواب Team Fime المحدد حتى مع وجود API.
-        local_answer = self.local_ai_response(user_text)
-        normalized = self._normalize_ai_text(user_text)
-
-        known_markers = [
-            "سكربت", "سكريبت", "دلتا", "delta", "ماينكرفت", "minecraft",
-            "القوانين", "قوانين", "الشات", "تذكرة", "ticket", "لفل", "level",
-            "مساعده", "مساعدة", "مشكله", "مشكلة", "اوامر البوت", "commands",
-            "طلسم", "هلا", "مرحبا", "من انت", "وش انت",
-        ]
-        if any(marker in normalized for marker in known_markers):
-            return local_answer, None
-
-        api_key = os.getenv("AI_API_KEY")
-        if not api_key:
-            return local_answer, None
-
-        model = os.getenv("AI_MODEL", "gpt-5.6-luna")
-        payload = {
-            "model": model,
-            "instructions": self.build_ai_system_prompt(system_prompt),
-            "input": user_text,
-            "max_output_tokens": 500,
-        }
-
-        def request():
-            request_data = json.dumps(payload).encode("utf-8")
-            req = urllib.request.Request(
-                "https://api.openai.com/v1/responses",
-                data=request_data,
-                headers={
-                    "Content-Type": "application/json",
-                    "Authorization": f"Bearer {api_key}",
-                },
-                method="POST",
-            )
-            with urllib.request.urlopen(req, timeout=45) as response:
-                return json.loads(response.read().decode("utf-8"))
-
-        try:
-            data = await asyncio.to_thread(request)
-        except urllib.error.HTTPError as error:
-            # لا نعرض تفاصيل API للمستخدم؛ نعطيه مسار المساعدة الصحيح.
-            return f"صار عندي تعذر مؤقت في الإجابة. إذا سؤالك مهم، توجه لروم المساعدة البشرية {self._ai_channels()['human_help']}." , None
-        except Exception:
-            return f"ما قدرت أجيب إجابة الآن. إذا ما تبي تنتظر، توجه لروم المساعدة البشرية {self._ai_channels()['human_help']}." , None
-
-        chunks = []
-        for item in data.get("output", []):
-            for content in item.get("content", []):
-                if content.get("type") == "output_text":
-                    value = content.get("text", "")
-                    if value:
-                        chunks.append(value)
-
-        result = "\n".join(chunks).strip()
-        if not result:
-            return f"ما عندي جواب مؤكد على سؤالك حاليًا. توجه لروم المساعدة البشرية {self._ai_channels()['human_help']} وبيساعدك الفريق هناك.", None
-
-        return result[:3900], None
-
-    @app_commands.command(name="aisetup", description="تحديد روم AI")
-    @app_commands.describe(channel="روم الذكاء الاصطناعي")
-    @app_commands.default_permissions(administrator=True)
-    async def aisetup(self, interaction: discord.Interaction, channel: discord.TextChannel):
-        if not is_admin(interaction.user):
-            await interaction.response.send_message("❌ للإداريين فقط.", ephemeral=True)
-            return
-
-        def writer(cfg):
-            ai = cfg.setdefault("ai", {})
-            ai["enabled"] = True
-            ai["channel_id"] = channel.id
-
-        update_guild_config(interaction.guild, writer)
-
-        await interaction.response.send_message(
-            f"🤖 تم تفعيل AI في {channel.mention}."
-        )
-
-    @app_commands.command(name="aioff", description="إيقاف AI")
-    @app_commands.default_permissions(administrator=True)
-    async def aioff(self, interaction: discord.Interaction):
-        if not is_admin(interaction.user):
-            await interaction.response.send_message("❌ للإداريين فقط.", ephemeral=True)
-            return
-
-        set_value(interaction.guild, ["ai", "enabled"], False)
-        await interaction.response.send_message("🤖 تم إيقاف AI.")
-
-    @app_commands.command(name="aistatus", description="عرض حالة AI")
-    @app_commands.default_permissions(administrator=True)
-    async def aistatus(self, interaction: discord.Interaction):
-        if not is_admin(interaction.user):
-            await interaction.response.send_message("❌ للإداريين فقط.", ephemeral=True)
-            return
-
-        ai = guild_config(interaction.guild)["ai"]
-        channel = interaction.guild.get_channel(ai.get("channel_id")) if ai.get("channel_id") else None
-
-        embed = discord.Embed(
-            title="🤖 AI Status",
-            color=discord.Color.blurple(),
-        )
-        embed.add_field(name="الحالة", value="🟢 ON" if ai["enabled"] else "🔴 OFF", inline=True)
-        embed.add_field(name="الروم", value=channel.mention if channel else "غير محدد", inline=True)
-        embed.add_field(
-            name="API Key",
-            value="🟢 GPT API" if os.getenv("AI_API_KEY") else "🟡 Local Assistant (بدون API Key)",
-            inline=True,
-        )
         await interaction.response.send_message(embed=embed, ephemeral=True)
 
     # =====================================================
@@ -2162,7 +1888,7 @@ class ServerLogger(commands.Cog):
             guild,
             "protection",
             description,
-            fields=[("🛡️ الإجراء", title, False)],
+            fields=[("🛡 الإجراء", title, False)],
         )
 
     @app_commands.command(name="security", description="إعداد الحماية الأمنية ضد الهجمات الجماعية")
@@ -2173,7 +1899,7 @@ class ServerLogger(commands.Cog):
             await interaction.response.send_message("❌ للإداريين فقط.", ephemeral=True)
             return
         set_value(interaction.guild, ["protection", "security_enabled"], enabled)
-        await interaction.response.send_message(f"🛡️ الحماية الأمنية: {'🟢 مفعلة' if enabled else '🔴 معطلة'}", ephemeral=True)
+        await interaction.response.send_message(f"🛡 الحماية الأمنية: {'🟢 مفعلة' if enabled else '🔴 معطلة'}", ephemeral=True)
 
     @app_commands.command(name="securityconfig", description="تحديد حد هجوم دخول الأعضاء")
     @app_commands.describe(join_limit="عدد الأعضاء خلال الفترة", window_seconds="الفترة بالثواني", timeout_minutes="Timeout للأعضاء الجدد أثناء الهجوم")
@@ -2191,7 +1917,7 @@ class ServerLogger(commands.Cog):
             p["raid_window_seconds"]=window_seconds
             p["raid_timeout_minutes"]=timeout_minutes
         update_guild_config(interaction.guild, writer)
-        await interaction.response.send_message(f"🛡️ Anti-Raid: `{join_limit}` دخول خلال `{window_seconds}` ثانية → Timeout `{timeout_minutes}` دقيقة للأعضاء الجدد أثناء الهجوم.", ephemeral=True)
+        await interaction.response.send_message(f"🛡 Anti-Raid: `{join_limit}` دخول خلال `{window_seconds}` ثانية → Timeout `{timeout_minutes}` دقيقة للأعضاء الجدد أثناء الهجوم.", ephemeral=True)
 
     # =====================================================
     # Events
@@ -2236,7 +1962,7 @@ class ServerLogger(commands.Cog):
             "role_create",
             f"تم إنشاء رتبة جديدة: {role_text(role)}",
             fields=[
-                ("🏷️ الاسم", role.name, True),
+                ("🏷 الاسم", role.name, True),
                 ("🆔 ID", f"`{role.id}`", True),
                 ("🎨 اللون", str(role.color), True),
                 ("📌 المركز", str(role.position), True),
@@ -2532,45 +2258,13 @@ class ServerLogger(commands.Cog):
         try:
             await self.process_protection(message)
         except Exception as error:
-            print(f"⚠️ Protection error: {error}")
+            print(f"⚠ Protection error: {error}")
 
         # XP
         try:
             await self.award_chat_xp(message)
         except Exception as error:
-            print(f"⚠️ Level XP error: {error}")
-
-        # AI
-        try:
-            cfg = guild_config(message.guild)
-            ai = cfg["ai"]
-
-            if (
-                ai.get("enabled")
-                and ai.get("channel_id")
-                and message.channel.id == int(ai["channel_id"])
-            ):
-                text = message.content.strip()
-
-                if text:
-                    async with message.channel.typing():
-                        answer, error = await self.openai_response(
-                            text,
-                            ai.get("system_prompt", ""),
-                        )
-
-                    if error:
-                        await message.reply(
-                            f"⚠️ {error}",
-                            mention_author=False,
-                        )
-                    elif answer:
-                        await message.reply(
-                            answer[:3900],
-                            mention_author=False,
-                        )
-        except Exception as error:
-            print(f"⚠️ AI error: {error}")
+            print(f"⚠ Level XP error: {error}")
 
     # =====================================================
     # Voice XP loop
@@ -2608,7 +2302,7 @@ class ServerLogger(commands.Cog):
                         )
                         await self.announce_level_up(guild, member, old_level, new_level, new_xp, "🔊 الفويس")
             except Exception as error:
-                print(f"⚠️ Voice XP error in {guild.name}: {error}")
+                print(f"⚠ Voice XP error in {guild.name}: {error}")
 
     @voice_xp_loop.before_loop
     async def before_voice_xp_loop(self):
@@ -2631,7 +2325,7 @@ class ServerLogger(commands.Cog):
                 try:
                     await self.ensure_permanent_invite(guild)
                 except Exception as error:
-                    print(f"⚠️ Permanent invite error in {guild.name}: {error}")
+                    print(f"⚠ Permanent invite error in {guild.name}: {error}")
 
 
 # =========================================================
@@ -2641,3 +2335,7 @@ class ServerLogger(commands.Cog):
 async def setup(bot):
     await bot.add_cog(ServerLogger(bot))
     print("✅ تم تشغيل Team Fime bot2.py بالكامل.")
+PYEOF
+python3 -m py_compile /home/claude/bot2.py && echo "COMPILE OK"
+cp /home/claude/bot2.py /mnt/user-data/outputs/bot2.py
+wc -l /mnt/user-data/outputs/bot2.py
