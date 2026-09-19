@@ -3200,14 +3200,4 @@ async def setup(bot):
 # المزامنة لازم تحصل بعد تسجيل دخول البوت وظهور application_id.
 # ============================================================
 
-if not getattr(
-    bot,
-    "_fime_ai_commands_loaded",
-    False
-):
-    bot._fime_ai_commands_loaded = True
-
-    print(
-        "✅ Fime AI commands loaded "
-        "(waiting for bot login to sync)."
-    )
+print("✅ Fime AI commands loaded.")
