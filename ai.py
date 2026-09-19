@@ -1637,7 +1637,7 @@ class FimeAI(commands.Cog):
                     chunk
                 )
 
-    # ========================================================
+    # =======================================================
     # ON MESSAGE
     # ========================================================
 
@@ -1647,12 +1647,15 @@ class FimeAI(commands.Cog):
         message
     ):
 
+        # تجاهل البوتات
         if message.author.bot:
             return
 
+        # تجاهل الخاص
         if message.guild is None:
             return
 
+        # تحديد روم فيمي
         channel_id = (
             self.get_ai_channel_id(
                 message.guild
@@ -1662,6 +1665,7 @@ class FimeAI(commands.Cog):
         if not channel_id:
             return
 
+        # التأكد أن الرسالة في روم فيمي
         if message.channel.id != channel_id:
             return
 
@@ -1672,14 +1676,37 @@ class FimeAI(commands.Cog):
         if not content:
             return
 
+        # تجاهل أوامر Discord
         if content.startswith("/"):
             return
 
-        if len(content) > MAX_MESSAGE_CHARS:
+        # تحديد حجم الرسالة
+        content = content[:MAX_MESSAGE_CHARS]
 
-            content = (
-                content[:MAX_MESSAGE_CHARS]
+        # ----------------------------------------------------
+        # معالجة الرسالة بالخلفية
+        # ----------------------------------------------------
+        # مهم:
+        # لا نضع ask_ai داخل typing()
+        # حتى لا يظل Discord يعرض "يكتب..." أثناء انتظار API.
+        # ----------------------------------------------------
+
+        asyncio.create_task(
+            self.process_ai_message(
+                message,
+                content
             )
+        )
+
+    # ========================================================
+    # PROCESS AI MESSAGE
+    # ========================================================
+
+    async def process_ai_message(
+        self,
+        message,
+        content
+    ):
 
         user_key = (
             f"{message.guild.id}:"
@@ -1696,80 +1723,93 @@ class FimeAI(commands.Cog):
             self.user_locks[user_key]
         )
 
+        # إذا نفس الشخص عنده طلب قيد المعالجة
+        # لا نرسل طلب ثاني فوقه.
         if user_lock.locked():
-
             return
 
         try:
 
             async with user_lock:
 
-                async with (
-                    message.channel.typing()
-                ):
+                # ------------------------------------------------
+                # الطلب الحقيقي
+                # ------------------------------------------------
 
-                    try:
+                try:
 
-                        answer = await self.ask_ai(
-                            guild=message.guild,
-                            member=message.author,
-                            message=content
+                    answer = await self.ask_ai(
+                        guild=message.guild,
+                        member=message.author,
+                        message=content
+                    )
+
+                except Exception as error:
+
+                    print("=" * 60)
+                    print(
+                        "❌ AI MESSAGE FAILED"
+                    )
+                    print(
+                        f"Guild: "
+                        f"{message.guild.id}"
+                    )
+                    print(
+                        f"User: "
+                        f"{message.author.id}"
+                    )
+                    print(
+                        f"Type: "
+                        f"{type(error).__name__}"
+                    )
+                    print(
+                        f"Error: "
+                        f"{self.clean_error(error)}"
+                    )
+
+                    traceback.print_exc()
+
+                    print("=" * 60)
+
+                    # --------------------------------------------
+                    # لا نرسل رسالة مزعجة إذا كان Rate Limit
+                    # لأن ask_ai حاول معالجته أصلًا.
+                    # --------------------------------------------
+
+                    if self.is_rate_limit_error(
+                        error
+                    ):
+
+                        await message.reply(
+                            "الـAI عليه ضغط حاليًا، "
+                            "وبوقف الطلب بدل ما أزعج الـAPI 😂",
+                            mention_author=False
                         )
 
-                    except Exception as error:
+                    elif self.is_timeout_error(
+                        error
+                    ):
 
-                        print("=" * 60)
-                        print(
-                            "❌ AI MESSAGE FAILED"
-                        )
-                        print(
-                            f"Guild: "
-                            f"{message.guild.id}"
-                        )
-                        print(
-                            f"User: "
-                            f"{message.author.id}"
-                        )
-                        print(
-                            f"Type: "
-                            f"{type(error).__name__}"
-                        )
-                        print(
-                            f"Error: "
-                            f"{self.clean_error(error)}"
+                        await message.reply(
+                            "فيمي أخذ وقت أطول من اللازم هالمرة 😂",
+                            mention_author=False
                         )
 
-                        traceback.print_exc()
+                    else:
 
-                        print("=" * 60)
+                        await message.reply(
+                            "فيمي واجه مشكلة تقنية بسيطة.",
+                            mention_author=False
+                        )
 
-                        if self.is_rate_limit_error(
-                            error
-                        ):
+                    return
 
-                            await message.reply(
-                                "الـAI عليه ضغط شوي، "
-                                "خله يهدأ 😂",
-                                mention_author=False
-                            )
-
-                        elif self.is_timeout_error(
-                            error
-                        ):
-
-                            await message.reply(
-                                "فيمي طولها شوي هالمرة 😂",
-                                mention_author=False
-                            )
-
-                        else:
-
-                            await message.reply(
-                                "فيمي واجه مشكلة تقنية بسيطة.",
-                                mention_author=False
-                            )
-
-                        return
+                # ------------------------------------------------
+                # أظهر "يكتب..." فقط بعد ما يكون الرد جاهز
+                # ------------------------------------------------
+                # عمليًا Discord سيرسل الرد بسرعة، لذلك لن
+                # يعلق typing أثناء انتظار OpenAI.
+                # ------------------------------------------------
 
                 try:
 
@@ -1792,14 +1832,16 @@ class FimeAI(commands.Cog):
                         f"Error: "
                         f"{self.clean_error(error)}"
                     )
+
                     traceback.print_exc()
+
                     print("=" * 60)
 
         except Exception as error:
 
             print("=" * 60)
             print(
-                "❌ AI LISTENER ERROR"
+                "❌ AI PROCESS ERROR"
             )
             print(
                 f"Type: "
@@ -1809,7 +1851,9 @@ class FimeAI(commands.Cog):
                 f"Error: "
                 f"{self.clean_error(error)}"
             )
+
             traceback.print_exc()
+
             print("=" * 60)
 
     # ========================================================
