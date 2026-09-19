@@ -3193,30 +3193,21 @@ async def setup(bot):
     # مزامنة أوامر السلاش
     # --------------------------------------------------------
 
-    if not getattr(
-        bot,
-        "_fime_ai_commands_synced",
-        False
-    ):
+# ==================================
+# Fime AI Commands
+# ============================================================
+# لا نسوي tree.sync() هنا.
+# المزامنة لازم تحصل بعد تسجيل دخول البوت وظهور application_id.
+# ============================================================
 
-        try:
+if not getattr(
+    bot,
+    "_fime_ai_commands_loaded",
+    False
+):
+    bot._fime_ai_commands_loaded = True
 
-            synced = await bot.tree.sync()
-
-            bot._fime_ai_commands_synced = True
-
-            print(
-                f"✅ Fime AI slash commands synced: "
-                f"{len(synced)}"
-            )
-
-        except Exception as error:
-
-            print(
-                "⚠️ Failed to sync Fime AI commands:"
-            )
-
-            print(
-                f"{type(error).__name__}: "
-                f"{error}"
-            )
+    print(
+        "✅ Fime AI commands loaded "
+        "(waiting for bot login to sync)."
+    )
