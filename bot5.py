@@ -2,11 +2,14 @@
 # Team Fime
 # bot5.py
 # Automatic Divider / Line Image System
+# +
+# Temporary Join Mention System
 # ============================================================
 
 from __future__ import annotations
 
 import os
+import io
 import json
 import asyncio
 from copy import deepcopy
@@ -25,13 +28,26 @@ OWNER_ID = 1388514481444880549
 
 CONFIG_FILE = Path("bot5_config.json")
 
+
 DEFAULT_GUILD_CONFIG = {
+    # ========================================================
+    # LINE SYSTEM
+    # ========================================================
+
     "enabled": False,
     "channel_id": None,
     "image_url": None,
     "storage_channel_id": None,
     "storage_message_id": None,
-    "delete_after": 0
+    "delete_after": 0,
+
+    # ========================================================
+    # JOIN MENTION SYSTEM
+    # ========================================================
+
+    "join_mention_enabled": False,
+    "join_mention_channel_id": None,
+    "join_mention_duration": 2
 }
 
 
@@ -67,9 +83,7 @@ def load_config():
 
 def save_config(data):
 
-    temp_file = CONFIG_FILE.with_suffix(
-        ".tmp"
-    )
+    temp_file = CONFIG_FILE.with_suffix(".tmp")
 
     try:
 
@@ -119,7 +133,7 @@ class AutomaticLineSystem(commands.Cog):
         self.config = load_config()
 
         print(
-            "✅ bot5 — Automatic Line System loaded."
+            "✅ bot5 — Automatic Line + Join Mention loaded."
         )
 
 
@@ -167,6 +181,7 @@ class AutomaticLineSystem(commands.Cog):
                 changed = True
 
         if changed:
+
             save_config(
                 self.config
             )
@@ -174,20 +189,17 @@ class AutomaticLineSystem(commands.Cog):
         return current
 
 
+    # ========================================================
+    # OWNER CHECK
+    # ========================================================
+
     def is_owner(
         self,
         interaction: discord.Interaction
     ):
 
-        if interaction.user.id == OWNER_ID:
-            return True
+        return interaction.user.id == OWNER_ID
 
-        return False
-
-
-    # ========================================================
-    # PERMISSION
-    # ========================================================
 
     async def silently_ignore_if_not_owner(
         self,
@@ -197,10 +209,6 @@ class AutomaticLineSystem(commands.Cog):
         if self.is_owner(interaction):
             return False
 
-        # مهم جدًا:
-        # لا رسالة خطأ.
-        # لا رد.
-        # فقط تجاهل.
         return True
 
 
@@ -261,11 +269,11 @@ class AutomaticLineSystem(commands.Cog):
             guild.id
         )
 
-        # ----------------------------------------------------
-        # Pick storage channel
-        # ----------------------------------------------------
-
         storage_channel = None
+
+        # ----------------------------------------------------
+        # Configured storage channel
+        # ----------------------------------------------------
 
         if cfg.get(
             "storage_channel_id"
@@ -280,6 +288,10 @@ class AutomaticLineSystem(commands.Cog):
                     )
                 )
             )
+
+        # ----------------------------------------------------
+        # Fallback to line channel
+        # ----------------------------------------------------
 
         if storage_channel is None:
 
@@ -299,9 +311,17 @@ class AutomaticLineSystem(commands.Cog):
                     )
                 )
 
+        # ----------------------------------------------------
+        # System channel
+        # ----------------------------------------------------
+
         if storage_channel is None:
 
             storage_channel = guild.system_channel
+
+        # ----------------------------------------------------
+        # Any usable text channel
+        # ----------------------------------------------------
 
         if storage_channel is None:
 
@@ -337,19 +357,22 @@ class AutomaticLineSystem(commands.Cog):
         if not permissions.view_channel:
 
             raise RuntimeError(
-                f"البوت لا يستطيع رؤية {storage_channel.mention}."
+                f"البوت لا يستطيع رؤية "
+                f"{storage_channel.mention}."
             )
 
         if not permissions.send_messages:
 
             raise RuntimeError(
-                f"البوت لا يستطيع الإرسال في {storage_channel.mention}."
+                f"البوت لا يستطيع الإرسال في "
+                f"{storage_channel.mention}."
             )
 
         if not permissions.attach_files:
 
             raise RuntimeError(
-                f"البوت يحتاج صلاحية Attach Files في {storage_channel.mention}."
+                f"البوت يحتاج صلاحية Attach Files "
+                f"في {storage_channel.mention}."
             )
 
         # ----------------------------------------------------
@@ -365,11 +388,11 @@ class AutomaticLineSystem(commands.Cog):
             )
 
         # ----------------------------------------------------
-        # Send permanent storage copy
+        # Upload permanent storage copy
         # ----------------------------------------------------
 
         file = discord.File(
-            fp=__import__("io").BytesIO(
+            fp=io.BytesIO(
                 image_bytes
             ),
             filename=(
@@ -478,14 +501,9 @@ class AutomaticLineSystem(commands.Cog):
         channel: discord.TextChannel = None
     ):
 
-        # ----------------------------------------------------
-        # OWNER ONLY — SILENT
-        # ----------------------------------------------------
-
         if await self.silently_ignore_if_not_owner(
             interaction
         ):
-
             return
 
         if interaction.guild is None:
@@ -508,7 +526,8 @@ class AutomaticLineSystem(commands.Cog):
             await interaction.response.send_message(
                 (
                     "❌ أرسل صورة بصيغة "
-                    "`PNG` أو `JPG` أو `JPEG` أو `WEBP` أو `GIF`."
+                    "`PNG` أو `JPG` أو `JPEG` "
+                    "أو `WEBP` أو `GIF`."
                 ),
                 ephemeral=True
             )
@@ -531,9 +550,6 @@ class AutomaticLineSystem(commands.Cog):
 
         if channel is None:
 
-            # إذا ما حدد روم:
-            # نستخدم كل الرومات النصية التي يستطيع
-            # البوت الكتابة فيها.
             cfg["channel_id"] = None
 
         else:
@@ -556,7 +572,8 @@ class AutomaticLineSystem(commands.Cog):
             if not permissions.view_channel:
 
                 await interaction.followup.send(
-                    f"❌ ما أقدر أشوف {channel.mention}.",
+                    f"❌ ما أقدر أشوف "
+                    f"{channel.mention}.",
                     ephemeral=True
                 )
 
@@ -565,7 +582,8 @@ class AutomaticLineSystem(commands.Cog):
             if not permissions.send_messages:
 
                 await interaction.followup.send(
-                    f"❌ ما أقدر أرسل في {channel.mention}.",
+                    f"❌ ما أقدر أرسل في "
+                    f"{channel.mention}.",
                     ephemeral=True
                 )
 
@@ -576,7 +594,7 @@ class AutomaticLineSystem(commands.Cog):
             )
 
         # ----------------------------------------------------
-        # Delete previous storage
+        # Delete old storage
         # ----------------------------------------------------
 
         await self.delete_old_storage(
@@ -584,7 +602,7 @@ class AutomaticLineSystem(commands.Cog):
         )
 
         # ----------------------------------------------------
-        # Create new storage
+        # Create storage
         # ----------------------------------------------------
 
         try:
@@ -621,10 +639,6 @@ class AutomaticLineSystem(commands.Cog):
             self.config
         )
 
-        # ----------------------------------------------------
-        # Result
-        # ----------------------------------------------------
-
         if channel:
 
             target_text = channel.mention
@@ -641,9 +655,7 @@ class AutomaticLineSystem(commands.Cog):
                 "✅ **تم تشغيل نظام الخط.**\n\n"
                 f"🖼️ الصورة: تم حفظها\n"
                 f"📍 النطاق: {target_text}\n"
-                f"🗄️ التخزين: {storage_channel.mention}\n\n"
-                "العضو العادي إذا كتب `/خط` "
-                "لن يحصل على أي رد أو تنفيذ."
+                f"🗄️ التخزين: {storage_channel.mention}"
             ),
             ephemeral=True
         )
@@ -665,7 +677,6 @@ class AutomaticLineSystem(commands.Cog):
         if await self.silently_ignore_if_not_owner(
             interaction
         ):
-
             return
 
         if interaction.guild is None:
@@ -703,7 +714,6 @@ class AutomaticLineSystem(commands.Cog):
         if await self.silently_ignore_if_not_owner(
             interaction
         ):
-
             return
 
         if interaction.guild is None:
@@ -756,7 +766,7 @@ class AutomaticLineSystem(commands.Cog):
         await interaction.response.send_message(
             (
                 "## 🖼️ حالة نظام الخط\n\n"
-                f"الحالة: **مفعل**\n"
+                "الحالة: **مفعل**\n"
                 f"النطاق: {target}\n"
                 f"الصورة: **{image_status}**"
             ),
@@ -781,7 +791,6 @@ class AutomaticLineSystem(commands.Cog):
         if await self.silently_ignore_if_not_owner(
             interaction
         ):
-
             return
 
         if interaction.guild is None:
@@ -828,7 +837,8 @@ class AutomaticLineSystem(commands.Cog):
         if not permissions.view_channel:
 
             await interaction.response.send_message(
-                f"❌ ما أقدر أشوف {channel.mention}.",
+                f"❌ ما أقدر أشوف "
+                f"{channel.mention}.",
                 ephemeral=True
             )
 
@@ -837,7 +847,8 @@ class AutomaticLineSystem(commands.Cog):
         if not permissions.send_messages:
 
             await interaction.response.send_message(
-                f"❌ ما أقدر أرسل في {channel.mention}.",
+                f"❌ ما أقدر أرسل في "
+                f"{channel.mention}.",
                 ephemeral=True
             )
 
@@ -850,13 +861,16 @@ class AutomaticLineSystem(commands.Cog):
         )
 
         await interaction.response.send_message(
-            f"✅ صار الخط يعمل فقط في {channel.mention}.",
+            (
+                f"✅ صار الخط يعمل فقط في "
+                f"{channel.mention}."
+            ),
             ephemeral=True
         )
 
 
     # ========================================================
-    # MESSAGE LISTENER
+    # LINE MESSAGE LISTENER
     # ========================================================
 
     @commands.Cog.listener()
@@ -894,9 +908,7 @@ class AutomaticLineSystem(commands.Cog):
         # ----------------------------------------------------
 
         configured_channel_id = (
-            cfg.get(
-                "channel_id"
-            )
+            cfg.get("channel_id")
         )
 
         if configured_channel_id:
@@ -929,7 +941,7 @@ class AutomaticLineSystem(commands.Cog):
             return
 
         # ----------------------------------------------------
-        # Send divider image
+        # Send divider
         # ----------------------------------------------------
 
         try:
@@ -961,6 +973,464 @@ class AutomaticLineSystem(commands.Cog):
             )
 
 
+    # ========================================================
+    # JOIN MENTION SYSTEM
+    # ========================================================
+
+    async def send_join_mention(
+        self,
+        member: discord.Member
+    ):
+
+        guild = member.guild
+
+        cfg = self.get_config(
+            guild.id
+        )
+
+        # ----------------------------------------------------
+        # System disabled
+        # ----------------------------------------------------
+
+        if not cfg.get(
+            "join_mention_enabled"
+        ):
+            return
+
+        channel_id = cfg.get(
+            "join_mention_channel_id"
+        )
+
+        if not channel_id:
+            return
+
+        try:
+
+            channel = guild.get_channel(
+                int(channel_id)
+            )
+
+        except Exception:
+
+            return
+
+        if channel is None:
+            return
+
+        # ----------------------------------------------------
+        # Bot permissions
+        # ----------------------------------------------------
+
+        me = guild.me
+
+        if me is None:
+            return
+
+        permissions = (
+            channel.permissions_for(me)
+        )
+
+        if not permissions.view_channel:
+
+            print(
+                f"⚠️ Join mention: "
+                f"لا أستطيع رؤية {channel}."
+            )
+
+            return
+
+        if not permissions.send_messages:
+
+            print(
+                f"⚠️ Join mention: "
+                f"لا أستطيع الإرسال في {channel}."
+            )
+
+            return
+
+        # ----------------------------------------------------
+        # Duration
+        # ----------------------------------------------------
+
+        try:
+
+            duration = float(
+                cfg.get(
+                    "join_mention_duration",
+                    2
+                )
+            )
+
+        except Exception:
+
+            duration = 2
+
+        duration = max(
+            1,
+            min(
+                duration,
+                5
+            )
+        )
+
+        # ----------------------------------------------------
+        # Send actual mention
+        # ----------------------------------------------------
+
+        try:
+
+            sent_message = await channel.send(
+                member.mention,
+                allowed_mentions=discord.AllowedMentions(
+                    users=True,
+                    everyone=False,
+                    roles=False,
+                    replied_user=False
+                )
+            )
+
+        except discord.Forbidden as error:
+
+            print(
+                "⚠️ Join mention permission error:",
+                error
+            )
+
+            return
+
+        except discord.HTTPException as error:
+
+            print(
+                "⚠️ Join mention HTTP error:",
+                error
+            )
+
+            return
+
+        except Exception as error:
+
+            print(
+                "❌ Join mention error:",
+                error
+            )
+
+            return
+
+        # ----------------------------------------------------
+        # Wait then delete
+        # ----------------------------------------------------
+
+        try:
+
+            await asyncio.sleep(
+                duration
+            )
+
+            await sent_message.delete()
+
+        except discord.NotFound:
+
+            pass
+
+        except discord.Forbidden:
+
+            print(
+                "⚠️ Join mention: "
+                "البوت لا يستطيع حذف رسالة المنشن."
+            )
+
+        except discord.HTTPException as error:
+
+            print(
+                "⚠️ Join mention delete error:",
+                error
+            )
+
+        except Exception as error:
+
+            print(
+                "❌ Join mention delete error:",
+                error
+            )
+
+
+    # ========================================================
+    # MEMBER JOIN
+    # ========================================================
+
+    @commands.Cog.listener()
+    async def on_member_join(
+        self,
+        member: discord.Member
+    ):
+
+        if member.bot:
+            return
+
+        # ----------------------------------------------------
+        # Small delay
+        # ----------------------------------------------------
+        # يعطي Discord فرصة لتثبيت العضو
+        # قبل إرسال المنشن.
+
+        await asyncio.sleep(0.5)
+
+        await self.send_join_mention(
+            member
+        )
+
+
+    # ========================================================
+    # /منشن-روم
+    # ========================================================
+
+    @app_commands.command(
+        name="منشن-روم",
+        description="تحديد روم منشن الأعضاء الجدد"
+    )
+    async def mention_channel(
+        self,
+        interaction: discord.Interaction,
+        channel: discord.TextChannel
+    ):
+
+        if await self.silently_ignore_if_not_owner(
+            interaction
+        ):
+            return
+
+        if interaction.guild is None:
+            return
+
+        guild = interaction.guild
+
+        me = guild.me
+
+        if me is None:
+
+            await interaction.response.send_message(
+                "❌ تعذر معرفة صلاحيات البوت.",
+                ephemeral=True
+            )
+
+            return
+
+        permissions = channel.permissions_for(
+            me
+        )
+
+        if not permissions.view_channel:
+
+            await interaction.response.send_message(
+                (
+                    f"❌ ما أقدر أشوف "
+                    f"{channel.mention}."
+                ),
+                ephemeral=True
+            )
+
+            return
+
+        if not permissions.send_messages:
+
+            await interaction.response.send_message(
+                (
+                    f"❌ ما أقدر أرسل في "
+                    f"{channel.mention}."
+                ),
+                ephemeral=True
+            )
+
+            return
+
+        cfg = self.get_config(
+            guild.id
+        )
+
+        cfg["join_mention_channel_id"] = (
+            channel.id
+        )
+
+        cfg["join_mention_enabled"] = True
+
+        # ----------------------------------------------------
+        # Always 2 seconds
+        # ----------------------------------------------------
+
+        cfg["join_mention_duration"] = 2
+
+        save_config(
+            self.config
+        )
+
+        await interaction.response.send_message(
+            (
+                "✅ **تم تشغيل منشن دخول الأعضاء.**\n\n"
+                f"📍 الروم: {channel.mention}\n"
+                "⏱️ مدة ظهور المنشن: **ثانيتين**\n\n"
+                "أي عضو جديد يدخل السيرفر "
+                "سيتم منشنه هناك، وبعد ثانيتين "
+                "تنحذف رسالة المنشن."
+            ),
+            ephemeral=True
+        )
+
+
+    # ========================================================
+    # /منشن-إيقاف
+    # ========================================================
+
+    @app_commands.command(
+        name="منشن-إيقاف",
+        description="إيقاف منشن الأعضاء الجدد"
+    )
+    async def mention_off(
+        self,
+        interaction: discord.Interaction
+    ):
+
+        if await self.silently_ignore_if_not_owner(
+            interaction
+        ):
+            return
+
+        if interaction.guild is None:
+            return
+
+        cfg = self.get_config(
+            interaction.guild.id
+        )
+
+        cfg["join_mention_enabled"] = False
+
+        save_config(
+            self.config
+        )
+
+        await interaction.response.send_message(
+            "🛑 تم إيقاف منشن دخول الأعضاء.",
+            ephemeral=True
+        )
+
+
+    # ========================================================
+    # /منشن-حالة
+    # ========================================================
+
+    @app_commands.command(
+        name="منشن-حالة",
+        description="عرض حالة منشن الأعضاء الجدد"
+    )
+    async def mention_status(
+        self,
+        interaction: discord.Interaction
+    ):
+
+        if await self.silently_ignore_if_not_owner(
+            interaction
+        ):
+            return
+
+        if interaction.guild is None:
+            return
+
+        cfg = self.get_config(
+            interaction.guild.id
+        )
+
+        enabled = cfg.get(
+            "join_mention_enabled",
+            False
+        )
+
+        channel_id = cfg.get(
+            "join_mention_channel_id"
+        )
+
+        if channel_id:
+
+            try:
+
+                channel = (
+                    interaction.guild.get_channel(
+                        int(channel_id)
+                    )
+                )
+
+            except Exception:
+
+                channel = None
+
+        else:
+
+            channel = None
+
+        if enabled:
+
+            status = "🟢 مفعل"
+
+        else:
+
+            status = "🔴 متوقف"
+
+        channel_text = (
+            channel.mention
+            if channel
+            else "غير محدد"
+        )
+
+        await interaction.response.send_message(
+            (
+                "## 👋 حالة منشن الدخول\n\n"
+                f"الحالة: **{status}**\n"
+                f"الروم: {channel_text}\n"
+                "مدة ظهور المنشن: **ثانيتين**"
+            ),
+            ephemeral=True
+        )
+
+
+    # ========================================================
+    # /منشن-روم-إلغاء
+    # ========================================================
+
+    @app_commands.command(
+        name="منشن-روم-إلغاء",
+        description="إلغاء روم منشن الأعضاء"
+    )
+    async def mention_channel_clear(
+        self,
+        interaction: discord.Interaction
+    ):
+
+        if await self.silently_ignore_if_not_owner(
+            interaction
+        ):
+            return
+
+        if interaction.guild is None:
+            return
+
+        cfg = self.get_config(
+            interaction.guild.id
+        )
+
+        cfg["join_mention_enabled"] = False
+        cfg["join_mention_channel_id"] = None
+
+        save_config(
+            self.config
+        )
+
+        await interaction.response.send_message(
+            (
+                "✅ تم إلغاء روم منشن الدخول "
+                "وإيقاف النظام."
+            ),
+            ephemeral=True
+        )
+
+
 # ============================================================
 # SETUP
 # ============================================================
@@ -986,5 +1456,6 @@ async def setup(bot):
     )
 
     print(
-        "✅ Team Fime bot5 — Automatic Line System loaded."
+        "✅ Team Fime bot5 — "
+        "Automatic Line + Join Mention loaded."
     )
