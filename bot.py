@@ -4473,6 +4473,16 @@ if __name__ == "__main__":
                 raise
 
             # =====================================================
+            # تحميل نظام الخط + منشن الدخول من bot5.py
+            # =====================================================
+            try:
+                await bot.load_extension("bot5")
+                print("✅ تم تحميل نظام Automatic Line + Join Mention من bot5.py")
+            except Exception as error:
+                print(f"❌ تعذر تحميل bot5.py: {error}")
+                raise
+
+            # =====================================================
             # تحميل نظام الذكاء الاصطناعي من ai.py
             # =====================================================
             try:
@@ -4481,6 +4491,19 @@ if __name__ == "__main__":
             except Exception as error:
                 print(f"❌ تعذر تحميل ai.py: {error}")
                 raise
+
+            # =====================================================
+            # مزامنة أوامر Slash
+            # =====================================================
+            try:
+                synced = await bot.tree.sync()
+                print(
+                    f"✅ تم مزامنة {len(synced)} أمر Slash."
+                )
+            except Exception as error:
+                print(
+                    f"⚠️ تعذر مزامنة أوامر Slash: {error}"
+                )
 
             # =====================================================
             # تشغيل Web Server / Keep Alive
