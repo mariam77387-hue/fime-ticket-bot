@@ -4493,21 +4493,7 @@ if __name__ == "__main__":
                 raise
 
             # =====================================================
-            # مزامنة أوامر Slash
-            # =====================================================
-            try:
-                synced = await bot.tree.sync()
-                print(
-                    f"✅ تم مزامنة {len(synced)} أمر Slash."
-                )
-            except Exception as error:
-                print(
-                    f"⚠️ تعذر مزامنة أوامر Slash: {error}"
-                )
-
-            # =====================================================
             # تشغيل Web Server / Keep Alive
-            # يستخدم Waitress داخل keep_alive.py
             # =====================================================
             try:
                 keep_alive()
