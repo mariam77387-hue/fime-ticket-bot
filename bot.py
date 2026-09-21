@@ -4477,9 +4477,25 @@ if __name__ == "__main__":
             # =====================================================
             try:
                 await bot.load_extension("bot5")
-                print("✅ تم تحميل نظام Automatic Line + Join Mention من bot5.py")
+                print(
+                    "✅ تم تحميل نظام Automatic Line + "
+                    "Join Mention من bot5.py"
+                )
             except Exception as error:
                 print(f"❌ تعذر تحميل bot5.py: {error}")
+                raise
+
+            # =====================================================
+            # تحميل نظام Stock Alerts من bot6.py
+            # =====================================================
+            try:
+                await bot.load_extension("bot6")
+                print(
+                    "✅ تم تحميل نظام Stock Alerts "
+                    "من bot6.py"
+                )
+            except Exception as error:
+                print(f"❌ تعذر تحميل bot6.py: {error}")
                 raise
 
             # =====================================================
@@ -4497,15 +4513,21 @@ if __name__ == "__main__":
             # =====================================================
             try:
                 keep_alive()
-                print("✅ تم تشغيل Keep Alive باستخدام Waitress.")
+                print(
+                    "✅ تم تشغيل Keep Alive باستخدام Waitress."
+                )
             except Exception as error:
-                print(f"❌ تعذر تشغيل Keep Alive: {error}")
+                print(
+                    f"❌ تعذر تشغيل Keep Alive: {error}"
+                )
                 raise
 
             # =====================================================
             # تشغيل Discord Bot
             # =====================================================
-            print("🤖 جاري تشغيل Team Fime Bot...")
+            print(
+                "🤖 جاري تشغيل Team Fime Bot..."
+            )
 
             await bot.start(TOKEN)
 
