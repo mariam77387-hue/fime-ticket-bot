@@ -19,10 +19,25 @@
 # • Steal An Egg Rift notifications
 # • SQLite persistence
 # • Personal stock alerts
+# • GAG fruit/item multi-select notifications
+# • Automatic role per selected GAG fruit/item
+# • Automatic role mentions when selected fruit/item appears
 # • Admin status commands
 # • GAG API configurable through Environment Variable
 # • Multiple API JSON formats supported
 # • Safe API error handling
+#
+# IMPORTANT
+# ------------------------------------------------------------
+# Discord has a 100 top-level global application-command limit.
+# All bot6 commands are therefore inside ONE /stock group.
+#
+# Example:
+# /stock view
+# /stock channel
+# /stock notifications-setup
+# /stock alert
+# /stock status
 # ============================================================
 
 import os
@@ -48,7 +63,7 @@ DB_FILE = os.getenv(
 
 # IMPORTANT:
 # Put your CURRENT working Grow a Garden API here
-# through Replit/Render Environment Variables.
+# through Environment Variables.
 #
 # Example:
 # GAG_API_URL=https://your-working-api.example/stock
@@ -82,6 +97,9 @@ STOCK_CHECK_SECONDS = max(
 
 STEAL_EGG_RESET_MINUTES = 5
 STEAL_EGG_RIFT_MINUTES = 30
+
+# Discord Select Menu maximum options
+MAX_SELECT_OPTIONS = 25
 
 
 # ============================================================
@@ -171,6 +189,7 @@ NOTIFICATION_INFO = {
 # ============================================================
 
 def get_db():
+
     conn = sqlite3.connect(
         DB_FILE
     )
@@ -185,6 +204,10 @@ def setup_database():
     conn = get_db()
 
     cur = conn.cursor()
+
+    # --------------------------------------------------------
+    # Personal item subscriptions
+    # --------------------------------------------------------
 
     cur.execute("""
         CREATE TABLE IF NOT EXISTS subscriptions (
@@ -201,6 +224,10 @@ def setup_database():
         )
     """)
 
+    # --------------------------------------------------------
+    # Event subscriptions
+    # --------------------------------------------------------
+
     cur.execute("""
         CREATE TABLE IF NOT EXISTS event_subscriptions (
             guild_id INTEGER NOT NULL,
@@ -213,6 +240,10 @@ def setup_database():
             )
         )
     """)
+
+    # --------------------------------------------------------
+    # Stock cache
+    # --------------------------------------------------------
 
     cur.execute("""
         CREATE TABLE IF NOT EXISTS stock_cache (
@@ -227,6 +258,10 @@ def setup_database():
         )
     """)
 
+    # --------------------------------------------------------
+    # Event cache
+    # --------------------------------------------------------
+
     cur.execute("""
         CREATE TABLE IF NOT EXISTS event_cache (
             guild_id INTEGER NOT NULL,
@@ -240,6 +275,10 @@ def setup_database():
         )
     """)
 
+    # --------------------------------------------------------
+    # Shop channels
+    # --------------------------------------------------------
+
     cur.execute("""
         CREATE TABLE IF NOT EXISTS shop_channels (
             guild_id INTEGER NOT NULL,
@@ -251,6 +290,10 @@ def setup_database():
             )
         )
     """)
+
+    # --------------------------------------------------------
+    # Standard notification roles
+    # --------------------------------------------------------
 
     cur.execute("""
         CREATE TABLE IF NOT EXISTS notification_roles (
@@ -264,6 +307,10 @@ def setup_database():
         )
     """)
 
+    # --------------------------------------------------------
+    # Notification panels
+    # --------------------------------------------------------
+
     cur.execute("""
         CREATE TABLE IF NOT EXISTS notification_panels (
             guild_id INTEGER PRIMARY KEY,
@@ -271,6 +318,10 @@ def setup_database():
             message_id INTEGER NOT NULL
         )
     """)
+
+    # --------------------------------------------------------
+    # Notification members
+    # --------------------------------------------------------
 
     cur.execute("""
         CREATE TABLE IF NOT EXISTS notification_members (
@@ -281,6 +332,46 @@ def setup_database():
                 guild_id,
                 user_id,
                 notification_type
+            )
+        )
+    """)
+
+    # --------------------------------------------------------
+    # GAG item/fruit roles
+    #
+    # One role per GAG item:
+    # 🔔 Apple
+    # 🔔 Strawberry
+    # etc.
+    # --------------------------------------------------------
+
+    cur.execute("""
+        CREATE TABLE IF NOT EXISTS gag_item_roles (
+            guild_id INTEGER NOT NULL,
+            item_name TEXT NOT NULL,
+            role_id INTEGER NOT NULL,
+            PRIMARY KEY (
+                guild_id,
+                item_name
+            )
+        )
+    """)
+
+    # --------------------------------------------------------
+    # GAG item/fruit subscriptions
+    #
+    # Stores which member wants which item.
+    # --------------------------------------------------------
+
+    cur.execute("""
+        CREATE TABLE IF NOT EXISTS gag_item_subscriptions (
+            guild_id INTEGER NOT NULL,
+            user_id INTEGER NOT NULL,
+            item_name TEXT NOT NULL,
+            PRIMARY KEY (
+                guild_id,
+                user_id,
+                item_name
             )
         )
     """)
@@ -610,6 +701,197 @@ def remove_notification_member(
     conn.commit()
 
     conn.close()
+
+
+# ============================================================
+# GAG ITEM ROLE DATABASE
+# ============================================================
+
+def normalize_item_name(
+    name
+):
+
+    return str(
+        name or ""
+    ).strip()
+
+
+def get_gag_item_role(
+    guild_id,
+    item_name
+):
+
+    item_name = normalize_item_name(
+        item_name
+    )
+
+    conn = get_db()
+
+    row = conn.execute("""
+        SELECT role_id
+        FROM gag_item_roles
+        WHERE guild_id = ?
+        AND item_name = ?
+    """, (
+        guild_id,
+        item_name
+    )).fetchone()
+
+    conn.close()
+
+    if row:
+        return row["role_id"]
+
+    return None
+
+
+def save_gag_item_role(
+    guild_id,
+    item_name,
+    role_id
+):
+
+    item_name = normalize_item_name(
+        item_name
+    )
+
+    conn = get_db()
+
+    conn.execute("""
+        INSERT INTO gag_item_roles (
+            guild_id,
+            item_name,
+            role_id
+        )
+        VALUES (?, ?, ?)
+        ON CONFLICT(
+            guild_id,
+            item_name
+        )
+        DO UPDATE SET
+            role_id = excluded.role_id
+    """, (
+        guild_id,
+        item_name,
+        role_id
+    ))
+
+    conn.commit()
+
+    conn.close()
+
+
+def add_gag_item_subscription(
+    guild_id,
+    user_id,
+    item_name
+):
+
+    item_name = normalize_item_name(
+        item_name
+    )
+
+    conn = get_db()
+
+    conn.execute("""
+        INSERT OR IGNORE INTO gag_item_subscriptions (
+            guild_id,
+            user_id,
+            item_name
+        )
+        VALUES (?, ?, ?)
+    """, (
+        guild_id,
+        user_id,
+        item_name
+    ))
+
+    conn.commit()
+
+    conn.close()
+
+
+def remove_gag_item_subscription(
+    guild_id,
+    user_id,
+    item_name
+):
+
+    item_name = normalize_item_name(
+        item_name
+    )
+
+    conn = get_db()
+
+    conn.execute("""
+        DELETE FROM gag_item_subscriptions
+        WHERE guild_id = ?
+        AND user_id = ?
+        AND item_name = ?
+    """, (
+        guild_id,
+        user_id,
+        item_name
+    ))
+
+    conn.commit()
+
+    conn.close()
+
+
+def get_gag_item_subscribers(
+    guild_id,
+    item_name
+):
+
+    item_name = normalize_item_name(
+        item_name
+    )
+
+    conn = get_db()
+
+    rows = conn.execute("""
+        SELECT user_id
+        FROM gag_item_subscriptions
+        WHERE guild_id = ?
+        AND item_name = ?
+    """, (
+        guild_id,
+        item_name
+    )).fetchall()
+
+    conn.close()
+
+    return [
+        row["user_id"]
+        for row in rows
+    ]
+
+
+def get_gag_user_items(
+    guild_id,
+    user_id
+):
+
+    conn = get_db()
+
+    rows = conn.execute("""
+        SELECT item_name
+        FROM gag_item_subscriptions
+        WHERE guild_id = ?
+        AND user_id = ?
+        ORDER BY item_name COLLATE NOCASE
+    """, (
+        guild_id,
+        user_id
+    )).fetchall()
+
+    conn.close()
+
+    return [
+        row["item_name"]
+        for row in rows
+    ]
 
 
 # ============================================================
@@ -1161,7 +1443,7 @@ def build_shop_embeds(
 
 
 # ============================================================
-# NOTIFICATION PANEL
+# STANDARD NOTIFICATION PANEL
 # ============================================================
 
 def build_notification_panel_embed():
@@ -1184,7 +1466,8 @@ def build_notification_panel_embed():
         name="🌱 Grow a Garden",
         value=(
             "• تجديد الستوك\n"
-            "• الستوك النادر"
+            "• الستوك النادر\n"
+            "• إشعارات الفواكه"
         ),
         inline=True
     )
@@ -1225,7 +1508,7 @@ def build_notification_panel_embed():
 
 
 # ============================================================
-# NOTIFICATION SELECT
+# STANDARD NOTIFICATION SELECT
 # ============================================================
 
 class NotificationSelect(
@@ -1316,10 +1599,6 @@ class NotificationSelect(
 
         try:
 
-            # Toggle:
-            # if member has role -> remove
-            # otherwise -> add
-
             if role in interaction.user.roles:
 
                 await interaction.user.remove_roles(
@@ -1408,12 +1687,322 @@ class NotificationView(
 
 
 # ============================================================
+# GAG FRUIT / ITEM SELECT
+# ============================================================
+
+def build_gag_item_select_options(
+    stock
+):
+
+    options = []
+
+    seen = set()
+
+    for item in clean_stock(stock):
+
+        name = normalize_item_name(
+            item.get("name")
+        )
+
+        if not name:
+            continue
+
+        key = name.lower()
+
+        if key in seen:
+            continue
+
+        seen.add(key)
+
+        amount = item.get(
+            "stock",
+            0
+        )
+
+        rarity = item.get(
+            "rarity",
+            ""
+        )
+
+        description_parts = []
+
+        if amount not in (
+            None,
+            "",
+            0,
+            "0"
+        ):
+            description_parts.append(
+                f"× {amount}"
+            )
+
+        if rarity:
+            description_parts.append(
+                str(rarity)
+            )
+
+        description = (
+            " • ".join(
+                description_parts
+            )
+            if description_parts
+            else "متوفر في الستوك"
+        )
+
+        options.append(
+            discord.SelectOption(
+                label=name[:100],
+                description=description[:100],
+                value=name[:100]
+            )
+        )
+
+        if len(options) >= MAX_SELECT_OPTIONS:
+            break
+
+    return options
+
+
+class GAGFruitSelect(
+    discord.ui.Select
+):
+
+    def __init__(
+        self,
+        stock
+    ):
+
+        options = build_gag_item_select_options(
+            stock
+        )
+
+        # Discord requires at least one option.
+        if not options:
+
+            options = [
+                discord.SelectOption(
+                    label="لا يوجد عناصر",
+                    description="لا توجد عناصر متاحة حاليًا.",
+                    value="__none__"
+                )
+            ]
+
+        self.stock_names = {
+            option.value.lower()
+            for option in options
+        }
+
+        max_values = min(
+            len(options),
+            MAX_SELECT_OPTIONS
+        )
+
+        super().__init__(
+            placeholder=(
+                "🍎 اختر الفواكه اللي تبي إشعار عنها..."
+            ),
+            min_values=1,
+            max_values=max_values,
+            options=options,
+            custom_id=(
+                "fime_gag_fruit_select"
+            )
+        )
+
+    async def callback(
+        self,
+        interaction: discord.Interaction
+    ):
+
+        if not interaction.guild:
+
+            await interaction.response.send_message(
+                "❌ هذا النظام داخل السيرفر فقط.",
+                ephemeral=True
+            )
+
+            return
+
+        if (
+            "__none__"
+            in self.values
+        ):
+
+            await interaction.response.send_message(
+                "❌ ما فيه عناصر متاحة حاليًا.",
+                ephemeral=True
+            )
+
+            return
+
+        cog = interaction.client.get_cog(
+            "FimeStock"
+        )
+
+        if not cog:
+
+            await interaction.response.send_message(
+                "❌ نظام الستوك غير متاح.",
+                ephemeral=True
+            )
+
+            return
+
+        await interaction.response.defer(
+            ephemeral=True
+        )
+
+        added_names = []
+
+        failed_names = []
+
+        for item_name in self.values:
+
+            item_name = normalize_item_name(
+                item_name
+            )
+
+            if not item_name:
+                continue
+
+            role = (
+                await cog.get_or_create_gag_item_role(
+                    interaction.guild,
+                    item_name
+                )
+            )
+
+            if not role:
+
+                failed_names.append(
+                    item_name
+                )
+
+                continue
+
+            try:
+
+                if role not in interaction.user.roles:
+
+                    await interaction.user.add_roles(
+                        role,
+                        reason=(
+                            "Fime GAG "
+                            "Fruit Notification"
+                        )
+                    )
+
+                add_gag_item_subscription(
+                    interaction.guild.id,
+                    interaction.user.id,
+                    item_name
+                )
+
+                added_names.append(
+                    item_name
+                )
+
+            except discord.Forbidden:
+
+                failed_names.append(
+                    item_name
+                )
+
+            except Exception as error:
+
+                print(
+                    "❌ GAG fruit role error:",
+                    error
+                )
+
+                failed_names.append(
+                    item_name
+                )
+
+        if added_names:
+
+            text = "\n".join(
+                f"🍎 **{name}**"
+                for name in added_names
+            )
+
+            message = (
+                "✅ **تم تفعيل إشعاراتك!**\n\n"
+                f"{text}\n\n"
+                "إذا ظهرت أي وحدة منها في ستوك جديد، "
+                "بمنشنك البوت تلقائيًا."
+            )
+
+        else:
+
+            message = (
+                "❌ ما قدرت أفعّل أي إشعار.\n"
+                "تأكد أن البوت يملك **Manage Roles** "
+                "وأن رتبته أعلى من رتب الإشعارات."
+            )
+
+        if failed_names:
+
+            failed_text = "\n".join(
+                f"• {name}"
+                for name in failed_names
+            )
+
+            message += (
+                "\n\n⚠️ تعذر تفعيل:\n"
+                f"{failed_text}"
+            )
+
+        await interaction.followup.send(
+            message,
+            ephemeral=True
+        )
+
+
+class GAGFruitView(
+    discord.ui.View
+):
+
+    def __init__(
+        self,
+        stock
+    ):
+
+        super().__init__(
+            timeout=None
+        )
+
+        options = build_gag_item_select_options(
+            stock
+        )
+
+        if not options:
+            return
+
+        self.add_item(
+            GAGFruitSelect(stock)
+        )
+
+
+# ============================================================
 # COG
 # ============================================================
 
 class FimeStock(
     commands.Cog
 ):
+
+    # ========================================================
+    # ONE TOP-LEVEL COMMAND GROUP
+    #
+    # This reduces bot6 from 12 top-level commands
+    # to ONE top-level command: /stock
+    # ========================================================
+
+    stock_group = app_commands.Group(
+        name="stock",
+        description="إدارة وعرض نظام الستوك"
+    )
 
     def __init__(
         self,
@@ -1524,7 +2113,7 @@ class FimeStock(
             return None
 
     # ========================================================
-    # NOTIFICATION ROLE
+    # STANDARD NOTIFICATION ROLE
     # ========================================================
 
     async def get_or_create_notification_role(
@@ -1612,6 +2201,170 @@ class FimeStock(
             )
 
             return None
+
+    # ========================================================
+    # GAG ITEM / FRUIT ROLE
+    # ========================================================
+
+    async def get_or_create_gag_item_role(
+        self,
+        guild,
+        item_name
+    ):
+
+        item_name = normalize_item_name(
+            item_name
+        )
+
+        if not item_name:
+            return None
+
+        existing_id = get_gag_item_role(
+            guild.id,
+            item_name
+        )
+
+        if existing_id:
+
+            role = guild.get_role(
+                existing_id
+            )
+
+            if role:
+                return role
+
+        # Keep role names short and clean.
+        role_name = (
+            f"🍎 {item_name}"
+        )
+
+        if len(role_name) > 100:
+
+            role_name = (
+                role_name[:100]
+            )
+
+        existing_role = discord.utils.get(
+            guild.roles,
+            name=role_name
+        )
+
+        if existing_role:
+
+            save_gag_item_role(
+                guild.id,
+                item_name,
+                existing_role.id
+            )
+
+            return existing_role
+
+        try:
+
+            role = await guild.create_role(
+                name=role_name,
+                color=discord.Color.green(),
+                mentionable=True,
+                reason=(
+                    "Fime GAG "
+                    "Fruit Notification Role"
+                )
+            )
+
+            save_gag_item_role(
+                guild.id,
+                item_name,
+                role.id
+            )
+
+            return role
+
+        except discord.Forbidden:
+
+            print(
+                "❌ Cannot create GAG "
+                f"item role for {item_name}."
+            )
+
+            return None
+
+        except Exception as error:
+
+            print(
+                "❌ GAG item role "
+                f"creation error: {error}"
+            )
+
+            return None
+
+    # ========================================================
+    # SEND GAG FRUIT SELECT PANEL
+    # ========================================================
+
+    async def send_gag_fruit_panel(
+        self,
+        channel,
+        stock
+    ):
+
+        options = build_gag_item_select_options(
+            stock
+        )
+
+        if not options:
+            return
+
+        embed = discord.Embed(
+            title="🍎 اختر إشعارات الفواكه",
+            description=(
+                "تبي البوت ينبهك إذا ظهرت فاكهة معينة؟\n\n"
+                "اختار **أكثر من فاكهة** من القائمة "
+                "بالأسفل.\n\n"
+                "إذا ظهرت وحدة من اختياراتك في ستوك جديد، "
+                "البوت بمنشنك تلقائيًا."
+            ),
+            color=discord.Color.green(),
+            timestamp=datetime.now(
+                timezone.utc
+            )
+        )
+
+        embed.add_field(
+            name="💡 طريقة الاستخدام",
+            value=(
+                "تقدر تختار أكثر من عنصر بنفس المرة.\n"
+                "كل اختيار يتم حفظه تلقائيًا."
+            ),
+            inline=False
+        )
+
+        embed.set_footer(
+            text=(
+                "Team Fime • "
+                "Grow a Garden Notifications"
+            )
+        )
+
+        try:
+
+            await channel.send(
+                embed=embed,
+                view=GAGFruitView(stock)
+            )
+
+        except discord.Forbidden:
+
+            print(
+                "❌ Cannot send GAG "
+                "fruit selector."
+            )
+
+        except Exception as error:
+
+            print(
+                "⚠️ GAG fruit selector error:",
+                error
+            )
 
     # ========================================================
     # SEND SHOP UPDATE
@@ -1741,6 +2494,17 @@ class FimeStock(
 
                 break
 
+        # ----------------------------------------------------
+        # Every NEW GAG stock update gets the fruit selector.
+        # ----------------------------------------------------
+
+        if game == GAME_GAG:
+
+            await self.send_gag_fruit_panel(
+                channel,
+                stock
+            )
+
     # ========================================================
     # PERSONAL ALERTS
     # ========================================================
@@ -1823,6 +2587,133 @@ class FimeStock(
 
             except Exception:
                 pass
+
+    # ========================================================
+    # GAG ITEM ROLE ALERTS
+    # ========================================================
+
+    async def send_gag_item_role_alerts(
+        self,
+        guild,
+        added
+    ):
+
+        if not added:
+            return
+
+        # ----------------------------------------------------
+        # Collect subscribers for all newly added items.
+        # ----------------------------------------------------
+
+        for item in added:
+
+            item_name = normalize_item_name(
+                item.get("name")
+            )
+
+            if not item_name:
+                continue
+
+            subscribers = (
+                get_gag_item_subscribers(
+                    guild.id,
+                    item_name
+                )
+            )
+
+            if not subscribers:
+                continue
+
+            role_id = get_gag_item_role(
+                guild.id,
+                item_name
+            )
+
+            if not role_id:
+                continue
+
+            role = guild.get_role(
+                role_id
+            )
+
+            if not role:
+                continue
+
+            # ------------------------------------------------
+            # Mention everyone subscribed to this item
+            # through the item role.
+            # ------------------------------------------------
+
+            content = role.mention
+
+            embed = discord.Embed(
+                title="🍎 فاكهة مطلوبة وصلت!",
+                description=(
+                    f"ظهرت **{item_name}** في "
+                    f"الستوك الجديد.\n\n"
+                    f"📦 الكمية: `{item.get('stock', 0)}`"
+                ),
+                color=discord.Color.green(),
+                timestamp=datetime.now(
+                    timezone.utc
+                )
+            )
+
+            rarity = item.get(
+                "rarity",
+                ""
+            )
+
+            if rarity:
+
+                embed.add_field(
+                    name="✨ النوع",
+                    value=f"`{rarity}`",
+                    inline=True
+                )
+
+            embed.set_footer(
+                text=(
+                    "Team Fime • "
+                    "GAG Fruit Alerts"
+                )
+            )
+
+            channel_id = get_shop_channel(
+                guild.id,
+                GAME_GAG
+            )
+
+            if not channel_id:
+                continue
+
+            channel = await self.resolve_channel(
+                channel_id
+            )
+
+            if not channel:
+                continue
+
+            try:
+
+                await channel.send(
+                    content=content,
+                    embed=embed
+                )
+
+            except discord.Forbidden:
+
+                print(
+                    "❌ Cannot send GAG "
+                    f"fruit alert for {item_name}."
+                )
+
+            except Exception as error:
+
+                print(
+                    "⚠️ GAG fruit alert error:",
+                    error
+                )
 
     # ========================================================
     # PROCESS STOCK
@@ -1937,21 +2828,41 @@ class FimeStock(
             current_json
         )
 
+        # ----------------------------------------------------
         # Send full stock
+        # ----------------------------------------------------
+
         await self.send_shop_update(
             guild,
             game,
             stock
         )
 
+        # ----------------------------------------------------
         # Personal alerts
+        # ----------------------------------------------------
+
         await self.send_personal_alerts(
             guild,
             game,
             added
         )
 
+        # ----------------------------------------------------
+        # GAG fruit/item role alerts
+        # ----------------------------------------------------
+
+        if game == GAME_GAG:
+
+            await self.send_gag_item_role_alerts(
+                guild,
+                added
+            )
+
+        # ----------------------------------------------------
         # Rare stock
+        # ----------------------------------------------------
+
         if game == GAME_GAG:
 
             rare_added = [
@@ -2245,11 +3156,11 @@ class FimeStock(
                 pass
 
     # ========================================================
-    # /STOCK
+    # /STOCK VIEW
     # ========================================================
 
-    @app_commands.command(
-        name="stock",
+    @stock_group.command(
+        name="view",
         description="عرض الستوك الحالي"
     )
     @app_commands.describe(
@@ -2315,12 +3226,28 @@ class FimeStock(
                 embed=embed
             )
 
+        # When manually viewing GAG stock,
+        # also provide the fruit selector.
+        if game.value == GAME_GAG:
+
+            await interaction.followup.send(
+                embed=discord.Embed(
+                    title="🍎 إشعارات الفواكه",
+                    description=(
+                        "اختار الفواكه اللي تبي البوت "
+                        "ينبهك عنها."
+                    ),
+                    color=discord.Color.green()
+                ),
+                view=GAGFruitView(stock)
+            )
+
     # ========================================================
-    # /STOCK-CHANNEL
+    # /STOCK CHANNEL
     # ========================================================
 
-    @app_commands.command(
-        name="stock-channel",
+    @stock_group.command(
+        name="channel",
         description="تحديد روم إرسال تحديثات الستوك"
     )
     @app_commands.checks.has_permissions(
@@ -2368,11 +3295,11 @@ class FimeStock(
         )
 
     # ========================================================
-    # /STOCK-CHANNEL-REMOVE
+    # /STOCK CHANNEL-REMOVE
     # ========================================================
 
-    @app_commands.command(
-        name="stock-channel-remove",
+    @stock_group.command(
+        name="channel-remove",
         description="إزالة روم الستوك"
     )
     @app_commands.checks.has_permissions(
@@ -2417,11 +3344,11 @@ class FimeStock(
         )
 
     # ========================================================
-    # /STOCK-CHANNEL-STATUS
+    # /STOCK CHANNEL-STATUS
     # ========================================================
 
-    @app_commands.command(
-        name="stock-channel-status",
+    @stock_group.command(
+        name="channel-status",
         description="عرض رومات الستوك المحددة"
     )
     @app_commands.checks.has_permissions(
@@ -2475,11 +3402,11 @@ class FimeStock(
         )
 
     # ========================================================
-    # /STOCK-NOTIFICATIONS-SETUP
+    # /STOCK NOTIFICATIONS-SETUP
     # ========================================================
 
-    @app_commands.command(
-        name="stock-notifications-setup",
+    @stock_group.command(
+        name="notifications-setup",
         description="إنشاء لوحة إشعارات الستوك"
     )
     @app_commands.checks.has_permissions(
@@ -2546,11 +3473,11 @@ class FimeStock(
             )
 
     # ========================================================
-    # /STOCK-NOTIFICATIONS-RESET
+    # /STOCK NOTIFICATIONS-RESET
     # ========================================================
 
-    @app_commands.command(
-        name="stock-notifications-reset",
+    @stock_group.command(
+        name="notifications-reset",
         description="تحديث لوحة الإشعارات"
     )
     @app_commands.checks.has_permissions(
@@ -2655,11 +3582,11 @@ class FimeStock(
             )
 
     # ========================================================
-    # /STOCK-ALERT
+    # /STOCK ALERT
     # ========================================================
 
-    @app_commands.command(
-        name="stock-alert",
+    @stock_group.command(
+        name="alert",
         description="إضافة تنبيه شخصي لعنصر"
     )
     @app_commands.describe(
@@ -2715,11 +3642,11 @@ class FimeStock(
         )
 
     # ========================================================
-    # /STOCK-ALERT-REMOVE
+    # /STOCK ALERT-REMOVE
     # ========================================================
 
-    @app_commands.command(
-        name="stock-alert-remove",
+    @stock_group.command(
+        name="alert-remove",
         description="إزالة تنبيه شخصي"
     )
     @app_commands.describe(
@@ -2773,11 +3700,11 @@ class FimeStock(
         )
 
     # ========================================================
-    # /STOCK-ALERTS
+    # /STOCK ALERTS
     # ========================================================
 
-    @app_commands.command(
-        name="stock-alerts",
+    @stock_group.command(
+        name="alerts",
         description="عرض تنبيهاتك الشخصية"
     )
     async def stock_alerts(
@@ -2800,7 +3727,12 @@ class FimeStock(
 
         conn.close()
 
-        if not rows:
+        gag_items = get_gag_user_items(
+            interaction.guild.id,
+            interaction.user.id
+        )
+
+        if not rows and not gag_items:
 
             await interaction.response.send_message(
                 (
@@ -2824,6 +3756,22 @@ class FimeStock(
                 )
             )
 
+        if gag_items:
+
+            lines.append(
+                ""
+            )
+
+            lines.append(
+                "🍎 **فواكه Grow a Garden:**"
+            )
+
+            for item_name in gag_items:
+
+                lines.append(
+                    f"• **{item_name}**"
+                )
+
         embed = discord.Embed(
             title="🔔 تنبيهاتك الشخصية",
             description="\n".join(
@@ -2838,10 +3786,10 @@ class FimeStock(
         )
 
     # ========================================================
-    # /STEAL-ALERT
+    # /STOCK STEAL-ALERT
     # ========================================================
 
-    @app_commands.command(
+    @stock_group.command(
         name="steal-alert",
         description="تفعيل إشعار Steal An Egg"
     )
@@ -2918,10 +3866,10 @@ class FimeStock(
             )
 
     # ========================================================
-    # /STEAL-ALERT-REMOVE
+    # /STOCK STEAL-ALERT-REMOVE
     # ========================================================
 
-    @app_commands.command(
+    @stock_group.command(
         name="steal-alert-remove",
         description="إزالة إشعار Steal An Egg"
     )
@@ -2989,11 +3937,11 @@ class FimeStock(
         )
 
     # ========================================================
-    # /STOCK-STATUS
+    # /STOCK STATUS
     # ========================================================
 
-    @app_commands.command(
-        name="stock-status",
+    @stock_group.command(
+        name="status",
         description="عرض حالة نظام الستوك"
     )
     @app_commands.checks.has_permissions(
