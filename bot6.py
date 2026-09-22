@@ -15,7 +15,6 @@
 # - Egg Reset alerts
 # - Rift alerts
 # - SQLite persistence
-# - Discord role compatibility
 # - Admin status commands
 #
 # IMPORTANT:
@@ -67,12 +66,13 @@ BLOX_API_URL = os.getenv(
 # Stock checking interval
 # ------------------------------------------------------------
 
-STOCK_CHECK_SECONDS = int(
-    os.getenv(
-        "STOCK_CHECK_SECONDS",
-        "30"
+try:
+    STOCK_CHECK_SECONDS = max(
+        10,
+        int(os.getenv("STOCK_CHECK_SECONDS", "30"))
     )
-)
+except ValueError:
+    STOCK_CHECK_SECONDS = 30
 
 # ------------------------------------------------------------
 # Steal An Egg
@@ -93,10 +93,7 @@ STEAL_RIFT_MINUTES = 30
 # ============================================================
 
 def db_connect():
-
-    return sqlite3.connect(
-        DB_FILE
-    )
+    return sqlite3.connect(DB_FILE)
 
 
 def setup_database():
@@ -110,19 +107,13 @@ def setup_database():
 
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS subscriptions (
-
             id INTEGER PRIMARY KEY AUTOINCREMENT,
-
             guild_id INTEGER NOT NULL,
             user_id INTEGER NOT NULL,
-
             game TEXT NOT NULL,
             item TEXT NOT NULL,
-
             channel_id INTEGER NOT NULL,
-
             enabled INTEGER DEFAULT 1,
-
             created_at TEXT NOT NULL,
 
             UNIQUE(
@@ -140,18 +131,12 @@ def setup_database():
 
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS event_subscriptions (
-
             id INTEGER PRIMARY KEY AUTOINCREMENT,
-
             guild_id INTEGER NOT NULL,
             user_id INTEGER NOT NULL,
-
             event_type TEXT NOT NULL,
-
             channel_id INTEGER NOT NULL,
-
             enabled INTEGER DEFAULT 1,
-
             created_at TEXT NOT NULL,
 
             UNIQUE(
@@ -168,11 +153,8 @@ def setup_database():
 
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS stock_cache (
-
             game TEXT PRIMARY KEY,
-
             stock TEXT NOT NULL,
-
             updated_at TEXT NOT NULL
         )
     """)
@@ -183,9 +165,7 @@ def setup_database():
 
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS event_cache (
-
             event_type TEXT PRIMARY KEY,
-
             last_event INTEGER NOT NULL
         )
     """)
@@ -194,25 +174,14 @@ def setup_database():
     # AUTOMATIC SHOP CHANNELS
     #
     # One channel per guild per game.
-    #
-    # Example:
-    #
-    # Guild 123
-    # Grow A Garden -> Channel 555
-    # Blox Fruits   -> Channel 777
     # ========================================================
 
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS shop_channels (
-
             guild_id INTEGER NOT NULL,
-
             game TEXT NOT NULL,
-
             channel_id INTEGER NOT NULL,
-
             enabled INTEGER DEFAULT 1,
-
             created_at TEXT NOT NULL,
 
             PRIMARY KEY(
@@ -257,7 +226,6 @@ def add_stock_subscription(
             enabled,
             created_at
         )
-
         VALUES (?, ?, ?, ?, ?, 1, ?)
     """, (
         guild_id,
@@ -284,7 +252,6 @@ def remove_stock_subscription(
 
     cursor.execute("""
         DELETE FROM subscriptions
-
         WHERE guild_id = ?
         AND user_id = ?
         AND game = ?
@@ -391,7 +358,6 @@ def add_event_subscription(
             enabled,
             created_at
         )
-
         VALUES (?, ?, ?, ?, 1, ?)
     """, (
         guild_id,
@@ -416,7 +382,6 @@ def remove_event_subscription(
 
     cursor.execute("""
         DELETE FROM event_subscriptions
-
         WHERE guild_id = ?
         AND user_id = ?
         AND event_type = ?
@@ -517,7 +482,6 @@ def set_shop_channel(
             enabled,
             created_at
         )
-
         VALUES (?, ?, ?, 1, ?)
     """, (
         guild_id,
@@ -540,7 +504,6 @@ def remove_shop_channel(
 
     cursor.execute("""
         DELETE FROM shop_channels
-
         WHERE guild_id = ?
         AND game = ?
     """, (
@@ -666,7 +629,6 @@ def save_cached_stock(
             stock,
             updated_at
         )
-
         VALUES (?, ?, ?)
     """, (
         game,
@@ -703,7 +665,7 @@ async def fetch_json(
                 url,
                 headers={
                     "User-Agent":
-                        "Fime-Stock-Bot/1.0",
+                        "Fime-Stock-Bot/1.1",
 
                     "Accept":
                         "application/json"
@@ -714,8 +676,15 @@ async def fetch_json(
 
                     print(
                         f"[API] {url} -> "
-                        f"{response.status}"
+                        f"HTTP {response.status}"
                     )
+
+                    if response.status == 404:
+
+                        print(
+                            "[API] The configured endpoint "
+                            "does not exist."
+                        )
 
                     return None
 
@@ -730,8 +699,8 @@ async def fetch_json(
                     text = await response.text()
 
                     print(
-                        f"[API] Invalid JSON: "
-                        f"{text[:200]}"
+                        "[API] Invalid JSON response: "
+                        f"{text[:300]}"
                     )
 
                     return None
@@ -740,6 +709,14 @@ async def fetch_json(
 
         print(
             f"[API] Timeout: {url}"
+        )
+
+        return None
+
+    except aiohttp.ClientError as error:
+
+        print(
+            f"[API] HTTP error: {error}"
         )
 
         return None
@@ -780,7 +757,7 @@ def normalize_gag(
             ):
 
                 result.append(
-                    item
+                    item.strip()
                 )
 
             elif isinstance(
@@ -809,6 +786,8 @@ def normalize_gag(
 
                 if name:
 
+                    name = str(name).strip()
+
                     if quantity is not None:
 
                         result.append(
@@ -818,7 +797,7 @@ def normalize_gag(
                     else:
 
                         result.append(
-                            str(name)
+                            name
                         )
 
     elif isinstance(
@@ -826,13 +805,14 @@ def normalize_gag(
         dict
     ):
 
+        # Some APIs put everything inside "stock".
         stock = data.get(
             "stock"
         )
 
         if isinstance(
             stock,
-            list
+            (list, dict)
         ):
 
             result.extend(
@@ -863,7 +843,7 @@ def normalize_gag(
 
             if isinstance(
                 value,
-                list
+                (list, dict)
             ):
 
                 result.extend(
@@ -874,7 +854,9 @@ def normalize_gag(
 
     return list(
         dict.fromkeys(
-            result
+            item
+            for item in result
+            if item
         )
     )
 
@@ -906,7 +888,7 @@ def normalize_blox(
             ):
 
                 result.append(
-                    item
+                    item.strip()
                 )
 
             elif isinstance(
@@ -923,7 +905,7 @@ def normalize_blox(
                 if name:
 
                     result.append(
-                        str(name)
+                        str(name).strip()
                     )
 
     elif isinstance(
@@ -944,7 +926,7 @@ def normalize_blox(
 
             if isinstance(
                 value,
-                list
+                (list, dict)
             ):
 
                 result.extend(
@@ -991,7 +973,9 @@ def normalize_blox(
 
     return list(
         dict.fromkeys(
-            result
+            item
+            for item in result
+            if item
         )
     )
 
@@ -1014,7 +998,6 @@ async def get_grow_a_garden_stock():
 async def get_blox_fruits_stock():
 
     if not BLOX_API_URL:
-
         return []
 
     data = await fetch_json(
@@ -1089,34 +1072,20 @@ def steal_egg_status():
         STEAL_RIFT_MINUTES
     )
 
-    egg_remaining = (
-        seconds_until_next_cycle(
-            STEAL_EGG_RESET_MINUTES
-        )
+    egg_remaining = seconds_until_next_cycle(
+        STEAL_EGG_RESET_MINUTES
     )
 
-    rift_remaining = (
-        seconds_until_next_cycle(
-            STEAL_RIFT_MINUTES
-        )
+    rift_remaining = seconds_until_next_cycle(
+        STEAL_RIFT_MINUTES
     )
 
     return {
-
-        "egg_id":
-            egg_id,
-
-        "rift_id":
-            rift_id,
-
-        "egg_remaining":
-            egg_remaining,
-
-        "rift_remaining":
-            rift_remaining,
-
-        "now":
-            now
+        "egg_id": egg_id,
+        "rift_id": rift_id,
+        "egg_remaining": egg_remaining,
+        "rift_remaining": rift_remaining,
+        "now": now
     }
 
 
@@ -1198,6 +1167,155 @@ class FimeStock(
         )
 
     # ========================================================
+    # RESOLVE CHANNEL
+    # ========================================================
+
+    async def resolve_channel(
+        self,
+        channel_id
+    ):
+
+        channel = self.bot.get_channel(
+            channel_id
+        )
+
+        if channel:
+            return channel
+
+        try:
+
+            channel = await self.bot.fetch_channel(
+                channel_id
+            )
+
+            return channel
+
+        except (
+            discord.NotFound,
+            discord.Forbidden,
+            discord.HTTPException
+        ):
+
+            return None
+
+        except Exception as error:
+
+            print(
+                f"[CHANNEL ERROR] {error}"
+            )
+
+            return None
+
+    # ========================================================
+    # BUILD SHOP EMBED
+    # ========================================================
+
+    @staticmethod
+    def build_shop_embeds(
+        game_name,
+        stock
+    ):
+
+        """
+        Discord embed descriptions have a 4096 character limit.
+
+        Instead of cutting the stock, split it into multiple
+        embeds so the complete shop can be posted.
+        """
+
+        chunks = []
+
+        current_lines = []
+        current_length = 0
+
+        for item in stock:
+
+            line = f"🟢 {item}"
+
+            # Keep a safe margin below Discord's limit.
+            if (
+                current_lines
+                and current_length
+                + len(line)
+                + 1
+                > 3800
+            ):
+
+                chunks.append(
+                    current_lines
+                )
+
+                current_lines = []
+                current_length = 0
+
+            current_lines.append(
+                line
+            )
+
+            current_length += (
+                len(line) + 1
+            )
+
+        if current_lines:
+
+            chunks.append(
+                current_lines
+            )
+
+        if not chunks:
+            return []
+
+        embeds = []
+
+        total = len(chunks)
+
+        for index, lines in enumerate(
+            chunks,
+            start=1
+        ):
+
+            if total > 1:
+
+                title = (
+                    f"🛒 {game_name} — "
+                    f"Shop Update "
+                    f"({index}/{total})"
+                )
+
+            else:
+
+                title = (
+                    f"🛒 {game_name} — "
+                    "Shop Update"
+                )
+
+            embed = discord.Embed(
+
+                title=title,
+
+                description="\n".join(
+                    lines
+                ),
+
+                timestamp=datetime.now(
+                    timezone.utc
+                )
+            )
+
+            embed.set_footer(
+                text=(
+                    "Fime Stock • "
+                    "تم تحديث الشوب تلقائيًا"
+                )
+            )
+
+            embeds.append(
+                embed
+            )
+
+        return embeds
+
+    # ========================================================
     # SEND AUTOMATIC SHOP
     # ========================================================
 
@@ -1208,7 +1326,6 @@ class FimeStock(
     ):
 
         if not stock:
-
             return
 
         channels = get_all_shop_channels(
@@ -1216,77 +1333,33 @@ class FimeStock(
         )
 
         if not channels:
-
             return
 
         game_name = self.game_name(
             game
         )
 
-        # ----------------------------------------------------
-        # Build stock text
-        # ----------------------------------------------------
-
-        lines = []
-
-        for item in stock[:100]:
-
-            lines.append(
-                f"🟢 {item}"
-            )
-
-        description = "\n".join(
-            lines
+        embeds = self.build_shop_embeds(
+            game_name,
+            stock
         )
 
-        # ----------------------------------------------------
-        # Discord embed limit protection
-        # ----------------------------------------------------
-
-        if len(description) > 3900:
-
-            description = (
-                description[:3890]
-                + "\n..."
-            )
-
-        embed = discord.Embed(
-
-            title=(
-                f"🛒 {game_name} — Shop Update"
-            ),
-
-            description=description,
-
-            timestamp=datetime.now(
-                timezone.utc
-            )
-        )
-
-        embed.set_footer(
-            text=(
-                "Fime Stock • "
-                "تم تحديث الشوب تلقائيًا"
-            )
-        )
-
-        # ----------------------------------------------------
-        # Send to every configured guild channel
-        # ----------------------------------------------------
+        if not embeds:
+            return
 
         for (
             guild_id,
             channel_id
         ) in channels:
 
-            channel = self.bot.get_channel(
+            channel = await self.resolve_channel(
                 channel_id
             )
 
             if not channel:
 
                 print(
-                    f"[SHOP] Channel not found: "
+                    f"[SHOP] Channel unavailable: "
                     f"{channel_id}"
                 )
 
@@ -1294,9 +1367,11 @@ class FimeStock(
 
             try:
 
-                await channel.send(
-                    embed=embed
-                )
+                for embed in embeds:
+
+                    await channel.send(
+                        embed=embed
+                    )
 
                 print(
                     f"[SHOP] Sent {game} update "
@@ -1315,6 +1390,13 @@ class FimeStock(
                 print(
                     f"[SHOP] Channel deleted: "
                     f"{channel_id}"
+                )
+
+            except discord.HTTPException as error:
+
+                print(
+                    f"[SHOP HTTP ERROR] "
+                    f"{error}"
                 )
 
             except Exception as error:
@@ -1394,7 +1476,6 @@ class FimeStock(
                 event_type,
                 last_event
             )
-
             VALUES (?, ?)
         """, (
             event_type,
@@ -1416,26 +1497,20 @@ class FimeStock(
         ) in subscriptions:
 
             if subscribed_event != event_type:
-
                 continue
 
-            channel = self.bot.get_channel(
+            channel = await self.resolve_channel(
                 channel_id
             )
 
             if not channel:
-
                 continue
 
-            mention = (
-                f"<@{user_id}>"
-            )
+            mention = f"<@{user_id}>"
 
             if event_type == "egg_reset":
 
-                title = (
-                    "🥚 Egg Reset"
-                )
+                title = "🥚 Egg Reset"
 
                 description = (
 
@@ -1447,9 +1522,7 @@ class FimeStock(
 
             else:
 
-                title = (
-                    "🌀 Rift"
-                )
+                title = "🌀 Rift"
 
                 description = (
 
@@ -1498,30 +1571,59 @@ class FimeStock(
     ):
 
         if not stock:
-
             return
 
+        # ----------------------------------------------------
+        # Clean duplicates while preserving API order.
+        # ----------------------------------------------------
+
+        clean_stock = []
+
+        seen = set()
+
+        for item in stock:
+
+            item = str(item).strip()
+
+            if not item:
+                continue
+
+            if item in seen:
+                continue
+
+            seen.add(item)
+
+            clean_stock.append(
+                item
+            )
+
+        if not clean_stock:
+            return
+
+        # ----------------------------------------------------
+        # Canonical cache representation.
+        #
+        # Sorting means a simple API order change does not
+        # trigger a fake shop refresh.
+        # ----------------------------------------------------
+
         current = set(
-            stock
+            clean_stock
         )
 
         current_text = "\n".join(
             sorted(current)
         )
 
-        previous_text = (
-            get_cached_stock(
-                game
-            )
+        previous_text = get_cached_stock(
+            game
         )
 
         # ----------------------------------------------------
         # FIRST RUN
         #
         # Cache only.
-        #
-        # This prevents the bot from sending a shop message
-        # immediately when it starts.
+        # Do not send automatic shop message.
         # ----------------------------------------------------
 
         if previous_text is None:
@@ -1532,18 +1634,20 @@ class FimeStock(
             )
 
             print(
-                f"[CACHE] {game} "
-                f"({len(current)} items)"
+                f"[CACHE] {game} initialized "
+                f"with {len(current)} items."
             )
 
             return
 
         previous = set(
-            previous_text.splitlines()
+            line.strip()
+            for line in previous_text.splitlines()
+            if line.strip()
         )
 
         # ----------------------------------------------------
-        # Detect changes
+        # Detect additions/removals.
         # ----------------------------------------------------
 
         added = (
@@ -1560,15 +1664,18 @@ class FimeStock(
         )
 
         # ----------------------------------------------------
-        # No change
+        # No change.
         # ----------------------------------------------------
 
         if not changed:
-
             return
 
         # ----------------------------------------------------
-        # Save new cache
+        # IMPORTANT:
+        # Always update cache when stock changes.
+        #
+        # This fixes the old behavior where removal-only
+        # changes were not saved.
         # ----------------------------------------------------
 
         save_cached_stock(
@@ -1584,23 +1691,22 @@ class FimeStock(
 
         # ----------------------------------------------------
         # AUTOMATIC SHOP MESSAGE
-        # ----------------------------------------------------
         #
-        # This sends the FULL current shop to the configured
-        # shop channel.
+        # Sends the complete current shop.
         # ----------------------------------------------------
 
         await self.send_shop_update(
             game,
-            stock
+            clean_stock
         )
 
         # ----------------------------------------------------
         # PERSONAL ALERTS
+        #
+        # Only new/added items trigger personal alerts.
         # ----------------------------------------------------
 
         if not added:
-
             return
 
         subscriptions = (
@@ -1616,12 +1722,9 @@ class FimeStock(
         ) in subscriptions:
 
             if subscribed_game != game:
-
                 continue
 
-            wanted = (
-                wanted_item.lower()
-            )
+            wanted = wanted_item.lower()
 
             matches = []
 
@@ -1634,20 +1737,16 @@ class FimeStock(
                     )
 
             if not matches:
-
                 continue
 
-            channel = self.bot.get_channel(
+            channel = await self.resolve_channel(
                 channel_id
             )
 
             if not channel:
-
                 continue
 
-            mention = (
-                f"<@{user_id}>"
-            )
+            mention = f"<@{user_id}>"
 
             game_name = self.game_name(
                 game
@@ -1664,9 +1763,7 @@ class FimeStock(
                     f"🎮 **{game_name}**\n\n"
 
                     + "\n".join(
-
                         f"🟢 {item}"
-
                         for item in matches
                     )
                 ),
@@ -1715,17 +1812,14 @@ class FimeStock(
             )
 
             await self.process_stock(
-
                 "growagarden",
-
                 gag_stock
             )
 
         except Exception as error:
 
             print(
-                f"[GAG ERROR] "
-                f"{error}"
+                f"[GAG ERROR] {error}"
             )
 
         # ----------------------------------------------------
@@ -1739,17 +1833,14 @@ class FimeStock(
             )
 
             await self.process_stock(
-
                 "bloxfruits",
-
                 blox_stock
             )
 
         except Exception as error:
 
             print(
-                f"[BLOX ERROR] "
-                f"{error}"
+                f"[BLOX ERROR] {error}"
             )
 
         # ----------------------------------------------------
@@ -1763,8 +1854,7 @@ class FimeStock(
         except Exception as error:
 
             print(
-                f"[STEAL EGG ERROR] "
-                f"{error}"
+                f"[STEAL EGG ERROR] {error}"
             )
 
     @stock_loop.before_loop
@@ -1827,29 +1917,28 @@ class FimeStock(
 
             return
 
-        text = "\n".join(
-            f"• {item}"
-            for item in stock[:50]
+        # ----------------------------------------------------
+        # Protect against Discord embed limits.
+        # ----------------------------------------------------
+
+        embeds = self.build_shop_embeds(
+            game.name,
+            stock[:100]
         )
 
-        embed = discord.Embed(
+        if not embeds:
 
-            title=game.name,
-
-            description=text,
-
-            timestamp=datetime.now(
-                timezone.utc
+            await interaction.followup.send(
+                "⚠️ ما فيه بيانات Stock."
             )
-        )
 
-        embed.set_footer(
-            text="Fime Stock"
-        )
+            return
 
-        await interaction.followup.send(
-            embed=embed
-        )
+        for embed in embeds:
+
+            await interaction.followup.send(
+                embed=embed
+            )
 
     # ========================================================
     # /steal-egg
@@ -1953,9 +2042,7 @@ class FimeStock(
         if not interaction.guild:
 
             await interaction.response.send_message(
-
                 "❌ هذا الأمر داخل السيرفر فقط.",
-
                 ephemeral=True
             )
 
@@ -1966,24 +2053,17 @@ class FimeStock(
         if not item:
 
             await interaction.response.send_message(
-
                 "❌ اكتب اسم العنصر.",
-
                 ephemeral=True
             )
 
             return
 
         add_stock_subscription(
-
             interaction.guild.id,
-
             interaction.user.id,
-
             game.value,
-
             item,
-
             channel.id
         )
 
@@ -2038,22 +2118,16 @@ class FimeStock(
         if not interaction.guild:
 
             await interaction.response.send_message(
-
                 "❌ هذا الأمر داخل السيرفر فقط.",
-
                 ephemeral=True
             )
 
             return
 
         removed = remove_stock_subscription(
-
             interaction.guild.id,
-
             interaction.user.id,
-
             game.value,
-
             item
         )
 
@@ -2070,9 +2144,7 @@ class FimeStock(
             )
 
         await interaction.response.send_message(
-
             message,
-
             ephemeral=True
         )
 
@@ -2092,9 +2164,7 @@ class FimeStock(
         if not interaction.guild:
 
             await interaction.response.send_message(
-
                 "❌ هذا الأمر داخل السيرفر فقط.",
-
                 ephemeral=True
             )
 
@@ -2102,18 +2172,14 @@ class FimeStock(
 
         stock_rows = (
             get_user_stock_subscriptions(
-
                 interaction.guild.id,
-
                 interaction.user.id
             )
         )
 
         event_rows = (
             get_user_event_subscriptions(
-
                 interaction.guild.id,
-
                 interaction.user.id
             )
         )
@@ -2121,9 +2187,7 @@ class FimeStock(
         if not stock_rows and not event_rows:
 
             await interaction.response.send_message(
-
                 "📭 ما عندك أي تنبيهات.",
-
                 ephemeral=True
             )
 
@@ -2143,7 +2207,6 @@ class FimeStock(
             )
 
             lines.append(
-
                 f"📦 {game_name} — "
                 f"`{item}` — <#{channel_id}>"
             )
@@ -2168,7 +2231,6 @@ class FimeStock(
             )
 
             lines.append(
-
                 f"🔔 {event_name} — "
                 f"<#{channel_id}>"
             )
@@ -2187,9 +2249,7 @@ class FimeStock(
         )
 
         await interaction.response.send_message(
-
             embed=embed,
-
             ephemeral=True
         )
 
@@ -2229,22 +2289,16 @@ class FimeStock(
         if not interaction.guild:
 
             await interaction.response.send_message(
-
                 "❌ هذا الأمر داخل السيرفر فقط.",
-
                 ephemeral=True
             )
 
             return
 
         add_event_subscription(
-
             interaction.guild.id,
-
             interaction.user.id,
-
             event.value,
-
             channel.id
         )
 
@@ -2308,20 +2362,15 @@ class FimeStock(
         if not interaction.guild:
 
             await interaction.response.send_message(
-
                 "❌ هذا الأمر داخل السيرفر فقط.",
-
                 ephemeral=True
             )
 
             return
 
         removed = remove_event_subscription(
-
             interaction.guild.id,
-
             interaction.user.id,
-
             event.value
         )
 
@@ -2338,9 +2387,7 @@ class FimeStock(
             )
 
         await interaction.response.send_message(
-
             message,
-
             ephemeral=True
         )
 
@@ -2350,10 +2397,8 @@ class FimeStock(
     # ADMIN:
     # Select game + channel.
     #
-    # After that:
-    #
-    # Whenever the shop changes,
-    # the bot posts the FULL current shop there.
+    # Whenever the stock changes, the bot posts the
+    # complete current stock in this channel.
     # ========================================================
 
     @app_commands.command(
@@ -2391,20 +2436,15 @@ class FimeStock(
         if not interaction.guild:
 
             await interaction.response.send_message(
-
                 "❌ هذا الأمر داخل السيرفر فقط.",
-
                 ephemeral=True
             )
 
             return
 
         set_shop_channel(
-
             interaction.guild.id,
-
             game.value,
-
             channel.id
         )
 
@@ -2433,9 +2473,7 @@ class FimeStock(
         )
 
         await interaction.response.send_message(
-
             embed=embed,
-
             ephemeral=True
         )
 
@@ -2476,18 +2514,14 @@ class FimeStock(
         if not interaction.guild:
 
             await interaction.response.send_message(
-
                 "❌ هذا الأمر داخل السيرفر فقط.",
-
                 ephemeral=True
             )
 
             return
 
         removed = remove_shop_channel(
-
             interaction.guild.id,
-
             game.value
         )
 
@@ -2505,9 +2539,7 @@ class FimeStock(
             )
 
         await interaction.response.send_message(
-
             message,
-
             ephemeral=True
         )
 
@@ -2530,47 +2562,33 @@ class FimeStock(
         if not interaction.guild:
 
             await interaction.response.send_message(
-
                 "❌ هذا الأمر داخل السيرفر فقط.",
-
                 ephemeral=True
             )
 
             return
 
         gag_channel = get_shop_channel(
-
             interaction.guild.id,
-
             "growagarden"
         )
 
         blox_channel = get_shop_channel(
-
             interaction.guild.id,
-
             "bloxfruits"
         )
 
         gag_text = (
-
             f"<#{gag_channel}>"
-
             if gag_channel
-
             else
-
             "❌ غير محدد"
         )
 
         blox_text = (
-
             f"<#{blox_channel}>"
-
             if blox_channel
-
             else
-
             "❌ غير محدد"
         )
 
@@ -2593,9 +2611,7 @@ class FimeStock(
         )
 
         await interaction.response.send_message(
-
             embed=embed,
-
             ephemeral=True
         )
 
@@ -2614,6 +2630,15 @@ class FimeStock(
         self,
         interaction: discord.Interaction
     ):
+
+        if not interaction.guild:
+
+            await interaction.response.send_message(
+                "❌ هذا الأمر داخل السيرفر فقط.",
+                ephemeral=True
+            )
+
+            return
 
         await interaction.response.defer(
             ephemeral=True
@@ -2660,16 +2685,12 @@ class FimeStock(
             )
 
         gag_channel = get_shop_channel(
-
             interaction.guild.id,
-
             "growagarden"
         )
 
         blox_channel = get_shop_channel(
-
             interaction.guild.id,
-
             "bloxfruits"
         )
 
@@ -2739,9 +2760,7 @@ class FimeStock(
         )
 
         await interaction.followup.send(
-
             embed=embed,
-
             ephemeral=True
         )
 
@@ -2771,22 +2790,27 @@ class FimeStock(
                 "**Manage Server**."
             )
 
-            if interaction.response.is_done():
+            try:
 
-                await interaction.followup.send(
+                if interaction.response.is_done():
 
-                    message,
+                    await interaction.followup.send(
+                        message,
+                        ephemeral=True
+                    )
 
-                    ephemeral=True
-                )
+                else:
 
-            else:
+                    await interaction.response.send_message(
+                        message,
+                        ephemeral=True
+                    )
 
-                await interaction.response.send_message(
+            except Exception as send_error:
 
-                    message,
-
-                    ephemeral=True
+                print(
+                    f"[COMMAND ERROR SEND] "
+                    f"{send_error}"
                 )
 
             return
