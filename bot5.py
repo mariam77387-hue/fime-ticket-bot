@@ -4,6 +4,8 @@
 # Automatic Divider / Line Image System
 # +
 # Temporary Join Mention System
+# +
+# Fime Keyword Response System
 # ============================================================
 
 from __future__ import annotations
@@ -47,7 +49,21 @@ DEFAULT_GUILD_CONFIG = {
 
     "join_mention_enabled": False,
     "join_mention_channel_id": None,
-    "join_mention_duration": 2
+    "join_mention_duration": 2,
+
+    # ========================================================
+    # FIME KEYWORD SYSTEM
+    # ========================================================
+
+    # هل نظام كلمة "فيم" مفعل؟
+    "fime_word_enabled": True,
+
+    # الرسالة التي يرسلها البوت عند كتابة "فيم"
+    "fime_word_response": "هلا؟ وش تبي يا فايم؟",
+
+    # هل نسمح بكلمة "فيمي" أيضًا؟
+    # False = فقط "فيم"
+    "fime_word_accept_fimi": False,
 }
 
 
@@ -133,7 +149,7 @@ class AutomaticLineSystem(commands.Cog):
         self.config = load_config()
 
         print(
-            "✅ bot5 — Automatic Line + Join Mention loaded."
+            "✅ bot5 — Automatic Line + Join Mention + Fime Keyword loaded."
         )
 
 
@@ -515,10 +531,6 @@ class AutomaticLineSystem(commands.Cog):
 
             return
 
-        # ----------------------------------------------------
-        # Image check
-        # ----------------------------------------------------
-
         if not self.is_supported_image(
             image
         ):
@@ -543,10 +555,6 @@ class AutomaticLineSystem(commands.Cog):
         cfg = self.get_config(
             guild.id
         )
-
-        # ----------------------------------------------------
-        # Target channel
-        # ----------------------------------------------------
 
         if channel is None:
 
@@ -593,17 +601,9 @@ class AutomaticLineSystem(commands.Cog):
                 channel.id
             )
 
-        # ----------------------------------------------------
-        # Delete old storage
-        # ----------------------------------------------------
-
         await self.delete_old_storage(
             guild
         )
-
-        # ----------------------------------------------------
-        # Create storage
-        # ----------------------------------------------------
 
         try:
 
@@ -870,6 +870,325 @@ class AutomaticLineSystem(commands.Cog):
 
 
     # ========================================================
+    # FIME KEYWORD SYSTEM
+    # ========================================================
+
+    def normalize_fime_keyword(
+        self,
+        content: str
+    ):
+
+        value = str(content or "").strip()
+
+        # إزالة المسافات الزائدة فقط
+        value = " ".join(
+            value.split()
+        )
+
+        return value.casefold()
+
+
+    def is_fime_keyword(
+        self,
+        content: str,
+        accept_fimi: bool = False
+    ):
+
+        normalized = self.normalize_fime_keyword(
+            content
+        )
+
+        if normalized == "فيم":
+            return True
+
+        if accept_fimi and normalized == "فيمي":
+            return True
+
+        return False
+
+
+    async def handle_fime_keyword(
+        self,
+        message: discord.Message,
+        cfg
+    ):
+
+        if not cfg.get(
+            "fime_word_enabled",
+            True
+        ):
+            return False
+
+        accept_fimi = bool(
+            cfg.get(
+                "fime_word_accept_fimi",
+                False
+            )
+        )
+
+        if not self.is_fime_keyword(
+            message.content,
+            accept_fimi
+        ):
+            return False
+
+        response_text = str(
+            cfg.get(
+                "fime_word_response",
+                ""
+            )
+            or ""
+        ).strip()
+
+        if not response_text:
+
+            return False
+
+        try:
+
+            await message.channel.send(
+                response_text,
+                allowed_mentions=discord.AllowedMentions.none()
+            )
+
+        except discord.Forbidden as error:
+
+            print(
+                "⚠️ bot5 Fime keyword permission error:",
+                error
+            )
+
+        except discord.HTTPException as error:
+
+            print(
+                "⚠️ bot5 Fime keyword HTTP error:",
+                error
+            )
+
+        except Exception as error:
+
+            print(
+                "❌ bot5 Fime keyword error:",
+                error
+            )
+
+        return True
+
+
+    # ========================================================
+    # /فيم-رسالة
+    # ========================================================
+
+    @app_commands.command(
+        name="فيم-رسالة",
+        description="تغيير الرسالة التي يرسلها البوت عند كتابة فيم"
+    )
+    @app_commands.describe(
+        message="الرسالة التي تريد أن يرسلها البوت"
+    )
+    async def fime_message(
+        self,
+        interaction: discord.Interaction,
+        message: str
+    ):
+
+        if await self.silently_ignore_if_not_owner(
+            interaction
+        ):
+            return
+
+        if interaction.guild is None:
+            return
+
+        message = str(
+            message or ""
+        ).strip()
+
+        if not message:
+
+            await interaction.response.send_message(
+                "❌ اكتب الرسالة التي تريدها.",
+                ephemeral=True
+            )
+
+            return
+
+        if len(message) > 2000:
+
+            await interaction.response.send_message(
+                "❌ الرسالة لا يمكن أن تتجاوز 2000 حرف.",
+                ephemeral=True
+            )
+
+            return
+
+        cfg = self.get_config(
+            interaction.guild.id
+        )
+
+        cfg["fime_word_response"] = message
+        cfg["fime_word_enabled"] = True
+
+        save_config(
+            self.config
+        )
+
+        await interaction.response.send_message(
+            (
+                "✅ **تم تغيير رسالة فيم.**\n\n"
+                f"الرسالة الجديدة:\n{message}\n\n"
+                "🟢 تم تشغيل النظام تلقائيًا."
+            ),
+            ephemeral=True
+        )
+
+
+    # ========================================================
+    # /فيم-تشغيل
+    # ========================================================
+
+    @app_commands.command(
+        name="فيم-تشغيل",
+        description="تشغيل الرد التلقائي على كلمة فيم"
+    )
+    async def fime_enable(
+        self,
+        interaction: discord.Interaction
+    ):
+
+        if await self.silently_ignore_if_not_owner(
+            interaction
+        ):
+            return
+
+        if interaction.guild is None:
+            return
+
+        cfg = self.get_config(
+            interaction.guild.id
+        )
+
+        cfg["fime_word_enabled"] = True
+
+        save_config(
+            self.config
+        )
+
+        await interaction.response.send_message(
+            "🟢 تم تشغيل نظام كلمة فيم.",
+            ephemeral=True
+        )
+
+
+    # ========================================================
+    # /فيم-إيقاف
+    # ========================================================
+
+    @app_commands.command(
+        name="فيم-إيقاف",
+        description="إيقاف الرد التلقائي على كلمة فيم"
+    )
+    async def fime_disable(
+        self,
+        interaction: discord.Interaction
+    ):
+
+        if await self.silently_ignore_if_not_owner(
+            interaction
+        ):
+            return
+
+        if interaction.guild is None:
+            return
+
+        cfg = self.get_config(
+            interaction.guild.id
+        )
+
+        cfg["fime_word_enabled"] = False
+
+        save_config(
+            self.config
+        )
+
+        await interaction.response.send_message(
+            "🛑 تم إيقاف نظام كلمة فيم.",
+            ephemeral=True
+        )
+
+
+    # ========================================================
+    # /فيم-حالة
+    # ========================================================
+
+    @app_commands.command(
+        name="فيم-حالة",
+        description="عرض حالة نظام كلمة فيم"
+    )
+    async def fime_status(
+        self,
+        interaction: discord.Interaction
+    ):
+
+        if await self.silently_ignore_if_not_owner(
+            interaction
+        ):
+            return
+
+        if interaction.guild is None:
+            return
+
+        cfg = self.get_config(
+            interaction.guild.id
+        )
+
+        enabled = cfg.get(
+            "fime_word_enabled",
+            True
+        )
+
+        response_text = str(
+            cfg.get(
+                "fime_word_response",
+                ""
+            )
+            or ""
+        ).strip()
+
+        accept_fimi = cfg.get(
+            "fime_word_accept_fimi",
+            False
+        )
+
+        status = (
+            "🟢 مفعل"
+            if enabled
+            else "🔴 متوقف"
+        )
+
+        fimi_status = (
+            "🟢 نعم"
+            if accept_fimi
+            else "🔴 لا"
+        )
+
+        if not response_text:
+            response_text = "غير محددة"
+
+        await interaction.response.send_message(
+            (
+                "## 🌀 حالة نظام فيم\n\n"
+                f"الحالة: **{status}**\n"
+                f"كلمة **فيم**: تعمل\n"
+                f"كلمة **فيمي**: {fimi_status}\n\n"
+                "**الرسالة الحالية:**\n"
+                f"{response_text}"
+            ),
+            ephemeral=True
+        )
+
+
+    # ========================================================
     # LINE MESSAGE LISTENER
     # ========================================================
 
@@ -892,6 +1211,19 @@ class AutomaticLineSystem(commands.Cog):
         cfg = self.get_config(
             message.guild.id
         )
+
+        # ====================================================
+        # FIME KEYWORD
+        # ====================================================
+
+        await self.handle_fime_keyword(
+            message,
+            cfg
+        )
+
+        # ====================================================
+        # LINE SYSTEM
+        # ====================================================
 
         if not cfg.get("enabled"):
             return
@@ -987,10 +1319,6 @@ class AutomaticLineSystem(commands.Cog):
         cfg = self.get_config(
             guild.id
         )
-
-        # ----------------------------------------------------
-        # System disabled
-        # ----------------------------------------------------
 
         if not cfg.get(
             "join_mention_enabled"
@@ -1167,12 +1495,6 @@ class AutomaticLineSystem(commands.Cog):
         if member.bot:
             return
 
-        # ----------------------------------------------------
-        # Small delay
-        # ----------------------------------------------------
-        # يعطي Discord فرصة لتثبيت العضو
-        # قبل إرسال المنشن.
-
         await asyncio.sleep(0.5)
 
         await self.send_join_mention(
@@ -1252,10 +1574,6 @@ class AutomaticLineSystem(commands.Cog):
         )
 
         cfg["join_mention_enabled"] = True
-
-        # ----------------------------------------------------
-        # Always 2 seconds
-        # ----------------------------------------------------
 
         cfg["join_mention_duration"] = 2
 
@@ -1457,5 +1775,5 @@ async def setup(bot):
 
     print(
         "✅ Team Fime bot5 — "
-        "Automatic Line + Join Mention loaded."
+        "Automatic Line + Join Mention + Fime Keyword loaded."
     )
