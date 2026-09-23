@@ -3914,27 +3914,30 @@ async def setup(main_bot):
     # نقل أوامر Prefix إلى البوت الرئيسي
     # --------------------------------------------------------
 
+        # --------------------------------------------------------
+    # نقل أوامر Prefix إلى البوت الرئيسي
+    # --------------------------------------------------------
+
     extension_commands = list(
         _extension_bot.commands
     )
 
     for command in extension_commands:
 
+        # إذا كان نفس الأمر موجودًا في البوت الرئيسي،
+        # نتأكد من عدم وجود تعارض قبل تسجيله.
         existing = main_bot.get_command(
             command.name
         )
 
         if existing is not None:
 
-            try:
-                main_bot.remove_command(
-                    command.name
-                )
-            except Exception as e:
-                print(
-                    f"⚠️ تعذر حذف الأمر القديم "
-                    f"{command.name}: {e}"
-                )
+            print(
+                f"⚠️ Prefix command already exists: "
+                f"!{command.name} — skipped."
+            )
+
+            continue
 
         try:
 
@@ -3945,6 +3948,13 @@ async def setup(main_bot):
             print(
                 f"✅ Registered prefix command: "
                 f"!{command.name}"
+            )
+
+        except commands.CommandRegistrationError as e:
+
+            print(
+                f"⚠️ Prefix command conflict "
+                f"!{command.name}: {e}"
             )
 
         except Exception as e:
