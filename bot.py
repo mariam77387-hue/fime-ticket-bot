@@ -4314,39 +4314,79 @@ async def before_auto_cleanup():
 
 @bot.event
 async def on_ready():
-    print(f"✅ تم تسجيل الدخول باسم: {bot.user} ({bot.user.id})")
+    print(
+        f"✅ تم تسجيل الدخول باسم: "
+        f"{bot.user} ({bot.user.id})"
+    )
 
-    # مزامنة أوامر السلاش. كانت غير موجودة سابقًا، وهذا سبب آخر
-    # محتمل لعدم ظهور بعض أوامر الـ/ الجديدة عند بعض السيرفرات.
+    # --------------------------------------------------------
+    # مزامنة أوامر Slash بعد تسجيل دخول البوت
+    # --------------------------------------------------------
+
     try:
-        synced = await bot.tree.sync()
-        print(f"✅ تم مزامنة {len(synced)} أمر سلاش.")
-    except discord.HTTPException as error:
-        print(f"❌ فشل مزامنة أوامر السلاش: {error}")
 
-    # تشغيل المهام الدورية (كانت معرّفة لكن غير مُشغّلة أبدًا)
+        synced = await bot.tree.sync()
+
+        print(
+            f"✅ تم مزامنة "
+            f"{len(synced)} أمر سلاش."
+        )
+
+    except discord.HTTPException as error:
+
+        print(
+            f"❌ فشل مزامنة أوامر السلاش: "
+            f"{error}"
+        )
+
+    except Exception as error:
+
+        print(
+            f"❌ خطأ أثناء مزامنة أوامر السلاش: "
+            f"{error}"
+        )
+
+    # --------------------------------------------------------
+    # تشغيل المهام الدورية
+    # --------------------------------------------------------
+
     if not auto_cleanup.is_running():
+
         auto_cleanup.start()
 
     if not auto_message_loop.is_running():
+
         auto_message_loop.start()
 
 
+# ============================================================
+# SLASH COMMAND ERROR HANDLER
+# ============================================================
+
 @bot.tree.error
-async def on_app_command_error(interaction, error):
+async def on_app_command_error(
+    interaction,
+    error
+):
 
     import traceback
 
     print("=" * 70)
     print("❌ DISCORD APP COMMAND ERROR")
-    print(f"Type: {type(error).__name__}")
-    print(f"Error: {error}")
+    print(
+        f"Type: {type(error).__name__}"
+    )
+    print(
+        f"Error: {error}"
+    )
     print("TRACEBACK:")
+
     traceback.print_exception(
         type(error),
         error,
         error.__traceback__
     )
+
     print("=" * 70)
 
     # --------------------------------------------------------
