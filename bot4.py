@@ -3896,10 +3896,6 @@ async def slash_rscripts_by_user(
 # EXTENSION SETUP
 # ============================================================
 
-# ============================================================
-# EXTENSION SETUP
-# ============================================================
-
 _extension_bot = bot
 
 
@@ -3914,18 +3910,12 @@ async def setup(main_bot):
     # نقل أوامر Prefix إلى البوت الرئيسي
     # --------------------------------------------------------
 
-        # --------------------------------------------------------
-    # نقل أوامر Prefix إلى البوت الرئيسي
-    # --------------------------------------------------------
-
     extension_commands = list(
         _extension_bot.commands
     )
 
     for command in extension_commands:
 
-        # إذا كان نفس الأمر موجودًا في البوت الرئيسي،
-        # نتأكد من عدم وجود تعارض قبل تسجيله.
         existing = main_bot.get_command(
             command.name
         )
@@ -3976,17 +3966,18 @@ async def setup(main_bot):
 
         try:
 
-            existing = (
-                main_bot.tree.get_command(
-                    command.name
-                )
+            existing = main_bot.tree.get_command(
+                command.name
             )
 
             if existing is not None:
 
-                main_bot.tree.remove_command(
-                    command.name
+                print(
+                    f"⚠️ Slash command already exists: "
+                    f"/{command.name} — skipped."
                 )
+
+                continue
 
             main_bot.tree.add_command(
                 command
@@ -4023,24 +4014,10 @@ async def setup(main_bot):
     )
 
     # --------------------------------------------------------
-    # مزامنة Slash Commands
+    # ملاحظة:
+    # لا نسوي tree.sync() هنا لأن البوت الرئيسي
+    # قد لا يكون سجل الدخول بعد.
     # --------------------------------------------------------
-
-    try:
-
-        synced = await main_bot.tree.sync()
-
-        print(
-            f"✅ bot4.py synced "
-            f"{len(synced)} slash commands."
-        )
-
-    except Exception as e:
-
-        print(
-            f"❌ bot4.py slash command sync failed: "
-            f"{e}"
-        )
 
     # --------------------------------------------------------
     # تأكيد أوامر الغرف العربية
