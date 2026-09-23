@@ -100,13 +100,6 @@ DEFAULT_GUILD_CONFIG = {
         "interval_seconds": 30
     },
 
-    "script_search": {
-        "enabled": False,
-        "channel_id": None,
-        "max_results": 5,
-        "strict": False
-    },
-
     "stats": {
         "opened": 0,
         "closed": 0,
@@ -240,6 +233,127 @@ def get_guild_config(guild_id: int):
         save_config()
 
     return guilds[key]
+
+
+# =========================================================
+# ✅ أدوات الإعدادات العامة (كانت ناقصة وتسبب انهيار صامت)
+# =========================================================
+#
+# get_setting / set_setting يدعمان مسار منقّط للإعدادات المتداخلة
+# مثل: "join_mention.channel_id"
+# هذا هو سبب تعطّل الترحيب سابقًا: كل استدعاء لـ get_setting كان
+# يرفع NameError لأن الدالة غير معرّفة، فيتوقف on_member_join قبل
+# إرسال رسالة الترحيب.
+
+def get_setting(guild, key, default=None):
+    if guild is None:
+        return default
+
+    cfg = get_guild_config(guild.id)
+    node = cfg
+
+    for part in str(key).split("."):
+        if isinstance(node, dict) and part in node:
+            node = node[part]
+        else:
+            return default
+
+    return node if node is not None else default
+
+
+def set_setting(guild, key, value):
+    if guild is None:
+        return
+
+    cfg = get_guild_config(guild.id)
+    parts = str(key).split(".")
+    node = cfg
+
+    for part in parts[:-1]:
+        next_node = node.get(part)
+        if not isinstance(next_node, dict):
+            next_node = {}
+            node[part] = next_node
+        node = next_node
+
+    node[parts[-1]] = value
+    save_config()
+
+
+def get_next_ticket_number(guild):
+    cfg = get_guild_config(guild.id)
+
+    try:
+        number = int(cfg.get("next_ticket_number", 1))
+    except (TypeError, ValueError):
+        number = 1
+
+    cfg["next_ticket_number"] = number + 1
+    save_config()
+
+    return number
+
+
+def get_stats(guild):
+    cfg = get_guild_config(guild.id)
+    stats = cfg.get("stats")
+
+    if not isinstance(stats, dict):
+        stats = deepcopy(DEFAULT_GUILD_CONFIG["stats"])
+        cfg["stats"] = stats
+        save_config()
+
+    return stats
+
+
+def top_stats_text(categories):
+    if not isinstance(categories, dict) or not categories:
+        return "لا توجد بيانات بعد."
+
+    items = sorted(
+        categories.items(),
+        key=lambda pair: pair[1],
+        reverse=True
+    )
+
+    lines = []
+    for value, count in items[:5]:
+        lines.append(f"{get_category_label(value)}: **{count}**")
+
+    return "\n".join(lines)
+
+
+def increment_ticket_open_stats(guild, category_value):
+    stats = get_stats(guild)
+    stats["opened"] = int(stats.get("opened", 0)) + 1
+
+    categories = stats.setdefault("categories", {})
+    key = str(category_value)
+    categories[key] = int(categories.get(key, 0)) + 1
+
+    save_config()
+
+
+def increment_claim_stats(guild):
+    stats = get_stats(guild)
+    stats["claimed"] = int(stats.get("claimed", 0)) + 1
+    save_config()
+
+
+def increment_close_stats(guild, duration_seconds):
+    stats = get_stats(guild)
+    stats["closed"] = int(stats.get("closed", 0)) + 1
+
+    try:
+        duration_seconds = max(0.0, float(duration_seconds))
+    except (TypeError, ValueError):
+        duration_seconds = 0.0
+
+    stats["total_duration_seconds"] = (
+        float(stats.get("total_duration_seconds", 0)) + duration_seconds
+    )
+
+    save_config()
 
 
 # =========================================================
@@ -2062,32 +2176,32 @@ async def on_member_join(member):
     # =====================================================
     # الترحيب الأساسي - بدون تغيير
     # =====================================================
-    if not get_setting(
-        member.guild,
-        "welcome_enabled",
-        True
-    ):
-        return
-
-    channel = await get_welcome_channel(member.guild)
-
-    if channel is None:
-        return
-
-    me = member.guild.me
-
-    if me is None:
-        return
-
-    permissions = channel.permissions_for(me)
-
-    if not permissions.view_channel or not permissions.send_messages:
-        print(
-            f"⚠️ البوت لا يملك صلاحية إرسال الترحيب في #{channel.name}."
-        )
-        return
-
     try:
+        if not get_setting(
+            member.guild,
+            "welcome_enabled",
+            True
+        ):
+            return
+
+        channel = await get_welcome_channel(member.guild)
+
+        if channel is None:
+            return
+
+        me = member.guild.me
+
+        if me is None:
+            return
+
+        permissions = channel.permissions_for(me)
+
+        if not permissions.view_channel or not permissions.send_messages:
+            print(
+                f"⚠️ البوت لا يملك صلاحية إرسال الترحيب في #{channel.name}."
+            )
+            return
+
         await channel.send(
             render_welcome_message(
                 member.guild,
@@ -2113,6 +2227,8 @@ async def on_member_join(member):
         discord.HTTPException
     ) as error:
         print(f"❌ Welcome Error: {error}")
+    except Exception as error:
+        print(f"❌ Welcome System Error: {error}")
 
 
 class LogChannelSelect(discord.ui.ChannelSelect):
@@ -2757,7 +2873,6 @@ async def tc_autoclose(ctx, days: int):
 # =========================================================
 
 AUTO_MESSAGE_RUNTIME = {}
-SCRIPT_SEARCH_COOLDOWN = {}
 
 
 def get_auto_message_config(guild: discord.Guild):
@@ -2766,16 +2881,6 @@ def get_auto_message_config(guild: discord.Guild):
     if not isinstance(data, dict):
         data = deepcopy(DEFAULT_GUILD_CONFIG["auto_message"])
         cfg["auto_message"] = data
-        save_config()
-    return data
-
-
-def get_script_search_config(guild: discord.Guild):
-    cfg = get_guild_config(guild.id)
-    data = cfg.setdefault("script_search", deepcopy(DEFAULT_GUILD_CONFIG["script_search"]))
-    if not isinstance(data, dict):
-        data = deepcopy(DEFAULT_GUILD_CONFIG["script_search"])
-        cfg["script_search"] = data
         save_config()
     return data
 
@@ -4059,8 +4164,12 @@ async def prefix_unlock(ctx):
 
 
 # =========================================================
-# أوامر القفل العربية
+# أوامر القفل العربية + الرسالة التلقائية
 # =========================================================
+#
+# ملاحظة: نظام بحث السكربتات (bot4.py) يعمل كـ Cog مستقل وله
+# on_message خاص به، لذلك لا نكرره هنا. تكرار نظامين للبحث في
+# نفس الوقت كان يسبب تعارضًا واستدعاء دوال غير معرّفة.
 
 @bot.event
 async def on_message(message):
@@ -4114,31 +4223,6 @@ async def on_message(message):
 
         return
 
-    await bot.process_commands(message)
-
-    if content in {
-        "فتح",
-        "unlock"
-    }:
-        if is_lockable_channel(channel):
-            if can_manage_lock(message.author, channel):
-                if bot_can_manage_lock(channel):
-                    success = await unlock_any_channel(channel)
-
-                    if success:
-                        try:
-                            await message.delete()
-                        except discord.HTTPException:
-                            pass
-
-                        await send_lock_result(
-                            channel,
-                            message.author,
-                            False
-                        )
-
-        return
-
     # 📢 الرسالة التلقائية عند كل رسالة
     if isinstance(channel, discord.TextChannel) and message.guild:
         auto_data = get_auto_message_config(message.guild)
@@ -4157,27 +4241,6 @@ async def on_message(message):
                 pass
             except discord.HTTPException as error:
                 print(f"❌ Auto Message Error in {channel.id}: {error}")
-
-    # 🔎 بحث السكربتات: يعمل فقط في الروم المحدد
-    if isinstance(channel, discord.TextChannel) and message.guild:
-        search_data = get_script_search_config(message.guild)
-        if (
-            search_data.get("enabled")
-            and int(search_data.get("channel_id") or 0) == channel.id
-            and message.content.strip()
-        ):
-            now = asyncio.get_running_loop().time()
-            last = SCRIPT_SEARCH_COOLDOWN.get((message.guild.id, message.author.id), 0)
-            if now - last >= 3:
-                query = clean_script_query(message.content)
-                if query:
-                    SCRIPT_SEARCH_COOLDOWN[(message.guild.id, message.author.id)] = now
-                    await send_script_result(message, query)
-            else:
-                try:
-                    await message.channel.send("⏳ انتظر 3 ثواني قبل البحث مرة أخرى.", delete_after=3)
-                except discord.HTTPException:
-                    pass
 
     await bot.process_commands(message)
 
@@ -4248,6 +4311,26 @@ async def before_auto_cleanup():
 # =========================================================
 # Ready
 # =========================================================
+
+@bot.event
+async def on_ready():
+    print(f"✅ تم تسجيل الدخول باسم: {bot.user} ({bot.user.id})")
+
+    # مزامنة أوامر السلاش. كانت غير موجودة سابقًا، وهذا سبب آخر
+    # محتمل لعدم ظهور بعض أوامر الـ/ الجديدة عند بعض السيرفرات.
+    try:
+        synced = await bot.tree.sync()
+        print(f"✅ تم مزامنة {len(synced)} أمر سلاش.")
+    except discord.HTTPException as error:
+        print(f"❌ فشل مزامنة أوامر السلاش: {error}")
+
+    # تشغيل المهام الدورية (كانت معرّفة لكن غير مُشغّلة أبدًا)
+    if not auto_cleanup.is_running():
+        auto_cleanup.start()
+
+    if not auto_message_loop.is_running():
+        auto_message_loop.start()
+
 
 @bot.tree.error
 async def on_app_command_error(interaction, error):
