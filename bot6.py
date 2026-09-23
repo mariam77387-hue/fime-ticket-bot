@@ -6,45 +6,16 @@
 # 🍎 Blox Fruits
 # 🥚 Steal An Egg
 #
-# FEATURES
-# ------------------------------------------------------------
-# • Live stock polling
-# • Automatic shop posting
-# • Custom shop channel per game
-# • Notification setup panel
-# • Automatic notification roles
-# • Stock refresh notifications
-# • Rare stock notifications
-# • Steal An Egg Reset notifications
-# • Steal An Egg Rift notifications
-# • SQLite persistence
-# • Personal stock alerts
-# • GAG fruit/item multi-select notifications
-# • Automatic role per selected GAG fruit/item
-# • Automatic role mentions when selected fruit/item appears
-# • Admin status commands
-# • GAG API configurable through Environment Variable
-# • Multiple API JSON formats supported
-# • Safe API error handling
-#
-# IMPORTANT
-# ------------------------------------------------------------
-# Discord has a 100 top-level global application-command limit.
-# All bot6 commands are therefore inside ONE /stock group.
-#
-# Example:
-# /stock view
-# /stock channel
-# /stock notifications-setup
-# /stock alert
-# /stock status
+# FULL STABLE EDITION
 # ============================================================
 
 import os
 import json
 import sqlite3
 import asyncio
+import html
 from datetime import datetime, timezone
+from urllib.parse import quote_plus
 
 import aiohttp
 import discord
@@ -61,24 +32,96 @@ DB_FILE = os.getenv(
     "fime_stock.db"
 )
 
-# IMPORTANT:
-# Put your CURRENT working Grow a Garden API here
-# through Environment Variables.
-#
-# Example:
-# GAG_API_URL=https://your-working-api.example/stock
-#
-# DO NOT put a dead/404 URL here.
+# ------------------------------------------------------------
+# Grow a Garden
+# ------------------------------------------------------------
+
 GAG_API_URL = os.getenv(
     "GAG_API_URL",
     ""
 ).strip()
 
-# Optional Blox Fruits API
-BLOX_API_URL = os.getenv(
-    "BLOX_API_URL",
+GAG_API_FALLBACK_URL = os.getenv(
+    "GAG_API_FALLBACK_URL",
     ""
 ).strip()
+
+GAG_API_FALLBACK_URLS = [
+    url.strip()
+    for url in os.getenv(
+        "GAG_API_FALLBACK_URLS",
+        ""
+    ).split(",")
+    if url.strip()
+]
+
+# ------------------------------------------------------------
+# Blox Fruits
+# ------------------------------------------------------------
+
+# Parse get_stock endpoint.
+BLOX_API_URL = os.getenv(
+    "BLOX_API_URL",
+    "https://api.parse.bot/scraper/78cf8155-3819-45d0-b799-92f840a94827/get_stock"
+).strip()
+
+BLOX_API_KEY = os.getenv(
+    "BLOX_API_KEY",
+    ""
+).strip()
+
+BLOX_API_FALLBACK_URL = os.getenv(
+    "BLOX_API_FALLBACK_URL",
+    ""
+).strip()
+
+# ------------------------------------------------------------
+# Steal An Egg
+# ------------------------------------------------------------
+
+# Optional API.
+#
+# If you have an API:
+# STEAL_EGG_API_URL=https://...
+#
+# If empty, the system remains alive and can use
+# the general-search fallback manually.
+STEAL_EGG_API_URL = os.getenv(
+    "STEAL_EGG_API_URL",
+    ""
+).strip()
+
+STEAL_EGG_FALLBACK_URLS = [
+    url.strip()
+    for url in os.getenv(
+        "STEAL_EGG_API_FALLBACK_URLS",
+        ""
+    ).split(",")
+    if url.strip()
+]
+
+# ------------------------------------------------------------
+# General web search fallback
+# ------------------------------------------------------------
+
+WEB_SEARCH_ENABLED = os.getenv(
+    "STOCK_WEB_SEARCH_ENABLED",
+    "true"
+).lower() not in (
+    "false",
+    "0",
+    "no",
+    "off"
+)
+
+WEB_SEARCH_URL = os.getenv(
+    "STOCK_WEB_SEARCH_URL",
+    "https://api.duckduckgo.com/"
+).strip()
+
+# ------------------------------------------------------------
+# Polling
+# ------------------------------------------------------------
 
 try:
     STOCK_CHECK_SECONDS = int(
@@ -98,7 +141,6 @@ STOCK_CHECK_SECONDS = max(
 STEAL_EGG_RESET_MINUTES = 5
 STEAL_EGG_RIFT_MINUTES = 30
 
-# Discord Select Menu maximum options
 MAX_SELECT_OPTIONS = 25
 
 
@@ -202,12 +244,7 @@ def get_db():
 def setup_database():
 
     conn = get_db()
-
     cur = conn.cursor()
-
-    # --------------------------------------------------------
-    # Personal item subscriptions
-    # --------------------------------------------------------
 
     cur.execute("""
         CREATE TABLE IF NOT EXISTS subscriptions (
@@ -224,10 +261,6 @@ def setup_database():
         )
     """)
 
-    # --------------------------------------------------------
-    # Event subscriptions
-    # --------------------------------------------------------
-
     cur.execute("""
         CREATE TABLE IF NOT EXISTS event_subscriptions (
             guild_id INTEGER NOT NULL,
@@ -240,10 +273,6 @@ def setup_database():
             )
         )
     """)
-
-    # --------------------------------------------------------
-    # Stock cache
-    # --------------------------------------------------------
 
     cur.execute("""
         CREATE TABLE IF NOT EXISTS stock_cache (
@@ -258,10 +287,6 @@ def setup_database():
         )
     """)
 
-    # --------------------------------------------------------
-    # Event cache
-    # --------------------------------------------------------
-
     cur.execute("""
         CREATE TABLE IF NOT EXISTS event_cache (
             guild_id INTEGER NOT NULL,
@@ -275,10 +300,6 @@ def setup_database():
         )
     """)
 
-    # --------------------------------------------------------
-    # Shop channels
-    # --------------------------------------------------------
-
     cur.execute("""
         CREATE TABLE IF NOT EXISTS shop_channels (
             guild_id INTEGER NOT NULL,
@@ -290,10 +311,6 @@ def setup_database():
             )
         )
     """)
-
-    # --------------------------------------------------------
-    # Standard notification roles
-    # --------------------------------------------------------
 
     cur.execute("""
         CREATE TABLE IF NOT EXISTS notification_roles (
@@ -307,10 +324,6 @@ def setup_database():
         )
     """)
 
-    # --------------------------------------------------------
-    # Notification panels
-    # --------------------------------------------------------
-
     cur.execute("""
         CREATE TABLE IF NOT EXISTS notification_panels (
             guild_id INTEGER PRIMARY KEY,
@@ -318,10 +331,6 @@ def setup_database():
             message_id INTEGER NOT NULL
         )
     """)
-
-    # --------------------------------------------------------
-    # Notification members
-    # --------------------------------------------------------
 
     cur.execute("""
         CREATE TABLE IF NOT EXISTS notification_members (
@@ -336,15 +345,6 @@ def setup_database():
         )
     """)
 
-    # --------------------------------------------------------
-    # GAG item/fruit roles
-    #
-    # One role per GAG item:
-    # 🔔 Apple
-    # 🔔 Strawberry
-    # etc.
-    # --------------------------------------------------------
-
     cur.execute("""
         CREATE TABLE IF NOT EXISTS gag_item_roles (
             guild_id INTEGER NOT NULL,
@@ -356,12 +356,6 @@ def setup_database():
             )
         )
     """)
-
-    # --------------------------------------------------------
-    # GAG item/fruit subscriptions
-    #
-    # Stores which member wants which item.
-    # --------------------------------------------------------
 
     cur.execute("""
         CREATE TABLE IF NOT EXISTS gag_item_subscriptions (
@@ -377,7 +371,6 @@ def setup_database():
     """)
 
     conn.commit()
-
     conn.close()
 
 
@@ -385,11 +378,7 @@ def setup_database():
 # DATABASE HELPERS
 # ============================================================
 
-def set_shop_channel(
-    guild_id,
-    game,
-    channel_id
-):
+def set_shop_channel(guild_id, game, channel_id):
 
     conn = get_db()
 
@@ -410,14 +399,10 @@ def set_shop_channel(
     ))
 
     conn.commit()
-
     conn.close()
 
 
-def remove_shop_channel(
-    guild_id,
-    game
-):
+def remove_shop_channel(guild_id, game):
 
     conn = get_db()
 
@@ -431,13 +416,10 @@ def remove_shop_channel(
     ))
 
     conn.commit()
-
     conn.close()
 
 
-def get_shop_channels(
-    guild_id
-):
+def get_shop_channels(guild_id):
 
     conn = get_db()
 
@@ -457,10 +439,7 @@ def get_shop_channels(
     }
 
 
-def get_shop_channel(
-    guild_id,
-    game
-):
+def get_shop_channel(guild_id, game):
 
     conn = get_db()
 
@@ -482,10 +461,7 @@ def get_shop_channel(
     return None
 
 
-def get_cached_stock(
-    guild_id,
-    game
-):
+def get_cached_stock(guild_id, game):
 
     conn = get_db()
 
@@ -537,7 +513,6 @@ def save_cached_stock(
     ))
 
     conn.commit()
-
     conn.close()
 
 
@@ -594,7 +569,6 @@ def save_notification_role(
     ))
 
     conn.commit()
-
     conn.close()
 
 
@@ -624,13 +598,10 @@ def save_notification_panel(
     ))
 
     conn.commit()
-
     conn.close()
 
 
-def get_notification_panel(
-    guild_id
-):
+def get_notification_panel(guild_id):
 
     conn = get_db()
 
@@ -675,7 +646,6 @@ def add_notification_member(
     ))
 
     conn.commit()
-
     conn.close()
 
 
@@ -699,17 +669,14 @@ def remove_notification_member(
     ))
 
     conn.commit()
-
     conn.close()
 
 
 # ============================================================
-# GAG ITEM ROLE DATABASE
+# GAG ITEM DATABASE
 # ============================================================
 
-def normalize_item_name(
-    name
-):
+def normalize_item_name(name):
 
     return str(
         name or ""
@@ -777,7 +744,6 @@ def save_gag_item_role(
     ))
 
     conn.commit()
-
     conn.close()
 
 
@@ -807,7 +773,6 @@ def add_gag_item_subscription(
     ))
 
     conn.commit()
-
     conn.close()
 
 
@@ -835,7 +800,6 @@ def remove_gag_item_subscription(
     ))
 
     conn.commit()
-
     conn.close()
 
 
@@ -895,12 +859,13 @@ def get_gag_user_items(
 
 
 # ============================================================
-# API
+# HTTP
 # ============================================================
 
 async def fetch_json(
     session,
-    url
+    url,
+    headers=None
 ):
 
     if not url:
@@ -908,11 +873,14 @@ async def fetch_json(
 
     try:
 
+        timeout = aiohttp.ClientTimeout(
+            total=15
+        )
+
         async with session.get(
             url,
-            timeout=aiohttp.ClientTimeout(
-                total=15
-            )
+            headers=headers or {},
+            timeout=timeout
         ) as response:
 
             if response.status != 200:
@@ -932,10 +900,13 @@ async def fetch_json(
 
             except Exception:
 
-                print(
-                    f"⚠️ Stock API returned "
-                    f"invalid JSON: {url}"
-                )
+                text = await response.text()
+
+                if text:
+                    print(
+                        "⚠️ API returned non-JSON "
+                        f"response: {url}"
+                    )
 
                 return None
 
@@ -943,6 +914,15 @@ async def fetch_json(
 
         print(
             f"⚠️ Stock API timeout: {url}"
+        )
+
+        return None
+
+    except aiohttp.ClientError as error:
+
+        print(
+            f"⚠️ Stock API connection error: "
+            f"{error}"
         )
 
         return None
@@ -957,185 +937,537 @@ async def fetch_json(
 
 
 # ============================================================
-# API DATA EXTRACTION
+# HELPERS
 # ============================================================
 
-def extract_list(
-    data
+def key_normalize(value):
+
+    return (
+        str(value or "")
+        .strip()
+        .lower()
+        .replace("_", "")
+        .replace("-", "")
+        .replace(" ", "")
+    )
+
+
+def first_value(
+    data,
+    keys
 ):
 
-    if isinstance(
-        data,
-        list
-    ):
-        return data
-
-    if not isinstance(
-        data,
-        dict
-    ):
-        return []
-
-    possible_keys = [
-        "stock",
-        "stocks",
-        "items",
-        "data",
-        "shop",
-        "inventory",
-        "goods",
-        "seeds",
-        "seedStock",
-        "gear",
-        "gearStock",
-        "eggs",
-        "eggStock",
-        "eventShop",
-        "eventStock",
-        "cosmetics",
-        "cosmeticStock",
-    ]
-
-    for key in possible_keys:
-
-        value = data.get(
-            key
-        )
-
-        if isinstance(
-            value,
-            list
-        ):
-            return value
-
-        if isinstance(
-            value,
-            dict
-        ):
-
-            result = []
-
-            for name, item in value.items():
-
-                if isinstance(
-                    item,
-                    dict
-                ):
-
-                    copied = dict(
-                        item
-                    )
-
-                    copied.setdefault(
-                        "name",
-                        name
-                    )
-
-                    result.append(
-                        copied
-                    )
-
-                else:
-
-                    result.append({
-                        "name": name,
-                        "stock": item
-                    })
-
-            return result
-
-    return []
-
-
-def normalize_item(
-    item
-):
-
-    if isinstance(
-        item,
-        str
-    ):
-
-        return {
-            "name": item,
-            "stock": 0,
-            "rarity": "",
-        }
-
-    if not isinstance(
-        item,
-        dict
-    ):
+    if not isinstance(data, dict):
         return None
 
-    name = (
-        item.get("name")
-        or item.get("item")
-        or item.get("title")
-        or item.get("displayName")
-        or item.get("display_name")
-        or item.get("seed")
-        or item.get("fruit")
-        or item.get("egg")
-        or item.get("gear")
+    normalized = {
+        key_normalize(k): v
+        for k, v in data.items()
+    }
+
+    for key in keys:
+
+        value = normalized.get(
+            key_normalize(key)
+        )
+
+        if value is not None:
+            return value
+
+    return None
+
+
+def to_number_if_possible(value):
+
+    if isinstance(value, bool):
+        return value
+
+    if isinstance(value, (int, float)):
+        return value
+
+    if isinstance(value, str):
+
+        value = value.strip()
+
+        if not value:
+            return value
+
+        try:
+
+            if "." in value:
+                return float(value)
+
+            return int(value)
+
+        except Exception:
+            return value
+
+    return value
+
+
+# ============================================================
+# STOCK NORMALIZER
+# ============================================================
+
+def normalize_item(
+    item,
+    default_stock=None,
+    forced_category="",
+    forced_dealer=""
+):
+
+    if isinstance(item, str):
+
+        return {
+            "name": item.strip(),
+            "stock": default_stock,
+            "rarity": "",
+            "type": "",
+            "category": forced_category,
+            "dealer": forced_dealer,
+            "money_price": None,
+            "robux_price": None,
+            "price": None,
+        }
+
+    if not isinstance(item, dict):
+        return None
+
+    name = first_value(
+        item,
+        [
+            "name",
+            "item",
+            "title",
+            "displayName",
+            "display_name",
+            "seed",
+            "fruit",
+            "gear",
+            "egg",
+        ]
     )
 
     if not name:
         return None
 
-    stock = (
-        item.get("stock")
-        if item.get("stock") is not None
-        else item.get("quantity")
+    stock = first_value(
+        item,
+        [
+            "quantity",
+            "stock",
+            "amount",
+            "count",
+            "qty",
+            "available",
+            "available_stock",
+            "stock_amount",
+        ]
     )
 
     if stock is None:
-        stock = item.get(
-            "amount"
-        )
+        stock = default_stock
 
-    if stock is None:
-        stock = item.get(
-            "count"
-        )
+    stock = to_number_if_possible(
+        stock
+    )
 
-    if stock is None:
-        stock = 0
+    rarity = first_value(
+        item,
+        [
+            "rarity",
+            "tier",
+        ]
+    )
 
-    rarity = (
-        item.get("rarity")
-        or item.get("tier")
-        or item.get("type")
-        or ""
+    item_type = first_value(
+        item,
+        [
+            "type",
+            "item_type",
+            "kind",
+        ]
+    )
+
+    category = first_value(
+        item,
+        [
+            "category",
+            "section",
+            "group",
+        ]
+    )
+
+    dealer = first_value(
+        item,
+        [
+            "dealer",
+            "shop",
+            "source",
+        ]
+    )
+
+    money_price = first_value(
+        item,
+        [
+            "money_price",
+            "moneyPrice",
+            "price_beli",
+            "priceBeli",
+            "beli_price",
+            "beliPrice",
+            "beli",
+        ]
+    )
+
+    robux_price = first_value(
+        item,
+        [
+            "robux_price",
+            "robuxPrice",
+            "price_robux",
+            "priceRobux",
+            "robux",
+        ]
+    )
+
+    price = first_value(
+        item,
+        [
+            "price",
+        ]
     )
 
     return {
         "name": str(name).strip(),
         "stock": stock,
-        "rarity": str(rarity).strip(),
+        "rarity": str(
+            rarity or ""
+        ).strip(),
+        "type": str(
+            item_type or ""
+        ).strip(),
+        "category": str(
+            category or forced_category or ""
+        ).strip(),
+        "dealer": str(
+            dealer or forced_dealer or ""
+        ).strip(),
+        "money_price": to_number_if_possible(
+            money_price
+        ),
+        "robux_price": to_number_if_possible(
+            robux_price
+        ),
+        "price": to_number_if_possible(
+            price
+        ),
     }
 
 
-def normalize_stock(
-    data
-):
+# ============================================================
+# RECURSIVE STOCK EXTRACTION
+# ============================================================
 
-    raw = extract_list(
-        data
+STOCK_CONTAINER_KEYS = {
+    "stock",
+    "stocks",
+    "items",
+    "shop",
+    "inventory",
+    "goods",
+    "data",
+
+    "seeds",
+    "seedstock",
+    "seed_stock",
+
+    "gear",
+    "gearstock",
+    "gear_stock",
+
+    "eggs",
+    "eggstock",
+    "egg_stock",
+
+    "cosmetics",
+    "cosmeticstock",
+    "cosmetic_stock",
+
+    "eventshop",
+    "eventstock",
+    "event_shop",
+    "event_stock",
+}
+
+
+def dict_looks_like_item(data):
+
+    if not isinstance(data, dict):
+        return False
+
+    keys = {
+        key_normalize(key)
+        for key in data.keys()
+    }
+
+    item_keys = {
+        "name",
+        "item",
+        "title",
+        "displayname",
+        "display_name",
+        "seed",
+        "fruit",
+        "egg",
+        "gear",
+    }
+
+    return bool(
+        keys.intersection(item_keys)
     )
 
-    result = []
 
-    for item in raw:
+def extract_items_recursive(
+    data,
+    category="",
+    output=None,
+    visited=None
+):
+
+    if output is None:
+        output = []
+
+    if visited is None:
+        visited = set()
+
+    if isinstance(data, (dict, list)):
+
+        marker = id(data)
+
+        if marker in visited:
+            return output
+
+        visited.add(marker)
+
+    if isinstance(data, list):
+
+        for item in data:
+
+            if isinstance(item, dict):
+
+                if dict_looks_like_item(item):
+
+                    normalized = normalize_item(
+                        item,
+                        forced_category=category
+                    )
+
+                    if normalized:
+                        output.append(
+                            normalized
+                        )
+
+                else:
+
+                    extract_items_recursive(
+                        item,
+                        category=category,
+                        output=output,
+                        visited=visited
+                    )
+
+            elif isinstance(item, str):
+
+                normalized = normalize_item(
+                    item,
+                    forced_category=category
+                )
+
+                if normalized:
+                    output.append(
+                        normalized
+                    )
+
+        return output
+
+    if not isinstance(data, dict):
+        return output
+
+    if dict_looks_like_item(data):
 
         normalized = normalize_item(
-            item
+            data,
+            forced_category=category
         )
 
         if normalized:
-            result.append(
+            output.append(
                 normalized
             )
+
+        return output
+
+    for raw_key, value in data.items():
+
+        normalized_key = key_normalize(
+            raw_key
+        )
+
+        current_category = category
+
+        if normalized_key in {
+            "seedstock",
+            "seeds",
+            "seed_stock",
+        }:
+            current_category = "Seeds"
+
+        elif normalized_key in {
+            "gearstock",
+            "gear",
+            "gear_stock",
+        }:
+            current_category = "Gear"
+
+        elif normalized_key in {
+            "eggstock",
+            "eggs",
+            "egg_stock",
+        }:
+            current_category = "Eggs"
+
+        elif normalized_key in {
+            "cosmeticstock",
+            "cosmetics",
+            "cosmetic_stock",
+        }:
+            current_category = "Cosmetics"
+
+        elif normalized_key in {
+            "eventshop",
+            "eventstock",
+            "event_shop",
+            "event_stock",
+        }:
+            current_category = "Event"
+
+        if isinstance(value, dict):
+
+            # Example:
+            # {
+            #   "Apple": 4,
+            #   "Carrot": 7
+            # }
+            if not dict_looks_like_item(value):
+
+                looks_like_mapping = True
+
+                for child_value in value.values():
+
+                    if isinstance(
+                        child_value,
+                        (dict, list)
+                    ):
+                        looks_like_mapping = False
+                        break
+
+                if looks_like_mapping:
+
+                    for item_name, amount in value.items():
+
+                        # Ignore obvious metadata fields.
+                        if key_normalize(item_name) in {
+                            "status",
+                            "message",
+                            "timestamp",
+                            "updatedat",
+                            "reset",
+                            "resettimes",
+                        }:
+                            continue
+
+                        if isinstance(
+                            amount,
+                            (int, float, str)
+                        ):
+
+                            normalized = normalize_item(
+                                {
+                                    "name": item_name,
+                                    "stock": amount,
+                                },
+                                forced_category=current_category
+                            )
+
+                            if normalized:
+                                output.append(
+                                    normalized
+                                )
+
+                            continue
+
+            extract_items_recursive(
+                value,
+                category=current_category,
+                output=output,
+                visited=visited
+            )
+
+        elif isinstance(value, list):
+
+            extract_items_recursive(
+                value,
+                category=current_category,
+                output=output,
+                visited=visited
+            )
+
+    return output
+
+
+def normalize_stock(
+    data,
+    default_stock=None
+):
+
+    result = []
+
+    raw_items = extract_items_recursive(
+        data
+    )
+
+    # If recursive extraction found nothing and the
+    # response itself is a list, process it directly.
+    if not raw_items and isinstance(
+        data,
+        list
+    ):
+
+        for item in data:
+
+            normalized = normalize_item(
+                item,
+                default_stock=default_stock
+            )
+
+            if normalized:
+                raw_items.append(
+                    normalized
+                )
+
+    # Apply default stock to items that didn't have one.
+    for item in raw_items:
+
+        if (
+            item.get("stock") is None
+            and default_stock is not None
+        ):
+            item["stock"] = default_stock
+
+        result.append(
+            item
+        )
 
     return clean_stock(
         result
@@ -1143,14 +1475,280 @@ def normalize_stock(
 
 
 # ============================================================
-# STOCK FETCHERS
+# BLOX SPECIFIC EXTRACTION
+# ============================================================
+
+def find_blox_sections(data):
+
+    sections = []
+
+    if isinstance(data, dict):
+
+        normal = first_value(
+            data,
+            [
+                "normal",
+            ]
+        )
+
+        mirage = first_value(
+            data,
+            [
+                "mirage",
+            ]
+        )
+
+        if normal is not None:
+            sections.append(
+                (
+                    "Normal",
+                    normal
+                )
+            )
+
+        if mirage is not None:
+            sections.append(
+                (
+                    "Mirage",
+                    mirage
+                )
+            )
+
+        # Common wrapper.
+        nested_data = first_value(
+            data,
+            [
+                "data",
+                "result",
+                "response",
+            ]
+        )
+
+        if (
+            nested_data is not None
+            and nested_data is not data
+        ):
+
+            sections.extend(
+                find_blox_sections(
+                    nested_data
+                )
+            )
+
+    return sections
+
+
+def normalize_blox_section(
+    section,
+    dealer
+):
+
+    result = []
+
+    if isinstance(section, list):
+
+        for item in section:
+
+            normalized = normalize_item(
+                item,
+                default_stock=1,
+                forced_dealer=dealer
+            )
+
+            if normalized:
+
+                normalized["dealer"] = dealer
+
+                result.append(
+                    normalized
+                )
+
+    elif isinstance(section, dict):
+
+        if dict_looks_like_item(section):
+
+            normalized = normalize_item(
+                section,
+                default_stock=1,
+                forced_dealer=dealer
+            )
+
+            if normalized:
+
+                normalized["dealer"] = dealer
+
+                result.append(
+                    normalized
+                )
+
+        else:
+
+            for name, value in section.items():
+
+                if isinstance(
+                    value,
+                    dict
+                ):
+
+                    copied = dict(value)
+
+                    copied.setdefault(
+                        "name",
+                        name
+                    )
+
+                    normalized = normalize_item(
+                        copied,
+                        default_stock=1,
+                        forced_dealer=dealer
+                    )
+
+                else:
+
+                    normalized = normalize_item(
+                        {
+                            "name": name,
+                            "stock": 1,
+                            "price": value,
+                        },
+                        default_stock=1,
+                        forced_dealer=dealer
+                    )
+
+                if normalized:
+
+                    normalized["dealer"] = dealer
+
+                    result.append(
+                        normalized
+                    )
+
+    return result
+
+
+async def fetch_blox_stock(
+    session
+):
+
+    if not BLOX_API_KEY:
+
+        print(
+            "⚠️ BLOX_API_KEY is not configured."
+        )
+
+        return []
+
+    urls = []
+
+    if BLOX_API_URL:
+        urls.append(
+            BLOX_API_URL
+        )
+
+    if (
+        BLOX_API_FALLBACK_URL
+        and BLOX_API_FALLBACK_URL
+        not in urls
+    ):
+        urls.append(
+            BLOX_API_FALLBACK_URL
+        )
+
+    headers = {
+        "X-API-Key": BLOX_API_KEY,
+        "Accept": "application/json",
+        "User-Agent": "Team-Fime-Stock/1.0",
+    }
+
+    for url in urls:
+
+        data = await fetch_json(
+            session,
+            url,
+            headers=headers
+        )
+
+        if data is None:
+            continue
+
+        sections = find_blox_sections(
+            data
+        )
+
+        result = []
+
+        for dealer, section in sections:
+
+            result.extend(
+                normalize_blox_section(
+                    section,
+                    dealer
+                )
+            )
+
+        if result:
+
+            return clean_stock(
+                result
+            )
+
+        # Some APIs might return a direct list.
+        direct = normalize_stock(
+            data,
+            default_stock=1
+        )
+
+        if direct:
+
+            for item in direct:
+
+                if not item.get("dealer"):
+                    item["dealer"] = "Normal"
+
+            return clean_stock(
+                direct
+            )
+
+        print(
+            "⚠️ Blox API responded but "
+            "no stock format was recognized."
+        )
+
+    return []
+
+
+# ============================================================
+# GAG FETCHER
 # ============================================================
 
 async def fetch_gag_stock(
     session
 ):
 
-    if not GAG_API_URL:
+    urls = []
+
+    if GAG_API_URL:
+        urls.append(
+            GAG_API_URL
+        )
+
+    if (
+        GAG_API_FALLBACK_URL
+        and GAG_API_FALLBACK_URL
+        not in urls
+    ):
+        urls.append(
+            GAG_API_FALLBACK_URL
+        )
+
+    for url in GAG_API_FALLBACK_URLS:
+
+        if url not in urls:
+            urls.append(
+                url
+            )
+
+    if not urls:
 
         print(
             "⚠️ GAG_API_URL is not configured."
@@ -1158,59 +1756,302 @@ async def fetch_gag_stock(
 
         return []
 
-    data = await fetch_json(
-        session,
-        GAG_API_URL
-    )
+    # Primary first.
+    # Fallbacks only when the previous source
+    # gives no recognizable stock.
+    for index, url in enumerate(urls):
 
-    if data is None:
-        return []
-
-    stock = normalize_stock(
-        data
-    )
-
-    if not stock:
-
-        print(
-            "⚠️ GAG API responded, "
-            "but no recognizable stock "
-            "items were found."
+        data = await fetch_json(
+            session,
+            url
         )
 
-    return stock
+        if data is None:
+            print(
+                f"⚠️ GAG source {index + 1} failed."
+            )
+            continue
+
+        stock = normalize_stock(
+            data
+        )
+
+        if stock:
+
+            print(
+                f"✅ GAG stock loaded from "
+                f"source {index + 1}: "
+                f"{len(stock)} items."
+            )
+
+            return stock
+
+        print(
+            f"⚠️ GAG source {index + 1} "
+            "returned no recognizable items."
+        )
+
+    return []
 
 
-async def fetch_blox_stock(
+# ============================================================
+# STEAL AN EGG FETCHER
+# ============================================================
+
+async def fetch_steal_stock(
     session
 ):
 
-    if not BLOX_API_URL:
+    urls = []
+
+    if STEAL_EGG_API_URL:
+        urls.append(
+            STEAL_EGG_API_URL
+        )
+
+    for url in STEAL_EGG_FALLBACK_URLS:
+
+        if url not in urls:
+            urls.append(
+                url
+            )
+
+    if not urls:
         return []
 
-    data = await fetch_json(
-        session,
-        BLOX_API_URL
+    for index, url in enumerate(urls):
+
+        data = await fetch_json(
+            session,
+            url
+        )
+
+        if data is None:
+            continue
+
+        stock = normalize_stock(
+            data
+        )
+
+        if stock:
+
+            print(
+                f"✅ Steal An Egg stock "
+                f"loaded from source {index + 1}."
+            )
+
+            return stock
+
+    return []
+
+
+# ============================================================
+# GENERAL WEB SEARCH
+# ============================================================
+
+async def general_stock_search(
+    session,
+    game
+):
+
+    if not WEB_SEARCH_ENABLED:
+        return None
+
+    queries = {
+        GAME_GAG: (
+            "Grow a Garden stock today Roblox"
+        ),
+        GAME_BLOX: (
+            "Blox Fruits stock today Roblox"
+        ),
+        GAME_STEAL: (
+            "Steal An Egg stock today Roblox"
+        ),
+    }
+
+    query = queries.get(
+        game,
+        f"{game} stock today"
     )
 
-    if data is None:
-        return []
+    try:
 
-    return normalize_stock(
-        data
+        url = (
+            f"{WEB_SEARCH_URL}"
+            f"?q={quote_plus(query)}"
+            f"&format=json"
+            f"&no_html=1"
+            f"&no_redirect=1"
+        )
+
+        data = await fetch_json(
+            session,
+            url
+        )
+
+        if not isinstance(
+            data,
+            dict
+        ):
+            return None
+
+        abstract = str(
+            data.get(
+                "AbstractText"
+            )
+            or ""
+        ).strip()
+
+        abstract_url = str(
+            data.get(
+                "AbstractURL"
+            )
+            or ""
+        ).strip()
+
+        heading = str(
+            data.get(
+                "Heading"
+            )
+            or ""
+        ).strip()
+
+        topics = []
+
+        related = data.get(
+            "RelatedTopics"
+        )
+
+        if isinstance(
+            related,
+            list
+        ):
+
+            for topic in related[:5]:
+
+                if not isinstance(
+                    topic,
+                    dict
+                ):
+                    continue
+
+                text_value = str(
+                    topic.get(
+                        "Text"
+                    )
+                    or ""
+                ).strip()
+
+                if text_value:
+                    topics.append(
+                        text_value
+                    )
+
+        if not abstract and not topics:
+            return None
+
+        return {
+            "query": query,
+            "heading": heading,
+            "abstract": abstract,
+            "url": abstract_url,
+            "topics": topics,
+        }
+
+    except Exception as error:
+
+        print(
+            "⚠️ General stock search error:",
+            error
+        )
+
+        return None
+
+
+def build_search_embed(
+    game,
+    result
+):
+
+    embed = discord.Embed(
+        title=(
+            f"🔎 {GAME_NAMES.get(game, game)}"
+            " | بحث عام"
+        ),
+        description=(
+            "ما لقيت مصدر ستوك مباشر متاح حاليًا، "
+            "فتم إجراء بحث عام بدل اختراع بيانات ستوك."
+        ),
+        color=discord.Color.orange(),
+        timestamp=datetime.now(
+            timezone.utc
+        )
     )
+
+    if result.get("heading"):
+
+        embed.add_field(
+            name="📌 النتيجة",
+            value=result["heading"][:1024],
+            inline=False
+        )
+
+    if result.get("abstract"):
+
+        embed.add_field(
+            name="🔎 ملخص البحث",
+            value=result["abstract"][:1024],
+            inline=False
+        )
+
+    topics = result.get(
+        "topics",
+        []
+    )
+
+    if topics:
+
+        text = "\n".join(
+            f"• {html.unescape(topic)[:250]}"
+            for topic in topics[:5]
+        )
+
+        embed.add_field(
+            name="📚 نتائج إضافية",
+            value=text[:1024],
+            inline=False
+        )
+
+    embed.add_field(
+        name="🔍 البحث",
+        value=f"`{result.get('query', '')}`",
+        inline=False
+    )
+
+    if result.get("url"):
+
+        embed.add_field(
+            name="🌐 المصدر",
+            value=result["url"][:1024],
+            inline=False
+        )
+
+    embed.set_footer(
+        text=(
+            "Team Fime • General Search Fallback"
+        )
+    )
+
+    return embed
 
 
 # ============================================================
 # STOCK CLEANING
 # ============================================================
 
-def clean_stock(
-    stock
-):
+def clean_stock(stock):
 
     cleaned = []
-
     seen = set()
 
     for item in stock:
@@ -1226,9 +2067,11 @@ def clean_stock(
             or "Unknown"
         ).strip()
 
+        if not name:
+            continue
+
         stock_count = item.get(
-            "stock",
-            0
+            "stock"
         )
 
         rarity = str(
@@ -1236,10 +2079,43 @@ def clean_stock(
             or ""
         ).strip()
 
+        item_type = str(
+            item.get("type")
+            or ""
+        ).strip()
+
+        category = str(
+            item.get("category")
+            or ""
+        ).strip()
+
+        dealer = str(
+            item.get("dealer")
+            or ""
+        ).strip()
+
+        money_price = item.get(
+            "money_price"
+        )
+
+        robux_price = item.get(
+            "robux_price"
+        )
+
+        price = item.get(
+            "price"
+        )
+
         key = (
             name.lower(),
             str(stock_count),
-            rarity.lower()
+            rarity.lower(),
+            item_type.lower(),
+            category.lower(),
+            dealer.lower(),
+            str(money_price),
+            str(robux_price),
+            str(price),
         )
 
         if key in seen:
@@ -1253,10 +2129,18 @@ def clean_stock(
             "name": name,
             "stock": stock_count,
             "rarity": rarity,
+            "type": item_type,
+            "category": category,
+            "dealer": dealer,
+            "money_price": money_price,
+            "robux_price": robux_price,
+            "price": price,
         })
 
     cleaned.sort(
         key=lambda item: (
+            item["category"].lower(),
+            item["dealer"].lower(),
             item["name"].lower(),
             str(item["stock"])
         )
@@ -1265,9 +2149,7 @@ def clean_stock(
     return cleaned
 
 
-def serialize_stock(
-    stock
-):
+def serialize_stock(stock):
 
     return json.dumps(
         clean_stock(stock),
@@ -1277,12 +2159,10 @@ def serialize_stock(
 
 
 # ============================================================
-# RARE DETECTION
+# RARE
 # ============================================================
 
-def is_rare_item(
-    item
-):
+def is_rare_item(item):
 
     rarity = str(
         item.get("rarity")
@@ -1312,6 +2192,122 @@ def is_rare_item(
         or word in name
         for word in rare_words
     )
+
+
+# ============================================================
+# DISPLAY HELPERS
+# ============================================================
+
+def format_price(
+    item
+):
+
+    money = item.get(
+        "money_price"
+    )
+
+    robux = item.get(
+        "robux_price"
+    )
+
+    price = item.get(
+        "price"
+    )
+
+    parts = []
+
+    if money not in (
+        None,
+        "",
+        0,
+        "0"
+    ):
+        parts.append(
+            f"💰 `{money}`"
+        )
+
+    if robux not in (
+        None,
+        "",
+        0,
+        "0"
+    ):
+        parts.append(
+            f"💎 `{robux} Robux`"
+        )
+
+    if not parts and price not in (
+        None,
+        "",
+        0,
+        "0"
+    ):
+        parts.append(
+            f"💰 `{price}`"
+        )
+
+    return " • ".join(
+        parts
+    )
+
+
+def format_stock_line(
+    item
+):
+
+    line = f"**{item['name']}**"
+
+    amount = item.get(
+        "stock"
+    )
+
+    if amount not in (
+        None,
+        "",
+        0,
+        "0"
+    ):
+        line += (
+            f" × `{amount}`"
+        )
+
+    dealer = item.get(
+        "dealer"
+    )
+
+    if dealer:
+        line += (
+            f" — `{dealer}`"
+        )
+
+    item_type = item.get(
+        "type"
+    )
+
+    if item_type:
+        line += (
+            f" — `{item_type}`"
+        )
+
+    rarity = item.get(
+        "rarity"
+    )
+
+    if rarity:
+        line += (
+            f" — `{rarity}`"
+        )
+
+    price = format_price(
+        item
+    )
+
+    if price:
+        line += (
+            f"\n{price}"
+        )
+
+    return line + "\n"
 
 
 # ============================================================
@@ -1348,35 +2344,33 @@ def build_shop_embeds(
 
     current = ""
 
+    current_category = None
+
     for item in stock:
 
-        name = item["name"]
-
-        amount = item["stock"]
-
-        rarity = item.get(
-            "rarity",
-            ""
+        category = (
+            item.get("category")
+            or item.get("dealer")
+            or ""
         )
 
-        line = f"**{name}**"
+        heading = ""
 
-        if amount not in (
-            None,
-            "",
-            0,
-            "0"
+        if (
+            category
+            and category != current_category
         ):
-            line += (
-                f" × `{amount}`"
+
+            heading = (
+                f"\n**━━ {category} ━━**\n"
             )
 
-        if rarity:
-            line += (
-                f" — `{rarity}`"
-            )
+            current_category = category
 
-        line += "\n"
+        line = (
+            heading
+            + format_stock_line(item)
+        )
 
         if (
             len(current)
@@ -1413,8 +2407,7 @@ def build_shop_embeds(
         if len(chunks) > 1:
 
             title += (
-                f" "
-                f"({index + 1}/{len(chunks)})"
+                f" ({index + 1}/{len(chunks)})"
             )
 
         embed = discord.Embed(
@@ -1430,8 +2423,7 @@ def build_shop_embeds(
 
             embed.set_footer(
                 text=(
-                    "Team Fime • "
-                    "Stock System"
+                    "Team Fime • Stock System"
                 )
             )
 
@@ -1443,7 +2435,7 @@ def build_shop_embeds(
 
 
 # ============================================================
-# STANDARD NOTIFICATION PANEL
+# NOTIFICATION PANEL
 # ============================================================
 
 def build_notification_panel_embed():
@@ -1499,8 +2491,7 @@ def build_notification_panel_embed():
 
     embed.set_footer(
         text=(
-            "Team Fime • "
-            "Notification System"
+            "Team Fime • Notification System"
         )
     )
 
@@ -1508,7 +2499,7 @@ def build_notification_panel_embed():
 
 
 # ============================================================
-# STANDARD NOTIFICATION SELECT
+# NOTIFICATION SELECT
 # ============================================================
 
 class NotificationSelect(
@@ -1533,15 +2524,11 @@ class NotificationSelect(
             )
 
         super().__init__(
-            placeholder=(
-                "🔔 اختر إشعارًا..."
-            ),
+            placeholder="🔔 اختر إشعارًا...",
             min_values=1,
             max_values=1,
             options=options,
-            custom_id=(
-                "fime_stock_notifications"
-            )
+            custom_id="fime_stock_notifications"
         )
 
     async def callback(
@@ -1603,10 +2590,7 @@ class NotificationSelect(
 
                 await interaction.user.remove_roles(
                     role,
-                    reason=(
-                        "Fime Stock "
-                        "Notification Toggle"
-                    )
+                    reason="Fime Stock Notification Toggle"
                 )
 
                 remove_notification_member(
@@ -1616,10 +2600,7 @@ class NotificationSelect(
                 )
 
                 await interaction.followup.send(
-                    (
-                        f"➖ تم إلغاء "
-                        f"**{role.name}**."
-                    ),
+                    f"➖ تم إلغاء **{role.name}**.",
                     ephemeral=True
                 )
 
@@ -1627,10 +2608,7 @@ class NotificationSelect(
 
                 await interaction.user.add_roles(
                     role,
-                    reason=(
-                        "Fime Stock "
-                        "Notification Selection"
-                    )
+                    reason="Fime Stock Notification Selection"
                 )
 
                 add_notification_member(
@@ -1640,10 +2618,7 @@ class NotificationSelect(
                 )
 
                 await interaction.followup.send(
-                    (
-                        f"✅ تم تفعيل "
-                        f"**{role.name}**."
-                    ),
+                    f"✅ تم تفعيل **{role.name}**.",
                     ephemeral=True
                 )
 
@@ -1652,8 +2627,7 @@ class NotificationSelect(
             await interaction.followup.send(
                 (
                     "❌ Discord رفض تعديل الرتبة.\n"
-                    "تأكد أن رتبة البوت أعلى من رتبة "
-                    "الإشعار."
+                    "تأكد أن رتبة البوت أعلى من رتبة الإشعار."
                 ),
                 ephemeral=True
             )
@@ -1687,7 +2661,7 @@ class NotificationView(
 
 
 # ============================================================
-# GAG FRUIT / ITEM SELECT
+# GAG SELECT
 # ============================================================
 
 def build_gag_item_select_options(
@@ -1695,7 +2669,6 @@ def build_gag_item_select_options(
 ):
 
     options = []
-
     seen = set()
 
     for item in clean_stock(stock):
@@ -1715,13 +2688,11 @@ def build_gag_item_select_options(
         seen.add(key)
 
         amount = item.get(
-            "stock",
-            0
+            "stock"
         )
 
         rarity = item.get(
-            "rarity",
-            ""
+            "rarity"
         )
 
         description_parts = []
@@ -1776,7 +2747,6 @@ class GAGFruitSelect(
             stock
         )
 
-        # Discord requires at least one option.
         if not options:
 
             options = [
@@ -1787,26 +2757,17 @@ class GAGFruitSelect(
                 )
             ]
 
-        self.stock_names = {
-            option.value.lower()
-            for option in options
-        }
-
         max_values = min(
             len(options),
             MAX_SELECT_OPTIONS
         )
 
         super().__init__(
-            placeholder=(
-                "🍎 اختر الفواكه اللي تبي إشعار عنها..."
-            ),
+            placeholder="🍎 اختر الفواكه اللي تبي إشعار عنها...",
             min_values=1,
             max_values=max_values,
             options=options,
-            custom_id=(
-                "fime_gag_fruit_select"
-            )
+            custom_id="fime_gag_fruit_select"
         )
 
     async def callback(
@@ -1823,10 +2784,7 @@ class GAGFruitSelect(
 
             return
 
-        if (
-            "__none__"
-            in self.values
-        ):
+        if "__none__" in self.values:
 
             await interaction.response.send_message(
                 "❌ ما فيه عناصر متاحة حاليًا.",
@@ -1853,7 +2811,6 @@ class GAGFruitSelect(
         )
 
         added_names = []
-
         failed_names = []
 
         for item_name in self.values:
@@ -1886,10 +2843,7 @@ class GAGFruitSelect(
 
                     await interaction.user.add_roles(
                         role,
-                        reason=(
-                            "Fime GAG "
-                            "Fruit Notification"
-                        )
+                        reason="Fime GAG Fruit Notification"
                     )
 
                 add_gag_item_subscription(
@@ -1976,12 +2930,11 @@ class GAGFruitView(
             stock
         )
 
-        if not options:
-            return
+        if options:
 
-        self.add_item(
-            GAGFruitSelect(stock)
-        )
+            self.add_item(
+                GAGFruitSelect(stock)
+            )
 
 
 # ============================================================
@@ -1991,13 +2944,6 @@ class GAGFruitView(
 class FimeStock(
     commands.Cog
 ):
-
-    # ========================================================
-    # ONE TOP-LEVEL COMMAND GROUP
-    #
-    # This reduces bot6 from 12 top-level commands
-    # to ONE top-level command: /stock
-    # ========================================================
 
     stock_group = app_commands.Group(
         name="stock",
@@ -2016,11 +2962,9 @@ class FimeStock(
         self.session = None
 
         self.steal_reset_counter = 0
-
         self.steal_rift_counter = 0
 
         self.stock_loop.start()
-
         self.steal_event_loop.start()
 
     # ========================================================
@@ -2035,6 +2979,8 @@ class FimeStock(
 
         try:
 
+            # This makes the old notification panel
+            # continue working after restart.
             self.bot.add_view(
                 NotificationView()
             )
@@ -2051,6 +2997,84 @@ class FimeStock(
                 error
             )
 
+        # Restore saved notification panels.
+        asyncio.create_task(
+            self.restore_notification_panels()
+        )
+
+    # ========================================================
+    # RESTORE NOTIFICATION PANELS
+    # ========================================================
+
+    async def restore_notification_panels(
+        self
+    ):
+
+        try:
+
+            await self.bot.wait_until_ready()
+
+            conn = get_db()
+
+            rows = conn.execute("""
+                SELECT guild_id, channel_id, message_id
+                FROM notification_panels
+            """).fetchall()
+
+            conn.close()
+
+            restored = 0
+
+            for row in rows:
+
+                try:
+
+                    channel = await self.resolve_channel(
+                        row["channel_id"]
+                    )
+
+                    if not channel:
+                        continue
+
+                    message = await channel.fetch_message(
+                        row["message_id"]
+                    )
+
+                    await message.edit(
+                        embed=build_notification_panel_embed(),
+                        view=NotificationView()
+                    )
+
+                    restored += 1
+
+                except discord.NotFound:
+
+                    # Do not delete the database entry.
+                    # The reset command can create a new panel.
+                    continue
+
+                except discord.Forbidden:
+
+                    continue
+
+                except Exception as error:
+
+                    print(
+                        "⚠️ Could not restore "
+                        f"notification panel: {error}"
+                    )
+
+            print(
+                f"✅ Restored {restored} notification panel(s)."
+            )
+
+        except Exception as error:
+
+            print(
+                "⚠️ Notification panel restore error:",
+                error
+            )
+
     # ========================================================
     # UNLOAD
     # ========================================================
@@ -2060,7 +3084,6 @@ class FimeStock(
     ):
 
         self.stock_loop.cancel()
-
         self.steal_event_loop.cancel()
 
         if self.session:
@@ -2095,6 +3118,9 @@ class FimeStock(
         channel_id
     ):
 
+        if not channel_id:
+            return None
+
         channel = self.bot.get_channel(
             channel_id
         )
@@ -2113,7 +3139,7 @@ class FimeStock(
             return None
 
     # ========================================================
-    # STANDARD NOTIFICATION ROLE
+    # NOTIFICATION ROLE
     # ========================================================
 
     async def get_or_create_notification_role(
@@ -2129,11 +3155,9 @@ class FimeStock(
         if not info:
             return None
 
-        existing_id = (
-            get_notification_role(
-                guild.id,
-                notification_type
-            )
+        existing_id = get_notification_role(
+            guild.id,
+            notification_type
         )
 
         if existing_id:
@@ -2170,10 +3194,7 @@ class FimeStock(
                 name=role_name,
                 color=info["color"],
                 mentionable=True,
-                reason=(
-                    "Fime Stock "
-                    "Notification Role"
-                )
+                reason="Fime Stock Notification Role"
             )
 
             save_notification_role(
@@ -2187,8 +3208,7 @@ class FimeStock(
         except discord.Forbidden:
 
             print(
-                "❌ Cannot create "
-                "notification role."
+                "❌ Cannot create notification role."
             )
 
             return None
@@ -2203,7 +3223,7 @@ class FimeStock(
             return None
 
     # ========================================================
-    # GAG ITEM / FRUIT ROLE
+    # GAG ITEM ROLE
     # ========================================================
 
     async def get_or_create_gag_item_role(
@@ -2233,16 +3253,13 @@ class FimeStock(
             if role:
                 return role
 
-        # Keep role names short and clean.
         role_name = (
             f"🍎 {item_name}"
         )
 
         if len(role_name) > 100:
 
-            role_name = (
-                role_name[:100]
-            )
+            role_name = role_name[:100]
 
         existing_role = discord.utils.get(
             guild.roles,
@@ -2265,10 +3282,7 @@ class FimeStock(
                 name=role_name,
                 color=discord.Color.green(),
                 mentionable=True,
-                reason=(
-                    "Fime GAG "
-                    "Fruit Notification Role"
-                )
+                reason="Fime GAG Fruit Notification Role"
             )
 
             save_gag_item_role(
@@ -2282,8 +3296,7 @@ class FimeStock(
         except discord.Forbidden:
 
             print(
-                "❌ Cannot create GAG "
-                f"item role for {item_name}."
+                f"❌ Cannot create GAG role for {item_name}."
             )
 
             return None
@@ -2291,14 +3304,13 @@ class FimeStock(
         except Exception as error:
 
             print(
-                "❌ GAG item role "
-                f"creation error: {error}"
+                f"❌ GAG role creation error: {error}"
             )
 
             return None
 
     # ========================================================
-    # SEND GAG FRUIT SELECT PANEL
+    # GAG FRUIT PANEL
     # ========================================================
 
     async def send_gag_fruit_panel(
@@ -2318,8 +3330,7 @@ class FimeStock(
             title="🍎 اختر إشعارات الفواكه",
             description=(
                 "تبي البوت ينبهك إذا ظهرت فاكهة معينة؟\n\n"
-                "اختار **أكثر من فاكهة** من القائمة "
-                "بالأسفل.\n\n"
+                "اختار **أكثر من فاكهة** من القائمة بالأسفل.\n\n"
                 "إذا ظهرت وحدة من اختياراتك في ستوك جديد، "
                 "البوت بمنشنك تلقائيًا."
             ),
@@ -2355,8 +3366,7 @@ class FimeStock(
         except discord.Forbidden:
 
             print(
-                "❌ Cannot send GAG "
-                "fruit selector."
+                "❌ Cannot send GAG fruit selector."
             )
 
         except Exception as error:
@@ -2367,7 +3377,7 @@ class FimeStock(
             )
 
     # ========================================================
-    # SEND SHOP UPDATE
+    # SHOP UPDATE
     # ========================================================
 
     async def send_shop_update(
@@ -2392,7 +3402,7 @@ class FimeStock(
         if not channel:
             return
 
-        mention = None
+        mentions = []
 
         if game == GAME_GAG:
 
@@ -2406,8 +3416,6 @@ class FimeStock(
                 NOTIF_ALL_STOCK
             )
 
-            mentions = []
-
             if role_id:
                 mentions.append(
                     f"<@&{role_id}>"
@@ -2416,11 +3424,6 @@ class FimeStock(
             if all_role_id:
                 mentions.append(
                     f"<@&{all_role_id}>"
-                )
-
-            if mentions:
-                mention = " ".join(
-                    mentions
                 )
 
         elif game == GAME_BLOX:
@@ -2435,8 +3438,6 @@ class FimeStock(
                 NOTIF_ALL_STOCK
             )
 
-            mentions = []
-
             if role_id:
                 mentions.append(
                     f"<@&{role_id}>"
@@ -2447,10 +3448,23 @@ class FimeStock(
                     f"<@&{all_role_id}>"
                 )
 
-            if mentions:
-                mention = " ".join(
-                    mentions
+        elif game == GAME_STEAL:
+
+            all_role_id = get_notification_role(
+                guild.id,
+                NOTIF_ALL_STOCK
+            )
+
+            if all_role_id:
+                mentions.append(
+                    f"<@&{all_role_id}>"
                 )
+
+        mention = (
+            " ".join(mentions)
+            if mentions
+            else None
+        )
 
         embeds = build_shop_embeds(
             game,
@@ -2479,8 +3493,8 @@ class FimeStock(
             except discord.Forbidden:
 
                 print(
-                    f"❌ Cannot send in "
-                    f"#{getattr(channel, 'name', 'unknown')}"
+                    f"❌ Cannot send stock "
+                    f"in #{getattr(channel, 'name', 'unknown')}"
                 )
 
                 break
@@ -2493,10 +3507,6 @@ class FimeStock(
                 )
 
                 break
-
-        # ----------------------------------------------------
-        # Every NEW GAG stock update gets the fruit selector.
-        # ----------------------------------------------------
 
         if game == GAME_GAG:
 
@@ -2547,26 +3557,21 @@ class FimeStock(
             matches = [
                 item
                 for item in added
-                if target
-                in item["name"].lower()
+                if target in item["name"].lower()
             ]
 
             if not matches:
                 continue
 
             text = "\n".join(
-                (
-                    f"• **{item['name']}** "
-                    f"× `{item['stock']}`"
-                )
+                format_stock_line(item)
                 for item in matches
             )
 
             embed = discord.Embed(
                 title="🔔 Stock Alert",
                 description=(
-                    "ظهر العنصر اللي طلبت "
-                    "تنبيه عنه:\n\n"
+                    "ظهر العنصر اللي طلبت تنبيه عنه:\n\n"
                     f"{text}"
                 ),
                 color=discord.Color.green()
@@ -2574,8 +3579,7 @@ class FimeStock(
 
             embed.set_footer(
                 text=(
-                    "Team Fime • "
-                    "Personal Stock Alert"
+                    "Team Fime • Personal Stock Alert"
                 )
             )
 
@@ -2601,9 +3605,20 @@ class FimeStock(
         if not added:
             return
 
-        # ----------------------------------------------------
-        # Collect subscribers for all newly added items.
-        # ----------------------------------------------------
+        channel_id = get_shop_channel(
+            guild.id,
+            GAME_GAG
+        )
+
+        if not channel_id:
+            return
+
+        channel = await self.resolve_channel(
+            channel_id
+        )
+
+        if not channel:
+            return
 
         for item in added:
 
@@ -2614,11 +3629,9 @@ class FimeStock(
             if not item_name:
                 continue
 
-            subscribers = (
-                get_gag_item_subscribers(
-                    guild.id,
-                    item_name
-                )
+            subscribers = get_gag_item_subscribers(
+                guild.id,
+                item_name
             )
 
             if not subscribers:
@@ -2639,19 +3652,10 @@ class FimeStock(
             if not role:
                 continue
 
-            # ------------------------------------------------
-            # Mention everyone subscribed to this item
-            # through the item role.
-            # ------------------------------------------------
-
-            content = role.mention
-
             embed = discord.Embed(
                 title="🍎 فاكهة مطلوبة وصلت!",
                 description=(
-                    f"ظهرت **{item_name}** في "
-                    f"الستوك الجديد.\n\n"
-                    f"📦 الكمية: `{item.get('stock', 0)}`"
+                    f"ظهرت **{item_name}** في الستوك الجديد."
                 ),
                 color=discord.Color.green(),
                 timestamp=datetime.now(
@@ -2659,9 +3663,25 @@ class FimeStock(
                 )
             )
 
+            amount = item.get(
+                "stock"
+            )
+
+            if amount not in (
+                None,
+                "",
+                0,
+                "0"
+            ):
+
+                embed.add_field(
+                    name="📦 الكمية",
+                    value=f"`{amount}`",
+                    inline=True
+                )
+
             rarity = item.get(
-                "rarity",
-                ""
+                "rarity"
             )
 
             if rarity:
@@ -2672,40 +3692,36 @@ class FimeStock(
                     inline=True
                 )
 
+            price = format_price(
+                item
+            )
+
+            if price:
+
+                embed.add_field(
+                    name="💰 السعر",
+                    value=price,
+                    inline=True
+                )
+
             embed.set_footer(
                 text=(
-                    "Team Fime • "
-                    "GAG Fruit Alerts"
+                    "Team Fime • GAG Fruit Alerts"
                 )
             )
-
-            channel_id = get_shop_channel(
-                guild.id,
-                GAME_GAG
-            )
-
-            if not channel_id:
-                continue
-
-            channel = await self.resolve_channel(
-                channel_id
-            )
-
-            if not channel:
-                continue
 
             try:
 
                 await channel.send(
-                    content=content,
+                    content=role.mention,
                     embed=embed
                 )
 
             except discord.Forbidden:
 
                 print(
-                    "❌ Cannot send GAG "
-                    f"fruit alert for {item_name}."
+                    f"❌ Cannot send GAG alert "
+                    f"for {item_name}."
                 )
 
             except Exception as error:
@@ -2733,8 +3749,8 @@ class FimeStock(
         if not stock:
             return
 
-        current_json = (
-            serialize_stock(stock)
+        current_json = serialize_stock(
+            stock
         )
 
         old_json = get_cached_stock(
@@ -2743,13 +3759,18 @@ class FimeStock(
         )
 
         # First successful poll:
-        # cache only, don't spam.
+        # cache only.
         if old_json is None:
 
             save_cached_stock(
                 guild.id,
                 game,
                 current_json
+            )
+
+            print(
+                f"📦 Initial {game} cache "
+                f"saved for {guild.name}."
             )
 
             return
@@ -2771,57 +3792,56 @@ class FimeStock(
             old_stock
         )
 
-        old_keys = {
-            (
+        def item_key(item):
+
+            return (
                 item["name"].lower(),
-                str(item["stock"]),
+                str(item.get("stock")),
                 item.get(
                     "rarity",
                     ""
-                ).lower()
+                ).lower(),
+                item.get(
+                    "type",
+                    ""
+                ).lower(),
+                item.get(
+                    "category",
+                    ""
+                ).lower(),
+                item.get(
+                    "dealer",
+                    ""
+                ).lower(),
+                str(item.get("money_price")),
+                str(item.get("robux_price")),
+                str(item.get("price")),
             )
+
+        old_keys = {
+            item_key(item)
             for item in old_stock
         }
 
         new_keys = {
-            (
-                item["name"].lower(),
-                str(item["stock"]),
-                item.get(
-                    "rarity",
-                    ""
-                ).lower()
-            )
+            item_key(item)
             for item in stock
         }
 
         added = [
             item
             for item in stock
-            if (
-                item["name"].lower(),
-                str(item["stock"]),
-                item.get(
-                    "rarity",
-                    ""
-                ).lower()
-            ) not in old_keys
+            if item_key(item) not in old_keys
         ]
 
         removed = [
             item
             for item in old_stock
-            if (
-                item["name"].lower(),
-                str(item["stock"]),
-                item.get(
-                    "rarity",
-                    ""
-                ).lower()
-            ) not in new_keys
+            if item_key(item) not in new_keys
         ]
 
-        # Save immediately
+        # Save first so a Discord error can never
+        # make the same stock repeat forever.
         save_cached_stock(
             guild.id,
             game,
@@ -2829,38 +3849,65 @@ class FimeStock(
         )
 
         # ----------------------------------------------------
-        # Send full stock
+        # SHOP
         # ----------------------------------------------------
 
-        await self.send_shop_update(
-            guild,
-            game,
-            stock
-        )
+        try:
+
+            await self.send_shop_update(
+                guild,
+                game,
+                stock
+            )
+
+        except Exception as error:
+
+            print(
+                f"⚠️ Shop update error "
+                f"{guild.name}/{game}: {error}"
+            )
 
         # ----------------------------------------------------
-        # Personal alerts
+        # PERSONAL ALERTS
         # ----------------------------------------------------
 
-        await self.send_personal_alerts(
-            guild,
-            game,
-            added
-        )
+        try:
+
+            await self.send_personal_alerts(
+                guild,
+                game,
+                added
+            )
+
+        except Exception as error:
+
+            print(
+                f"⚠️ Personal alert error "
+                f"{guild.name}/{game}: {error}"
+            )
 
         # ----------------------------------------------------
-        # GAG fruit/item role alerts
+        # GAG ITEM ROLE ALERTS
         # ----------------------------------------------------
 
         if game == GAME_GAG:
 
-            await self.send_gag_item_role_alerts(
-                guild,
-                added
-            )
+            try:
+
+                await self.send_gag_item_role_alerts(
+                    guild,
+                    added
+                )
+
+            except Exception as error:
+
+                print(
+                    f"⚠️ GAG item role alert error "
+                    f"{guild.name}: {error}"
+                )
 
         # ----------------------------------------------------
-        # Rare stock
+        # RARE
         # ----------------------------------------------------
 
         if game == GAME_GAG:
@@ -2873,61 +3920,115 @@ class FimeStock(
 
             if rare_added:
 
-                role_id = (
-                    get_notification_role(
+                try:
+
+                    role_id = get_notification_role(
                         guild.id,
                         NOTIF_GAG_RARE
                     )
-                )
 
-                channel_id = (
-                    get_shop_channel(
+                    channel_id = get_shop_channel(
                         guild.id,
                         GAME_GAG
                     )
-                )
 
-                if (
-                    role_id
-                    and channel_id
-                ):
+                    if (
+                        role_id
+                        and channel_id
+                    ):
 
-                    channel = (
-                        await self.resolve_channel(
+                        channel = await self.resolve_channel(
                             channel_id
                         )
-                    )
 
-                    if channel:
+                        if channel:
 
-                        text = "\n".join(
-                            (
-                                f"💎 **{item['name']}** "
-                                f"× `{item['stock']}`"
+                            text = "\n".join(
+                                format_stock_line(item)
+                                for item in rare_added
                             )
-                            for item
-                            in rare_added
-                        )
 
-                        embed = discord.Embed(
-                            title=(
-                                "💎 Rare Stock!"
-                            ),
-                            description=text,
-                            color=discord.Color.gold()
-                        )
-
-                        try:
+                            embed = discord.Embed(
+                                title="💎 Rare Stock!",
+                                description=text,
+                                color=discord.Color.gold(),
+                                timestamp=datetime.now(
+                                    timezone.utc
+                                )
+                            )
 
                             await channel.send(
-                                content=(
-                                    f"<@&{role_id}>"
-                                ),
+                                content=f"<@&{role_id}>",
                                 embed=embed
                             )
 
-                        except Exception:
-                            pass
+                except Exception as error:
+
+                    print(
+                        f"⚠️ Rare stock error "
+                        f"{guild.name}: {error}"
+                    )
+
+        print(
+            f"🔄 {game.upper()} stock changed "
+            f"in {guild.name} | "
+            f"+{len(added)} / -{len(removed)}"
+        )
+
+    # ========================================================
+    # SAFE FETCHERS
+    # ========================================================
+
+    async def safe_fetch_gag(self):
+
+        try:
+
+            return await fetch_gag_stock(
+                self.session
+            )
+
+        except Exception as error:
+
+            print(
+                "❌ GAG fetch crashed:",
+                error
+            )
+
+            return []
+
+    async def safe_fetch_blox(self):
+
+        try:
+
+            return await fetch_blox_stock(
+                self.session
+            )
+
+        except Exception as error:
+
+            print(
+                "❌ Blox fetch crashed:",
+                error
+            )
+
+            return []
+
+    async def safe_fetch_steal(self):
+
+        try:
+
+            return await fetch_steal_stock(
+                self.session
+            )
+
+        except Exception as error:
+
+            print(
+                "❌ Steal fetch crashed:",
+                error
+            )
+
+            return []
 
     # ========================================================
     # STOCK LOOP
@@ -2948,40 +4049,59 @@ class FimeStock(
             return
 
         # ----------------------------------------------------
-        # Grow a Garden
+        # IMPORTANT:
+        # Every game is fetched independently.
+        # One API cannot kill another.
         # ----------------------------------------------------
 
-        gag_stock = (
-            await fetch_gag_stock(
-                self.session
-            )
-        )
-
-        # ----------------------------------------------------
-        # Blox Fruits
-        # ----------------------------------------------------
-
+        gag_stock = []
         blox_stock = []
+        steal_stock = []
 
-        if BLOX_API_URL:
+        try:
 
-            blox_stock = (
-                await fetch_blox_stock(
-                    self.session
-                )
+            gag_stock = await self.safe_fetch_gag()
+
+        except Exception as error:
+
+            print(
+                "❌ GAG isolated loop error:",
+                error
+            )
+
+        try:
+
+            blox_stock = await self.safe_fetch_blox()
+
+        except Exception as error:
+
+            print(
+                "❌ Blox isolated loop error:",
+                error
+            )
+
+        try:
+
+            steal_stock = await self.safe_fetch_steal()
+
+        except Exception as error:
+
+            print(
+                "❌ Steal isolated loop error:",
+                error
             )
 
         # ----------------------------------------------------
-        # Process every guild
+        # Process GAG independently.
         # ----------------------------------------------------
 
-        for guild in list(
-            self.bot.guilds
-        ):
+        if gag_stock:
 
-            try:
+            for guild in list(
+                self.bot.guilds
+            ):
 
-                if gag_stock:
+                try:
 
                     await self.process_stock(
                         guild,
@@ -2989,7 +4109,24 @@ class FimeStock(
                         gag_stock
                     )
 
-                if blox_stock:
+                except Exception as error:
+
+                    print(
+                        f"⚠️ GAG processing error "
+                        f"for {guild.name}: {error}"
+                    )
+
+        # ----------------------------------------------------
+        # Process Blox independently.
+        # ----------------------------------------------------
+
+        if blox_stock:
+
+            for guild in list(
+                self.bot.guilds
+            ):
+
+                try:
 
                     await self.process_stock(
                         guild,
@@ -2997,14 +4134,37 @@ class FimeStock(
                         blox_stock
                     )
 
-            except Exception as error:
+                except Exception as error:
 
-                print(
-                    f"⚠️ Stock processing "
-                    f"error for "
-                    f"{guild.name}: "
-                    f"{error}"
-                )
+                    print(
+                        f"⚠️ Blox processing error "
+                        f"for {guild.name}: {error}"
+                    )
+
+        # ----------------------------------------------------
+        # Process Steal independently.
+        # ----------------------------------------------------
+
+        if steal_stock:
+
+            for guild in list(
+                self.bot.guilds
+            ):
+
+                try:
+
+                    await self.process_stock(
+                        guild,
+                        GAME_STEAL,
+                        steal_stock
+                    )
+
+                except Exception as error:
+
+                    print(
+                        f"⚠️ Steal processing error "
+                        f"for {guild.name}: {error}"
+                    )
 
     @stock_loop.before_loop
     async def before_stock_loop(
@@ -3014,7 +4174,7 @@ class FimeStock(
         await self.bot.wait_until_ready()
 
     # ========================================================
-    # STEAL AN EGG LOOP
+    # STEAL EVENT LOOP
     # ========================================================
 
     @tasks.loop(
@@ -3027,7 +4187,6 @@ class FimeStock(
         await self.bot.wait_until_ready()
 
         self.steal_reset_counter += 1
-
         self.steal_rift_counter += 1
 
         if (
@@ -3037,11 +4196,20 @@ class FimeStock(
 
             self.steal_reset_counter = 0
 
-            await self.send_event_notification(
-                NOTIF_STEAL_RESET,
-                "🥚 Steal An Egg — Reset",
-                "بدأت دورة Reset جديدة."
-            )
+            try:
+
+                await self.send_event_notification(
+                    NOTIF_STEAL_RESET,
+                    "🥚 Steal An Egg — Reset",
+                    "بدأت دورة Reset جديدة."
+                )
+
+            except Exception as error:
+
+                print(
+                    "⚠️ Steal Reset error:",
+                    error
+                )
 
         if (
             self.steal_rift_counter
@@ -3050,11 +4218,20 @@ class FimeStock(
 
             self.steal_rift_counter = 0
 
-            await self.send_event_notification(
-                NOTIF_STEAL_RIFT,
-                "🌀 Steal An Egg — Rift",
-                "حان وقت Rift."
-            )
+            try:
+
+                await self.send_event_notification(
+                    NOTIF_STEAL_RIFT,
+                    "🌀 Steal An Egg — Rift",
+                    "حان وقت Rift."
+                )
+
+            except Exception as error:
+
+                print(
+                    "⚠️ Steal Rift error:",
+                    error
+                )
 
     @steal_event_loop.before_loop
     async def before_steal_loop(
@@ -3078,82 +4255,75 @@ class FimeStock(
             self.bot.guilds
         ):
 
-            role_id = (
-                get_notification_role(
+            try:
+
+                role_id = get_notification_role(
                     guild.id,
                     notification_type
                 )
-            )
 
-            all_role_id = (
-                get_notification_role(
+                all_role_id = get_notification_role(
                     guild.id,
                     NOTIF_ALL_STOCK
                 )
-            )
 
-            channel_id = (
-                get_shop_channel(
+                channel_id = get_shop_channel(
                     guild.id,
                     GAME_STEAL
                 )
-            )
 
-            if not channel_id:
-                continue
+                if not channel_id:
+                    continue
 
-            channel = (
-                await self.resolve_channel(
+                channel = await self.resolve_channel(
                     channel_id
                 )
-            )
 
-            if not channel:
-                continue
+                if not channel:
+                    continue
 
-            mentions = []
+                mentions = []
 
-            if role_id:
-                mentions.append(
-                    f"<@&{role_id}>"
+                if role_id:
+                    mentions.append(
+                        f"<@&{role_id}>"
+                    )
+
+                if all_role_id:
+                    mentions.append(
+                        f"<@&{all_role_id}>"
+                    )
+
+                content = (
+                    " ".join(mentions)
+                    if mentions
+                    else None
                 )
 
-            if all_role_id:
-                mentions.append(
-                    f"<@&{all_role_id}>"
+                embed = discord.Embed(
+                    title=title,
+                    description=description,
+                    color=discord.Color.orange(),
+                    timestamp=datetime.now(
+                        timezone.utc
+                    )
                 )
 
-            content = (
-                " ".join(mentions)
-                if mentions
-                else None
-            )
-
-            embed = discord.Embed(
-                title=title,
-                description=description,
-                color=discord.Color.orange(),
-                timestamp=datetime.now(
-                    timezone.utc
+                embed.set_footer(
+                    text="Team Fime • Stock Alerts"
                 )
-            )
-
-            embed.set_footer(
-                text=(
-                    "Team Fime • "
-                    "Stock Alerts"
-                )
-            )
-
-            try:
 
                 await channel.send(
                     content=content,
                     embed=embed
                 )
 
-            except Exception:
-                pass
+            except Exception as error:
+
+                print(
+                    f"⚠️ Event notification error "
+                    f"for {guild.name}: {error}"
+                )
 
     # ========================================================
     # /STOCK VIEW
@@ -3176,6 +4346,10 @@ class FimeStock(
                 name="🍎 Blox Fruits",
                 value=GAME_BLOX
             ),
+            app_commands.Choice(
+                name="🥚 Steal An Egg",
+                value=GAME_STEAL
+            ),
         ]
     )
     async def stock_command(
@@ -3188,30 +4362,93 @@ class FimeStock(
 
         await self.ensure_session()
 
+        stock = []
+
         if game.value == GAME_GAG:
 
-            stock = (
-                await fetch_gag_stock(
+            try:
+
+                stock = await fetch_gag_stock(
                     self.session
                 )
-            )
 
-        else:
+            except Exception as error:
 
-            stock = (
-                await fetch_blox_stock(
+                print(
+                    "❌ Manual GAG fetch error:",
+                    error
+                )
+
+        elif game.value == GAME_BLOX:
+
+            try:
+
+                stock = await fetch_blox_stock(
                     self.session
                 )
-            )
+
+            except Exception as error:
+
+                print(
+                    "❌ Manual Blox fetch error:",
+                    error
+                )
+
+        elif game.value == GAME_STEAL:
+
+            try:
+
+                stock = await fetch_steal_stock(
+                    self.session
+                )
+
+            except Exception as error:
+
+                print(
+                    "❌ Manual Steal fetch error:",
+                    error
+                )
 
         if not stock:
 
-            await interaction.followup.send(
-                (
-                    "❌ ما قدرت أجيب الستوك حاليًا.\n"
-                    "قد يكون مصدر البيانات غير متاح."
+            # ------------------------------------------------
+            # General search fallback.
+            # It NEVER fabricates stock.
+            # ------------------------------------------------
+
+            search_result = None
+
+            try:
+
+                search_result = await general_stock_search(
+                    self.session,
+                    game.value
                 )
-            )
+
+            except Exception as error:
+
+                print(
+                    "⚠️ Search fallback error:",
+                    error
+                )
+
+            if search_result:
+
+                await interaction.followup.send(
+                    embed=build_search_embed(
+                        game.value,
+                        search_result
+                    )
+                )
+
+            else:
+
+                await interaction.followup.send(
+                    (
+                        "❌ ما قدرت أجيب الستوك حاليًا، "
+                        "ولا لقيت نتيجة بحث عامة مفيدة."
+                    )
+                )
 
             return
 
@@ -3226,8 +4463,6 @@ class FimeStock(
                 embed=embed
             )
 
-        # When manually viewing GAG stock,
-        # also provide the fruit selector.
         if game.value == GAME_GAG:
 
             await interaction.followup.send(
@@ -3425,14 +4660,10 @@ class FimeStock(
             ephemeral=True
         )
 
-        embed = (
-            build_notification_panel_embed()
-        )
-
         try:
 
             message = await channel.send(
-                embed=embed,
+                embed=build_notification_panel_embed(),
                 view=NotificationView()
             )
 
@@ -3444,8 +4675,8 @@ class FimeStock(
 
             await interaction.followup.send(
                 (
-                    f"✅ تم إنشاء لوحة "
-                    f"الإشعارات في {channel.mention}."
+                    f"✅ تم إنشاء لوحة الإشعارات "
+                    f"في {channel.mention}."
                 ),
                 ephemeral=True
             )
@@ -3503,10 +4734,8 @@ class FimeStock(
 
         channel_id, message_id = panel
 
-        channel = (
-            await self.resolve_channel(
-                channel_id
-            )
+        channel = await self.resolve_channel(
+            channel_id
         )
 
         if not channel:
@@ -3520,16 +4749,12 @@ class FimeStock(
 
         try:
 
-            message = (
-                await channel.fetch_message(
-                    message_id
-                )
+            message = await channel.fetch_message(
+                message_id
             )
 
             await message.edit(
-                embed=(
-                    build_notification_panel_embed()
-                ),
+                embed=build_notification_panel_embed(),
                 view=NotificationView()
             )
 
@@ -3542,13 +4767,9 @@ class FimeStock(
 
             try:
 
-                new_message = (
-                    await channel.send(
-                        embed=(
-                            build_notification_panel_embed()
-                        ),
-                        view=NotificationView()
-                    )
+                new_message = await channel.send(
+                    embed=build_notification_panel_embed(),
+                    view=NotificationView()
                 )
 
                 save_notification_panel(
@@ -3603,6 +4824,10 @@ class FimeStock(
                 name="🍎 Blox Fruits",
                 value=GAME_BLOX
             ),
+            app_commands.Choice(
+                name="🥚 Steal An Egg",
+                value=GAME_STEAL
+            ),
         ]
     )
     async def stock_alert(
@@ -3611,6 +4836,17 @@ class FimeStock(
         game: app_commands.Choice[str],
         item: str
     ):
+
+        item = item.strip()
+
+        if not item:
+
+            await interaction.response.send_message(
+                "❌ اكتب اسم العنصر.",
+                ephemeral=True
+            )
+
+            return
 
         conn = get_db()
 
@@ -3626,18 +4862,14 @@ class FimeStock(
             interaction.guild.id,
             interaction.user.id,
             game.value,
-            item.strip()
+            item
         ))
 
         conn.commit()
-
         conn.close()
 
         await interaction.response.send_message(
-            (
-                f"🔔 تم تفعيل التنبيه عن "
-                f"**{item}**."
-            ),
+            f"🔔 تم تفعيل التنبيه عن **{item}**.",
             ephemeral=True
         )
 
@@ -3662,6 +4894,10 @@ class FimeStock(
             app_commands.Choice(
                 name="🍎 Blox Fruits",
                 value=GAME_BLOX
+            ),
+            app_commands.Choice(
+                name="🥚 Steal An Egg",
+                value=GAME_STEAL
             ),
         ]
     )
@@ -3688,14 +4924,10 @@ class FimeStock(
         ))
 
         conn.commit()
-
         conn.close()
 
         await interaction.response.send_message(
-            (
-                f"✅ تم إزالة تنبيه "
-                f"**{item}**."
-            ),
+            f"✅ تم إزالة تنبيه **{item}**.",
             ephemeral=True
         )
 
@@ -3758,10 +4990,7 @@ class FimeStock(
 
         if gag_items:
 
-            lines.append(
-                ""
-            )
-
+            lines.append("")
             lines.append(
                 "🍎 **فواكه Grow a Garden:**"
             )
@@ -3774,9 +5003,7 @@ class FimeStock(
 
         embed = discord.Embed(
             title="🔔 تنبيهاتك الشخصية",
-            description="\n".join(
-                lines
-            ),
+            description="\n".join(lines),
             color=discord.Color.blurple()
         )
 
@@ -3824,9 +5051,7 @@ class FimeStock(
         if not role:
 
             await interaction.response.send_message(
-                (
-                    "❌ ما قدرت أجهز رتبة الإشعار."
-                ),
+                "❌ ما قدرت أجهز رتبة الإشعار.",
                 ephemeral=True
             )
 
@@ -3836,9 +5061,7 @@ class FimeStock(
 
             await interaction.user.add_roles(
                 role,
-                reason=(
-                    "Fime Stock Notification"
-                )
+                reason="Fime Stock Notification"
             )
 
             add_notification_member(
@@ -3848,10 +5071,7 @@ class FimeStock(
             )
 
             await interaction.response.send_message(
-                (
-                    f"🔔 تم تفعيل "
-                    f"**{role.name}**."
-                ),
+                f"🔔 تم تفعيل **{role.name}**.",
                 ephemeral=True
             )
 
@@ -3894,11 +5114,9 @@ class FimeStock(
         alert: app_commands.Choice[str]
     ):
 
-        role_id = (
-            get_notification_role(
-                interaction.guild.id,
-                alert.value
-            )
+        role_id = get_notification_role(
+            interaction.guild.id,
+            alert.value
         )
 
         if role_id:
@@ -3916,10 +5134,7 @@ class FimeStock(
 
                     await interaction.user.remove_roles(
                         role,
-                        reason=(
-                            "Fime Stock "
-                            "Notification Removal"
-                        )
+                        reason="Fime Stock Notification Removal"
                     )
 
                 except Exception:
@@ -3975,20 +5190,61 @@ class FimeStock(
         )
 
         embed.add_field(
+            name="🔁 GAG Fallback",
+            value=(
+                "🟢 Available"
+                if (
+                    GAG_API_FALLBACK_URL
+                    or GAG_API_FALLBACK_URLS
+                )
+                else "⚪ None"
+            ),
+            inline=True
+        )
+
+        embed.add_field(
             name="🍎 Blox API",
             value=(
                 "🟢 Configured"
                 if BLOX_API_URL
-                else "⚪ Not configured"
+                else "🔴 Not configured"
+            ),
+            inline=True
+        )
+
+        embed.add_field(
+            name="🔑 Blox API Key",
+            value=(
+                "🟢 Configured"
+                if BLOX_API_KEY
+                else "🔴 Missing"
+            ),
+            inline=True
+        )
+
+        embed.add_field(
+            name="🥚 Steal API",
+            value=(
+                "🟢 Configured"
+                if STEAL_EGG_API_URL
+                else "⚪ Optional"
+            ),
+            inline=True
+        )
+
+        embed.add_field(
+            name="🔎 Search Fallback",
+            value=(
+                "🟢 Enabled"
+                if WEB_SEARCH_ENABLED
+                else "🔴 Disabled"
             ),
             inline=True
         )
 
         embed.add_field(
             name="⏱️ Polling",
-            value=(
-                f"`{STOCK_CHECK_SECONDS}s`"
-            ),
+            value=f"`{STOCK_CHECK_SECONDS}s`",
             inline=True
         )
 
@@ -4053,8 +5309,7 @@ class FimeStock(
         ):
 
             message = (
-                "❌ تحتاج صلاحية "
-                "**Manage Server**."
+                "❌ تحتاج صلاحية **Manage Server**."
             )
 
         elif isinstance(
