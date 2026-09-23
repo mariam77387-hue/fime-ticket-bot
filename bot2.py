@@ -1,4 +1,3 @@
-
 import json
 import os
 import re
@@ -344,6 +343,20 @@ class PersistentPanel(discord.ui.View):
 # =========================================================
 
 class ServerLogger(commands.Cog):
+
+    # =====================================================
+    # Slash command groups — reduce global top-level command count
+    # =====================================================
+    logs_group = app_commands.Group(name="logs", description="إدارة Server Logs")
+    buttons_group = app_commands.Group(name="buttons", description="لوحات الأزرار التفاعلية")
+    levels_group = app_commands.Group(name="levels", description="نظام المستويات و XP")
+    moderation_group = app_commands.Group(name="moderation", description="أوامر الإدارة والعقوبات")
+    voice_group = app_commands.Group(name="voice", description="إدارة الفويس")
+    protection_group = app_commands.Group(name="protection", description="إعدادات الحماية")
+    invites_group = app_commands.Group(name="invites", description="إدارة روابط الدعوة")
+    settings_group = app_commands.Group(name="settings", description="إعدادات السيرفر")
+    security_group = app_commands.Group(name="security", description="الحماية الأمنية من الهجمات")
+    role_group = app_commands.Group(name="role", description="إدارة الرتب")
     def __init__(self, bot):
         self.bot = bot
         self._last_messages = {}
@@ -482,9 +495,8 @@ class ServerLogger(commands.Cog):
     # /serverlog
     # =====================================================
 
-    @app_commands.command(name="serverlog", description="تحديد روم لوق أحداث السيرفر")
+    @logs_group.command(name="serverlog", description="تحديد روم لوق أحداث السيرفر")
     @app_commands.describe(channel="روم اللوق")
-    @app_commands.default_permissions(administrator=True)
     async def serverlog(self, interaction: discord.Interaction, channel: discord.TextChannel):
         if not is_admin(interaction.user):
             await interaction.response.send_message("❌ للإداريين فقط.", ephemeral=True)
@@ -503,8 +515,7 @@ class ServerLogger(commands.Cog):
             actor=interaction.user,
         )
 
-    @app_commands.command(name="serverlogoff", description="إيقاف Server Logs")
-    @app_commands.default_permissions(administrator=True)
+    @logs_group.command(name="serverlogoff", description="إيقاف Server Logs")
     async def serverlogoff(self, interaction: discord.Interaction):
         if not is_admin(interaction.user):
             await interaction.response.send_message("❌ للإداريين فقط.", ephemeral=True)
@@ -513,8 +524,7 @@ class ServerLogger(commands.Cog):
         set_value(interaction.guild, ["server_log_channel_id"], None)
         await interaction.response.send_message("✅ تم إيقاف Server Logs.", ephemeral=True)
 
-    @app_commands.command(name="serverlogstatus", description="عرض حالة Server Logs")
-    @app_commands.default_permissions(administrator=True)
+    @logs_group.command(name="serverlogstatus", description="عرض حالة Server Logs")
     async def serverlogstatus(self, interaction: discord.Interaction):
         if not is_admin(interaction.user):
             await interaction.response.send_message("❌ للإداريين فقط.", ephemeral=True)
@@ -608,7 +618,7 @@ class ServerLogger(commands.Cog):
     # Button panels
     # =====================================================
 
-    @app_commands.command(name="buttonpanel", description="إنشاء Embed تفاعلي بأزرار")
+    @buttons_group.command(name="buttonpanel", description="إنشاء Embed تفاعلي بأزرار")
     @app_commands.describe(
         title="عنوان الـEmbed",
         description="نص الـEmbed",
@@ -619,7 +629,6 @@ class ServerLogger(commands.Cog):
         button3="اسم الزر الثالث اختياري",
         response3="رد الزر الثالث اختياري",
     )
-    @app_commands.default_permissions(manage_guild=True)
     async def buttonpanel(
         self,
         interaction: discord.Interaction,
@@ -703,7 +712,7 @@ class ServerLogger(commands.Cog):
         embed.set_footer(text=f"الإجمالي: {len(roles)} رتبة")
         await interaction.response.send_message(embed=embed)
 
-    @app_commands.command(name="roleinfo", description="عرض معلومات رتبة")
+    @role_group.command(name="roleinfo", description="عرض معلومات رتبة")
     @app_commands.describe(role="الرتبة")
     async def roleinfo(self, interaction: discord.Interaction, role: discord.Role):
         permissions = []
@@ -811,9 +820,8 @@ class ServerLogger(commands.Cog):
             ],
         )
 
-    @app_commands.command(name="levelchannel", description="تحديد روم إعلانات الارتقاء باللفل")
+    @levels_group.command(name="levelchannel", description="تحديد روم إعلانات الارتقاء باللفل")
     @app_commands.describe(channel="الروم الذي تظهر فيه رسائل Level Up")
-    @app_commands.default_permissions(administrator=True)
     async def levelchannel(self, interaction: discord.Interaction, channel: discord.TextChannel | None = None):
         if not is_admin(interaction.user):
             await interaction.response.send_message("❌ للإداريين فقط.", ephemeral=True)
@@ -881,9 +889,8 @@ class ServerLogger(commands.Cog):
         )
         await interaction.response.send_message(embed=embed)
 
-    @app_commands.command(name="setxp", description="تحديد XP لعضو")
+    @levels_group.command(name="setxp", description="تحديد XP لعضو")
     @app_commands.describe(member="العضو", xp="قيمة XP الجديدة")
-    @app_commands.default_permissions(administrator=True)
     async def setxp(self, interaction: discord.Interaction, member: discord.Member, xp: int):
         if not is_admin(interaction.user):
             await interaction.response.send_message("❌ للإداريين فقط.", ephemeral=True)
@@ -899,9 +906,8 @@ class ServerLogger(commands.Cog):
             f"✅ تم تعديل XP لـ {member.mention}: `{old}` → `{xp}`"
         )
 
-    @app_commands.command(name="resetlevel", description="إعادة تعيين Level وXP لعضو")
+    @levels_group.command(name="resetlevel", description="إعادة تعيين Level وXP لعضو")
     @app_commands.describe(member="العضو")
-    @app_commands.default_permissions(administrator=True)
     async def resetlevel(self, interaction: discord.Interaction, member: discord.Member):
         if not is_admin(interaction.user):
             await interaction.response.send_message("❌ للإداريين فقط.", ephemeral=True)
@@ -910,9 +916,8 @@ class ServerLogger(commands.Cog):
         self.set_user_xp(interaction.guild, member.id, 0)
         await interaction.response.send_message(f"♻ تم تصفير Level وXP لـ {member.mention}.")
 
-    @app_commands.command(name="levelreward", description="تحديد رتبة كمكافأة لمستوى")
+    @levels_group.command(name="levelreward", description="تحديد رتبة كمكافأة لمستوى")
     @app_commands.describe(level="رقم المستوى", role="الرتبة")
-    @app_commands.default_permissions(administrator=True)
     async def levelreward(self, interaction: discord.Interaction, level: int, role: discord.Role):
         if not is_admin(interaction.user):
             await interaction.response.send_message("❌ للإداريين فقط.", ephemeral=True)
@@ -958,9 +963,8 @@ class ServerLogger(commands.Cog):
         update_guild_config(guild, writer)
         return warning
 
-    @app_commands.command(name="warn", description="تسجيل تحذير على عضو")
+    @moderation_group.command(name="warn", description="تسجيل تحذير على عضو")
     @app_commands.describe(member="العضو", reason="سبب التحذير")
-    @app_commands.default_permissions(moderate_members=True)
     async def warn(self, interaction: discord.Interaction, member: discord.Member, reason: str):
         if not interaction.user.guild_permissions.moderate_members:
             await interaction.response.send_message("❌ تحتاج Moderate Members.", ephemeral=True)
@@ -987,9 +991,8 @@ class ServerLogger(commands.Cog):
             fields=[("السبب", reason, False)],
         )
 
-    @app_commands.command(name="warnings", description="عرض تحذيرات عضو")
+    @moderation_group.command(name="warnings", description="عرض تحذيرات عضو")
     @app_commands.describe(member="العضو")
-    @app_commands.default_permissions(moderate_members=True)
     async def warnings(self, interaction: discord.Interaction, member: discord.Member):
         if not interaction.user.guild_permissions.moderate_members:
             await interaction.response.send_message("❌ تحتاج Moderate Members.", ephemeral=True)
@@ -1019,9 +1022,8 @@ class ServerLogger(commands.Cog):
         embed.set_footer(text=f"إجمالي التحذيرات: {len(items)}")
         await interaction.response.send_message(embed=embed)
 
-    @app_commands.command(name="clearwarnings", description="مسح تحذيرات عضو")
+    @moderation_group.command(name="clearwarnings", description="مسح تحذيرات عضو")
     @app_commands.describe(member="العضو")
-    @app_commands.default_permissions(administrator=True)
     async def clearwarnings(self, interaction: discord.Interaction, member: discord.Member):
         if not is_admin(interaction.user):
             await interaction.response.send_message("❌ للإداريين فقط.", ephemeral=True)
@@ -1035,9 +1037,8 @@ class ServerLogger(commands.Cog):
             f"🧹 تم مسح جميع تحذيرات {member.mention}."
         )
 
-    @app_commands.command(name="timeout", description="إعطاء Timeout لعضو")
+    @moderation_group.command(name="timeout", description="إعطاء Timeout لعضو")
     @app_commands.describe(member="العضو", duration="مثال: 10m أو 2h أو 1d", reason="السبب")
-    @app_commands.default_permissions(moderate_members=True)
     async def timeout(
         self,
         interaction: discord.Interaction,
@@ -1084,9 +1085,8 @@ class ServerLogger(commands.Cog):
             fields=[("المدة", duration, True), ("السبب", reason, False)],
         )
 
-    @app_commands.command(name="untimeout", description="إزالة Timeout من عضو")
+    @moderation_group.command(name="untimeout", description="إزالة Timeout من عضو")
     @app_commands.describe(member="العضو")
-    @app_commands.default_permissions(moderate_members=True)
     async def untimeout(self, interaction: discord.Interaction, member: discord.Member):
         if not interaction.user.guild_permissions.moderate_members:
             await interaction.response.send_message("❌ تحتاج Moderate Members.", ephemeral=True)
@@ -1100,9 +1100,8 @@ class ServerLogger(commands.Cog):
 
         await interaction.response.send_message(f"🔊 تم إزالة Timeout من {member.mention}.")
 
-    @app_commands.command(name="kick", description="طرد عضو")
+    @moderation_group.command(name="kick", description="طرد عضو")
     @app_commands.describe(member="العضو", reason="السبب")
-    @app_commands.default_permissions(kick_members=True)
     async def kick(self, interaction: discord.Interaction, member: discord.Member, reason: str = "بدون سبب"):
         if not interaction.user.guild_permissions.kick_members:
             await interaction.response.send_message("❌ تحتاج Kick Members.", ephemeral=True)
@@ -1121,9 +1120,8 @@ class ServerLogger(commands.Cog):
 
         await interaction.response.send_message(f"👢 تم طرد `{member}`.")
 
-    @app_commands.command(name="ban", description="حظر عضو")
+    @moderation_group.command(name="ban", description="حظر عضو")
     @app_commands.describe(member="العضو", reason="السبب")
-    @app_commands.default_permissions(ban_members=True)
     async def ban(self, interaction: discord.Interaction, member: discord.Member, reason: str = "بدون سبب"):
         if not interaction.user.guild_permissions.ban_members:
             await interaction.response.send_message("❌ تحتاج Ban Members.", ephemeral=True)
@@ -1142,9 +1140,8 @@ class ServerLogger(commands.Cog):
 
         await interaction.response.send_message(f"🔨 تم حظر `{member}`.")
 
-    @app_commands.command(name="unban", description="فك حظر مستخدم عبر ID")
+    @moderation_group.command(name="unban", description="فك حظر مستخدم عبر ID")
     @app_commands.describe(user_id="Discord User ID", reason="السبب")
-    @app_commands.default_permissions(ban_members=True)
     async def unban(self, interaction: discord.Interaction, user_id: str, reason: str = "بدون سبب"):
         if not interaction.user.guild_permissions.ban_members:
             await interaction.response.send_message("❌ تحتاج Ban Members.", ephemeral=True)
@@ -1162,8 +1159,7 @@ class ServerLogger(commands.Cog):
 
         await interaction.response.send_message(f"🔓 تم فك حظر `{user}`.")
 
-    @app_commands.command(name="unbanall", description="فك حظر جميع المستخدمين")
-    @app_commands.default_permissions(administrator=True)
+    @moderation_group.command(name="unbanall", description="فك حظر جميع المستخدمين")
     async def unbanall(self, interaction: discord.Interaction):
         if not is_admin(interaction.user):
             await interaction.response.send_message("❌ للإداريين فقط.", ephemeral=True)
@@ -1195,9 +1191,8 @@ class ServerLogger(commands.Cog):
     # Voice moderation
     # =====================================================
 
-    @app_commands.command(name="voicemute", description="كتم عضو في الفويس")
+    @voice_group.command(name="voicemute", description="كتم عضو في الفويس")
     @app_commands.describe(member="العضو")
-    @app_commands.default_permissions(mute_members=True)
     async def voicemute(self, interaction: discord.Interaction, member: discord.Member):
         if not interaction.user.guild_permissions.mute_members:
             await interaction.response.send_message("❌ تحتاج Mute Members.", ephemeral=True)
@@ -1214,9 +1209,8 @@ class ServerLogger(commands.Cog):
 
         await interaction.response.send_message(f"🔇 تم كتم {member.mention}.")
 
-    @app_commands.command(name="voiceunmute", description="إلغاء كتم عضو في الفويس")
+    @voice_group.command(name="voiceunmute", description="إلغاء كتم عضو في الفويس")
     @app_commands.describe(member="العضو")
-    @app_commands.default_permissions(mute_members=True)
     async def voiceunmute(self, interaction: discord.Interaction, member: discord.Member):
         if not interaction.user.guild_permissions.mute_members:
             await interaction.response.send_message("❌ تحتاج Mute Members.", ephemeral=True)
@@ -1230,9 +1224,8 @@ class ServerLogger(commands.Cog):
 
         await interaction.response.send_message(f"🔊 تم إلغاء كتم {member.mention}.")
 
-    @app_commands.command(name="deafen", description="عمل Deafen لعضو")
+    @voice_group.command(name="deafen", description="عمل Deafen لعضو")
     @app_commands.describe(member="العضو")
-    @app_commands.default_permissions(deafen_members=True)
     async def deafen(self, interaction: discord.Interaction, member: discord.Member):
         if not interaction.user.guild_permissions.deafen_members:
             await interaction.response.send_message("❌ تحتاج Deafen Members.", ephemeral=True)
@@ -1246,9 +1239,8 @@ class ServerLogger(commands.Cog):
 
         await interaction.response.send_message(f"🔇 تم عمل Deafen لـ {member.mention}.")
 
-    @app_commands.command(name="undeafen", description="إلغاء Deafen لعضو")
+    @voice_group.command(name="undeafen", description="إلغاء Deafen لعضو")
     @app_commands.describe(member="العضو")
-    @app_commands.default_permissions(deafen_members=True)
     async def undeafen(self, interaction: discord.Interaction, member: discord.Member):
         if not interaction.user.guild_permissions.deafen_members:
             await interaction.response.send_message("❌ تحتاج Deafen Members.", ephemeral=True)
@@ -1262,9 +1254,8 @@ class ServerLogger(commands.Cog):
 
         await interaction.response.send_message(f"🔊 تم إلغاء Deafen لـ {member.mention}.")
 
-    @app_commands.command(name="disconnect", description="فصل عضو من الفويس")
+    @voice_group.command(name="disconnect", description="فصل عضو من الفويس")
     @app_commands.describe(member="العضو")
-    @app_commands.default_permissions(move_members=True)
     async def disconnect(self, interaction: discord.Interaction, member: discord.Member):
         if not interaction.user.guild_permissions.move_members:
             await interaction.response.send_message("❌ تحتاج Move Members.", ephemeral=True)
@@ -1285,9 +1276,8 @@ class ServerLogger(commands.Cog):
     # Slowmode
     # =====================================================
 
-    @app_commands.command(name="slowmode", description="تحديد Slowmode لروم")
+    @protection_group.command(name="slowmode", description="تحديد Slowmode لروم")
     @app_commands.describe(channel="الروم", seconds="عدد الثواني من 0 إلى 21600")
-    @app_commands.default_permissions(manage_channels=True)
     async def slowmode(
         self,
         interaction: discord.Interaction,
@@ -1444,8 +1434,7 @@ class ServerLogger(commands.Cog):
     # Protection settings
     # =====================================================
 
-    @app_commands.command(name="protection", description="عرض حالة حماية السيرفر")
-    @app_commands.default_permissions(administrator=True)
+    @protection_group.command(name="protection", description="عرض حالة حماية السيرفر")
     async def protection(self, interaction: discord.Interaction):
         if not is_admin(interaction.user):
             await interaction.response.send_message("❌ للإداريين فقط.", ephemeral=True)
@@ -1469,9 +1458,8 @@ class ServerLogger(commands.Cog):
         )
         await interaction.response.send_message(embed=embed, ephemeral=True)
 
-    @app_commands.command(name="protectiontoggle", description="تشغيل أو إيقاف حماية السيرفر")
+    @protection_group.command(name="protectiontoggle", description="تشغيل أو إيقاف حماية السيرفر")
     @app_commands.describe(enabled="True للتشغيل، False للإيقاف")
-    @app_commands.default_permissions(administrator=True)
     async def protectiontoggle(self, interaction: discord.Interaction, enabled: bool):
         if not is_admin(interaction.user):
             await interaction.response.send_message("❌ للإداريين فقط.", ephemeral=True)
@@ -1482,14 +1470,13 @@ class ServerLogger(commands.Cog):
             f"🛡 الحماية الآن: {'🟢 مفعلة' if enabled else '🔴 معطلة'}"
         )
 
-    @app_commands.command(name="antispam", description="تعديل Anti-Spam")
+    @protection_group.command(name="antispam", description="تعديل Anti-Spam")
     @app_commands.describe(
         limit="عدد الرسائل مثل 5",
         window="خلال كم ثانية مثل 5",
         timeout_minutes="العقوبة بالدقائق (اختياري)",
         timeout_seconds="العقوبة بالثواني (اختياري)",
     )
-    @app_commands.default_permissions(administrator=True)
     async def antispam(
         self,
         interaction: discord.Interaction,
@@ -1533,9 +1520,8 @@ class ServerLogger(commands.Cog):
             ephemeral=True,
         )
 
-    @app_commands.command(name="antilink", description="تشغيل أو إيقاف حماية الروابط")
+    @protection_group.command(name="antilink", description="تشغيل أو إيقاف حماية الروابط")
     @app_commands.describe(enabled="True للتشغيل، False للإيقاف")
-    @app_commands.default_permissions(administrator=True)
     async def antilink(self, interaction: discord.Interaction, enabled: bool):
         if not is_admin(interaction.user):
             await interaction.response.send_message("❌ للإداريين فقط.", ephemeral=True)
@@ -1546,9 +1532,8 @@ class ServerLogger(commands.Cog):
             f"🔗 Anti-Link: {'🟢 ON' if enabled else '🔴 OFF'}"
         )
 
-    @app_commands.command(name="allowdomain", description="إضافة دومين مسموح للروابط")
+    @protection_group.command(name="allowdomain", description="إضافة دومين مسموح للروابط")
     @app_commands.describe(domain="مثال: youtube.com")
-    @app_commands.default_permissions(administrator=True)
     async def allowdomain(self, interaction: discord.Interaction, domain: str):
         if not is_admin(interaction.user):
             await interaction.response.send_message("❌ للإداريين فقط.", ephemeral=True)
@@ -1669,7 +1654,7 @@ class ServerLogger(commands.Cog):
         return invite, True
 
 
-    @app_commands.command(
+    @invites_group.command(
         name="permanentinvite",
         description="إنشاء أو عرض رابط الدعوة الدائم للسيرفر"
     )
@@ -1779,9 +1764,8 @@ class ServerLogger(commands.Cog):
     # Welcome message customization
     # =====================================================
 
-    @app_commands.command(name="welcomemessage", description="تعديل رسالة الترحيب التي يستخدمها bot.py")
+    @settings_group.command(name="welcomemessage", description="تعديل رسالة الترحيب التي يستخدمها bot.py")
     @app_commands.describe(message="رسالة الترحيب. المتغيرات: {mention} {username} {display_name} {server}")
-    @app_commands.default_permissions(administrator=True)
     async def welcomemessage(self, interaction: discord.Interaction, message: str):
         if not is_owner(interaction.user):
             await interaction.response.send_message("❌ تعديل رسالة الترحيب لمالك السيرفر فقط.", ephemeral=True)
@@ -1813,14 +1797,13 @@ class ServerLogger(commands.Cog):
             ephemeral=True,
         )
 
-    @app_commands.command(name="protectionexempt", description="استثناء رتبة من حماية السبام أو الروابط")
+    @protection_group.command(name="protectionexempt", description="استثناء رتبة من حماية السبام أو الروابط")
     @app_commands.describe(role="الرتبة المستثناة", protection="نوع الحماية")
     @app_commands.choices(protection=[
         app_commands.Choice(name="Spam + Repeat", value="spam"),
         app_commands.Choice(name="Links", value="links"),
         app_commands.Choice(name="Spam + Repeat + Links", value="both"),
     ])
-    @app_commands.default_permissions(administrator=True)
     async def protectionexempt(self, interaction: discord.Interaction, role: discord.Role, protection: app_commands.Choice[str]):
         if not is_admin(interaction.user):
             await interaction.response.send_message("❌ للإداريين فقط.", ephemeral=True)
@@ -1835,14 +1818,13 @@ class ServerLogger(commands.Cog):
         update_guild_config(interaction.guild, writer)
         await interaction.response.send_message(f"✅ تم استثناء {role.mention} من: **{protection.name}**.", ephemeral=True)
 
-    @app_commands.command(name="protectionexemptremove", description="إلغاء استثناء رتبة من الحماية")
+    @protection_group.command(name="protectionexemptremove", description="إلغاء استثناء رتبة من الحماية")
     @app_commands.describe(role="الرتبة", protection="نوع الحماية")
     @app_commands.choices(protection=[
         app_commands.Choice(name="Spam + Repeat", value="spam"),
         app_commands.Choice(name="Links", value="links"),
         app_commands.Choice(name="الكل", value="both"),
     ])
-    @app_commands.default_permissions(administrator=True)
     async def protectionexemptremove(self, interaction: discord.Interaction, role: discord.Role, protection: app_commands.Choice[str]):
         if not is_admin(interaction.user):
             await interaction.response.send_message("❌ للإداريين فقط.", ephemeral=True)
@@ -1857,8 +1839,7 @@ class ServerLogger(commands.Cog):
         update_guild_config(interaction.guild, writer)
         await interaction.response.send_message(f"♻ تم إلغاء استثناء {role.mention}.", ephemeral=True)
 
-    @app_commands.command(name="protectionexemptlist", description="عرض الرتب المستثناة من الحماية")
-    @app_commands.default_permissions(administrator=True)
+    @protection_group.command(name="protectionexemptlist", description="عرض الرتب المستثناة من الحماية")
     async def protectionexemptlist(self, interaction: discord.Interaction):
         if not is_admin(interaction.user):
             await interaction.response.send_message("❌ للإداريين فقط.", ephemeral=True)
@@ -1891,9 +1872,8 @@ class ServerLogger(commands.Cog):
             fields=[("🛡 الإجراء", title, False)],
         )
 
-    @app_commands.command(name="security", description="إعداد الحماية الأمنية ضد الهجمات الجماعية")
+    @security_group.command(name="security", description="إعداد الحماية الأمنية ضد الهجمات الجماعية")
     @app_commands.describe(enabled="تشغيل أو إيقاف الحماية الأمنية")
-    @app_commands.default_permissions(administrator=True)
     async def security(self, interaction: discord.Interaction, enabled: bool):
         if not is_admin(interaction.user):
             await interaction.response.send_message("❌ للإداريين فقط.", ephemeral=True)
@@ -1901,9 +1881,8 @@ class ServerLogger(commands.Cog):
         set_value(interaction.guild, ["protection", "security_enabled"], enabled)
         await interaction.response.send_message(f"🛡 الحماية الأمنية: {'🟢 مفعلة' if enabled else '🔴 معطلة'}", ephemeral=True)
 
-    @app_commands.command(name="securityconfig", description="تحديد حد هجوم دخول الأعضاء")
+    @security_group.command(name="securityconfig", description="تحديد حد هجوم دخول الأعضاء")
     @app_commands.describe(join_limit="عدد الأعضاء خلال الفترة", window_seconds="الفترة بالثواني", timeout_minutes="Timeout للأعضاء الجدد أثناء الهجوم")
-    @app_commands.default_permissions(administrator=True)
     async def securityconfig(self, interaction: discord.Interaction, join_limit: int, window_seconds: int, timeout_minutes: int):
         if not is_admin(interaction.user):
             await interaction.response.send_message("❌ للإداريين فقط.", ephemeral=True)
