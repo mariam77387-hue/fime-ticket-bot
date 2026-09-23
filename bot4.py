@@ -3896,12 +3896,14 @@ async def slash_rscripts_by_user(
 # EXTENSION SETUP
 # ============================================================
 
+# ============================================================
+# EXTENSION SETUP
+# ============================================================
+
 _extension_bot = bot
 
 
-async def setup(
-    main_bot
-):
+async def setup(main_bot):
 
     global bot
 
@@ -3909,38 +3911,65 @@ async def setup(
     bot = main_bot
 
     # --------------------------------------------------------
-    # نقل أوامر Prefix
+    # نقل أوامر Prefix إلى البوت الرئيسي
     # --------------------------------------------------------
 
-    for command in _extension_bot.commands:
+    extension_commands = list(
+        _extension_bot.commands
+    )
 
-        # منع تكرار الأمر إذا كان موجودًا مسبقًا
-        if main_bot.get_command(
+    for command in extension_commands:
+
+        existing = main_bot.get_command(
             command.name
-        ) is not None:
+        )
+
+        if existing is not None:
 
             try:
                 main_bot.remove_command(
                     command.name
                 )
-            except Exception:
-                pass
+            except Exception as e:
+                print(
+                    f"⚠️ تعذر حذف الأمر القديم "
+                    f"{command.name}: {e}"
+                )
 
-        main_bot.add_command(
-            command
-        )
+        try:
+
+            main_bot.add_command(
+                command
+            )
+
+            print(
+                f"✅ Registered prefix command: "
+                f"!{command.name}"
+            )
+
+        except Exception as e:
+
+            print(
+                f"❌ Failed to register prefix command "
+                f"!{command.name}: {e}"
+            )
 
     # --------------------------------------------------------
     # نقل أوامر Slash
     # --------------------------------------------------------
 
-    for command in _extension_bot.tree.get_commands():
+    extension_slash_commands = list(
+        _extension_bot.tree.get_commands()
+    )
+
+    for command in extension_slash_commands:
 
         try:
-            # إذا كان الأمر موجودًا في البوت الرئيسي
-            # نحذفه أولًا حتى لا يحصل تعارض
-            existing = main_bot.tree.get_command(
-                command.name
+
+            existing = (
+                main_bot.tree.get_command(
+                    command.name
+                )
             )
 
             if existing is not None:
@@ -3953,6 +3982,11 @@ async def setup(
                 command
             )
 
+            print(
+                f"✅ Registered slash command: "
+                f"/{command.name}"
+            )
+
         except Exception as e:
 
             print(
@@ -3961,7 +3995,7 @@ async def setup(
             )
 
     # --------------------------------------------------------
-    # نقل on_ready
+    # Listener: on_ready
     # --------------------------------------------------------
 
     main_bot.add_listener(
@@ -3970,7 +4004,7 @@ async def setup(
     )
 
     # --------------------------------------------------------
-    # نقل نظام البحث التلقائي
+    # Listener: automatic search
     # --------------------------------------------------------
 
     main_bot.add_listener(
@@ -3979,8 +4013,7 @@ async def setup(
     )
 
     # --------------------------------------------------------
-    # IMPORTANT:
-    # مزامنة أوامر Slash بعد إضافتها للبوت الرئيسي
+    # مزامنة Slash Commands
     # --------------------------------------------------------
 
     try:
@@ -3995,5 +4028,34 @@ async def setup(
     except Exception as e:
 
         print(
-            f"❌ bot4.py slash command sync failed: {e}"
+            f"❌ bot4.py slash command sync failed: "
+            f"{e}"
         )
+
+    # --------------------------------------------------------
+    # تأكيد أوامر الغرف العربية
+    # --------------------------------------------------------
+
+    arabic_commands = [
+        "تحديد_روم",
+        "روم_البحث",
+        "الغاء_روم_البحث"
+    ]
+
+    for command_name in arabic_commands:
+
+        if main_bot.get_command(
+            command_name
+        ) is not None:
+
+            print(
+                f"🇸🇦 Arabic command ready: "
+                f"!{command_name}"
+            )
+
+        else:
+
+            print(
+                f"❌ Arabic command missing: "
+                f"!{command_name}"
+            )
