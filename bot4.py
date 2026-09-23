@@ -3908,28 +3908,92 @@ async def setup(
     # استخدام البوت الرئيسي الموجود في bot.py
     bot = main_bot
 
+    # --------------------------------------------------------
     # نقل أوامر Prefix
+    # --------------------------------------------------------
+
     for command in _extension_bot.commands:
+
+        # منع تكرار الأمر إذا كان موجودًا مسبقًا
+        if main_bot.get_command(
+            command.name
+        ) is not None:
+
+            try:
+                main_bot.remove_command(
+                    command.name
+                )
+            except Exception:
+                pass
 
         main_bot.add_command(
             command
         )
 
+    # --------------------------------------------------------
     # نقل أوامر Slash
+    # --------------------------------------------------------
+
     for command in _extension_bot.tree.get_commands():
 
-        main_bot.tree.add_command(
-            command
-        )
+        try:
+            # إذا كان الأمر موجودًا في البوت الرئيسي
+            # نحذفه أولًا حتى لا يحصل تعارض
+            existing = main_bot.tree.get_command(
+                command.name
+            )
 
+            if existing is not None:
+
+                main_bot.tree.remove_command(
+                    command.name
+                )
+
+            main_bot.tree.add_command(
+                command
+            )
+
+        except Exception as e:
+
+            print(
+                f"❌ Failed to register slash command "
+                f"/{command.name}: {e}"
+            )
+
+    # --------------------------------------------------------
     # نقل on_ready
+    # --------------------------------------------------------
+
     main_bot.add_listener(
         on_ready,
         "on_ready"
     )
 
+    # --------------------------------------------------------
     # نقل نظام البحث التلقائي
+    # --------------------------------------------------------
+
     main_bot.add_listener(
         automatic_search_listener,
         "on_message"
     )
+
+    # --------------------------------------------------------
+    # IMPORTANT:
+    # مزامنة أوامر Slash بعد إضافتها للبوت الرئيسي
+    # --------------------------------------------------------
+
+    try:
+
+        synced = await main_bot.tree.sync()
+
+        print(
+            f"✅ bot4.py synced "
+            f"{len(synced)} slash commands."
+        )
+
+    except Exception as e:
+
+        print(
+            f"❌ bot4.py slash command sync failed: {e}"
+        )
