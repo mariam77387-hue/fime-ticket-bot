@@ -603,8 +603,15 @@ class MyBot(commands.Bot):
 
         self.active_searches = {}
 
+    # ========================================================
+    # IMPORTANT:
+    # bot4.py is loaded as an extension by the main bot.
+    # Slash-command synchronization must be handled by the
+    # main bot, not by this temporary extension bot.
+    # ========================================================
+
     async def setup_hook(self):
-        await self.tree.sync()
+        pass
 
 
 bot = MyBot(
@@ -4016,7 +4023,7 @@ async def setup(main_bot):
     # --------------------------------------------------------
     # ملاحظة:
     # لا نسوي tree.sync() هنا لأن البوت الرئيسي
-    # قد لا يكون سجل الدخول بعد.
+    # هو المسؤول عن مزامنة أوامر Slash.
     # --------------------------------------------------------
 
     # --------------------------------------------------------
