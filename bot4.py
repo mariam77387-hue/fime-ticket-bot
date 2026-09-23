@@ -37,10 +37,8 @@ import discord
 from discord import app_commands
 from discord.ext import commands
 
-local LocalPlayer = Players.LocalPlayer
-local IsMobile = UserInputService.TouchEnabled and not UserInputService.KeyboardEnabled
 
-local ScriptSearch = {
+    ScriptSearch = {
     Version = "1.1.0",
     IsOpen = false,
     IsMinimized = false,
@@ -76,7 +74,7 @@ local ScriptSearch = {
     }
 }
 
-local APIs = {
+    APIs = {
     scriptblox = {
         name = "ScriptBlox",
         searchUrl = "https://scriptblox.com/api/script/search?q=%s&max=%d",
