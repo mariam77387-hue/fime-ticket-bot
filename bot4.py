@@ -24,6 +24,7 @@ FALLBACK_IMAGE = "https://c.tenor.com/jnINmQlMNbsAAAAC/tenor.gif"
 intents = discord.Intents.default()
 intents.message_content = True
 
+
 class MyBot(commands.Bot):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
@@ -32,7 +33,9 @@ class MyBot(commands.Bot):
     async def setup_hook(self):
         await self.tree.sync()
 
+
 bot = MyBot(command_prefix='!', intents=intents)
+
 
 @bot.event
 async def on_ready():
@@ -41,34 +44,46 @@ async def on_ready():
     print(f"Bot is ready 🤖 | Serving in {len(bot.guilds)} servers")
     print(f"Commands: /search, /fetch, /trending, /script, /executors, /rscripts_*")
 
+
 def fetch_scripts(api, query, mode, page, **filters):
     try:
         if api == "scriptblox":
             params = {"q": query, "mode": mode, "page": page}
+
             if filters.get("verified") is not None:
                 params["verified"] = 1 if filters["verified"] else 0
+
             if filters.get("patched") is not None:
                 params["patched"] = 1 if filters["patched"] else 0
+
             if filters.get("key") is not None:
                 params["key"] = 1 if filters["key"] else 0
+
             if filters.get("universal") is not None:
                 params["universal"] = 1 if filters["universal"] else 0
+
             if filters.get("sortBy"):
                 params["sortBy"] = filters["sortBy"]
+
             if filters.get("order"):
                 params["order"] = filters["order"]
+
             if filters.get("strict") is not None:
                 params["strict"] = "true" if filters["strict"] else "false"
+
             if filters.get("owner"):
                 params["owner"] = filters["owner"]
+
             if filters.get("placeId"):
                 params["placeId"] = filters["placeId"]
-            
+
             query_string = urllib.parse.urlencode(params)
             url = f"https://scriptblox.com/api/script/search?{query_string}"
+
             r = requests.get(url)
             r.raise_for_status()
             data = r.json()
+
             if "result" in data and "scripts" in data["result"]:
                 scripts = data["result"]["scripts"]
                 total_pages = data["result"].get("totalPages", None)
@@ -78,25 +93,38 @@ def fetch_scripts(api, query, mode, page, **filters):
 
         elif api == "rscripts":
             not_paid = False if mode.lower() == "paid" else True
-            params = {"q": query, "page": page, "notPaid": not_paid}
+
+            params = {
+                "q": query,
+                "page": page,
+                "notPaid": not_paid
+            }
+
             if filters.get("noKeySystem") is not None:
                 params["noKeySystem"] = filters["noKeySystem"]
+
             if filters.get("mobileOnly") is not None:
                 params["mobileOnly"] = filters["mobileOnly"]
+
             if filters.get("verifiedOnly") is not None:
                 params["verifiedOnly"] = filters["verifiedOnly"]
+
             if filters.get("unpatched") is not None:
                 params["unpatched"] = filters["unpatched"]
+
             if filters.get("orderBy"):
                 params["orderBy"] = filters["orderBy"]
+
             if filters.get("sort"):
                 params["sort"] = filters["sort"]
-            
+
             query_string = urllib.parse.urlencode(params)
             url = f"https://rscripts.net/api/v2/scripts?{query_string}"
+
             r = requests.get(url)
             r.raise_for_status()
             data = r.json()
+
             if "scripts" in data:
                 scripts = data["scripts"]
                 return scripts, None, None
@@ -105,6 +133,7 @@ def fetch_scripts(api, query, mode, page, **filters):
 
     except requests.RequestException as e:
         return None, None, f"Something went wrong: {e}"
+
     except KeyError as ke:
         return None, None, f"Unexpected response format: {ke}"
 
@@ -114,37 +143,45 @@ def fetch_scripts_from_api(api, endpoint, page=1, **params):
         if api == "scriptblox":
             if page and page > 1:
                 params["page"] = page
+
             query_string = urllib.parse.urlencode(params) if params else ""
             url = f"https://scriptblox.com/api/script/{endpoint}"
+
             if query_string:
                 url += f"?{query_string}"
 
         elif api == "rscripts":
             if page and page > 1:
                 params["page"] = page
+
             query_string = urllib.parse.urlencode(params) if params else ""
             url = f"https://rscripts.net/api/v2/{endpoint}"
+
             if query_string:
                 url += f"?{query_string}"
-        
+
         r = requests.get(url)
         r.raise_for_status()
+
         data = r.json()
         return data, None
 
     except requests.RequestException as e:
         return None, f"Something went wrong: {e}"
+
     except Exception as e:
         return None, f"Unexpected response format: {e}"
 
 
-# ugly code right here yes 
+# ugly code right here yes
 def fetch_trending(api):
     try:
         if api == "scriptblox":
             url = "https://scriptblox.com/api/script/trending"
+
             r = requests.get(url)
             r.raise_for_status()
+
             data = r.json()
 
             if "result" in data and "scripts" in data["result"]:
@@ -157,12 +194,15 @@ def fetch_trending(api):
                     if slug:
                         try:
                             script_url = f"https://scriptblox.com/api/script/{slug}"
+
                             script_r = requests.get(script_url)
                             script_r.raise_for_status()
+
                             script_data = script_r.json()
 
                             if "script" in script_data:
                                 full_scripts.append(script_data["script"])
+
                         except:
                             continue
 
@@ -172,8 +212,10 @@ def fetch_trending(api):
 
         elif api == "rscripts":
             url = "https://rscripts.net/api/v2/trending"
+
             r = requests.get(url)
             r.raise_for_status()
+
             data = r.json()
 
             if "success" in data:
@@ -184,6 +226,7 @@ def fetch_trending(api):
 
                     if script_data:
                         script_data["views"] = item.get("views", 0)
+
                         user_data = item.get("user", {})
 
                         if user_data:
@@ -197,6 +240,7 @@ def fetch_trending(api):
 
     except requests.RequestException as e:
         return None, f"bad: something went wrong: {e}"
+
     except Exception as e:
         return None, f"bad response = format broke or something: {e}"
 
@@ -205,8 +249,10 @@ def fetch_script_by_id(api, script_id):
     try:
         if api == "scriptblox":
             url = f"https://scriptblox.com/api/script/{script_id}"
+
             r = requests.get(url)
             r.raise_for_status()
+
             data = r.json()
 
             if "script" in data:
@@ -216,8 +262,10 @@ def fetch_script_by_id(api, script_id):
 
         elif api == "rscripts":
             url = f"https://rscripts.net/api/v2/script?id={script_id}"
+
             r = requests.get(url)
             r.raise_for_status()
+
             data = r.json()
 
             if "script" in data and len(data["script"]) > 0:
@@ -227,6 +275,7 @@ def fetch_script_by_id(api, script_id):
 
     except requests.RequestException as e:
         return None, f"Something went wrong: {e}"
+
     except Exception as e:
         return None, f"Unexpected response format: {e}"
 
@@ -234,13 +283,16 @@ def fetch_script_by_id(api, script_id):
 def fetch_executors():
     try:
         url = "https://scriptblox.com/api/executor/list"
+
         r = requests.get(url)
         r.raise_for_status()
+
         data = r.json()
         return data, None
 
     except requests.RequestException as e:
         return None, f"bad = went wrong: {e}"
+
     except Exception as e:
         return None, f"something went wrong: response format: {e}"
 
@@ -267,51 +319,111 @@ def format_datetime(dt_str):
 
     if delta.years > 0:
         ago = f"{delta.years} years ago"
+
     elif delta.months > 0:
         ago = f"{delta.months} months ago"
+
     elif delta.days > 0:
         ago = f"{delta.days} days ago"
+
     elif delta.hours > 0:
         ago = f"{delta.hours} hours ago"
+
     elif delta.minutes > 0:
         ago = f"{delta.minutes} minutes ago"
+
     else:
         ago = "just now"
 
     formatted = dt.strftime("%m/%d/%Y | %I:%M:%S %p")
+
     return f"{ago} | {formatted}"
 
 
 def format_timestamps(script):
-    created = format_datetime(script.get("createdAt", ""))
-    updated = format_datetime(script.get("updatedAt", ""))
+    created = format_datetime(
+        script.get("createdAt", "")
+    )
+
+    updated = format_datetime(
+        script.get("updatedAt", "")
+    )
+
     return f"**Created At:** {created}\n**Updated At:** {updated}"
 
 
 def create_embed(script, page, total_items, api):
-    embed = discord.Embed(color=0x206694)
+    embed = discord.Embed(
+        color=0x206694
+    )
 
     if api == "scriptblox":
         embed.title = f"[SB] {script.get('title', 'No Title')}"
 
         game = script.get("game", {})
-        game_name = game.get("name", "Unknown Game")
-        game_id = game.get("gameId", "")
+
+        game_name = game.get(
+            "name",
+            "Unknown Game"
+        )
+
+        game_id = game.get(
+            "gameId",
+            ""
+        )
 
         if game_id:
             game_link = f"https://www.roblox.com/games/{game_id}"
         else:
             game_link = "https://www.roblox.com"
 
-        script_image = script.get("image", FALLBACK_IMAGE)
-        views = script.get("views", 0)
-        script_type = "Free" if script.get("scriptType", "free").lower() == "free" else "Paid"
-        verified_status = "✅ Verified" if script.get("verified", False) else "❌ Not Verified"
-        key_status = f"[Key Link]({script.get('keyLink', '')})" if script.get("key", False) else "✅ No Key"
-        patched_status = "❌ Patched" if script.get("isPatched", False) else "✅ Not Patched"
-        universal_status = "🌐 Universal" if script.get("isUniversal", False) else "Not Universal"
+        script_image = script.get(
+            "image",
+            FALLBACK_IMAGE
+        )
 
-        truncated_script = script.get("script", "No Script")
+        views = script.get(
+            "views",
+            0
+        )
+
+        script_type = (
+            "Free"
+            if script.get(
+                "scriptType",
+                "free"
+            ).lower() == "free"
+            else "Paid"
+        )
+
+        verified_status = (
+            "✅ Verified"
+            if script.get("verified", False)
+            else "❌ Not Verified"
+        )
+
+        key_status = (
+            f"[Key Link]({script.get('keyLink', '')})"
+            if script.get("key", False)
+            else "✅ No Key"
+        )
+
+        patched_status = (
+            "❌ Patched"
+            if script.get("isPatched", False)
+            else "✅ Not Patched"
+        )
+
+        universal_status = (
+            "🌐 Universal"
+            if script.get("isUniversal", False)
+            else "Not Universal"
+        )
+
+        truncated_script = script.get(
+            "script",
+            "No Script"
+        )
 
         if len(truncated_script) > 400:
             truncated_script = truncated_script[:397] + "..."
@@ -360,13 +472,19 @@ def create_embed(script, page, total_items, api):
 
         embed.add_field(
             name="Links",
-            value=f"[Raw Script](https://rawscripts.net/raw/{script.get('slug','')}) - [Script Page](https://scriptblox.com/script/{script.get('slug','')})",
+            value=(
+                f"[Raw Script](https://rawscripts.net/raw/"
+                f"{script.get('slug','')}) - "
+                f"[Script Page](https://scriptblox.com/script/"
+                f"{script.get('slug','')})"
+            ),
             inline=False
         )
 
+        # تم حذف lua من هنا
         embed.add_field(
             name="Script",
-            value=f"```lua\n{truncated_script}\n```",
+            value=f"```\n{truncated_script}\n```",
             inline=False
         )
 
@@ -377,35 +495,87 @@ def create_embed(script, page, total_items, api):
         )
 
         if validators.url(script_image):
-            embed.set_image(url=script_image)
+            embed.set_image(
+                url=script_image
+            )
         else:
-            embed.set_image(url=FALLBACK_IMAGE)
+            embed.set_image(
+                url=FALLBACK_IMAGE
+            )
 
     elif api == "rscripts":
         embed.title = f"[RS] {script.get('title', 'No Title')}"
 
-        views = script.get("views", 0)
-        likes = script.get("likes", 0)
-        dislikes = script.get("dislikes", 0)
-        date_str = script.get("lastUpdated") or script.get("createdAt", "")
-        date = format_datetime(date_str)
+        views = script.get(
+            "views",
+            0
+        )
 
-        mobile_ready = "📱 Mobile Ready" if script.get("mobileReady", False) else "🚫 Not Mobile Ready"
+        likes = script.get(
+            "likes",
+            0
+        )
 
-        user = script.get("user", {})
-        verified_status = "✅ Verified" if user.get("verified", False) else "❌ Not Verified"
-        paid_status = "💲 Paid" if script.get("paid", False) else "🆓 Free"
+        dislikes = script.get(
+            "dislikes",
+            0
+        )
 
-        raw_script = script.get("rawScript", "")
+        date_str = (
+            script.get("lastUpdated")
+            or script.get("createdAt", "")
+        )
 
+        date = format_datetime(
+            date_str
+        )
+
+        mobile_ready = (
+            "📱 Mobile Ready"
+            if script.get("mobileReady", False)
+            else "🚫 Not Mobile Ready"
+        )
+
+        user = script.get(
+            "user",
+            {}
+        )
+
+        verified_status = (
+            "✅ Verified"
+            if user.get("verified", False)
+            else "❌ Not Verified"
+        )
+
+        paid_status = (
+            "💲 Paid"
+            if script.get("paid", False)
+            else "🆓 Free"
+        )
+
+        raw_script = script.get(
+            "rawScript",
+            ""
+        )
+
+        # تم حذف lua من هنا
         script_text = (
-            f"```lua\nloadstring(game:HttpGet(\"{raw_script}\"))()\n```"
+            f"```\n"
+            f"loadstring(game:HttpGet(\"{raw_script}\"))()"
+            f"\n```"
             if raw_script
             else "⚠️ No script content."
         )
 
-        user_name = user.get("username", "Unknown")
-        user_avatar_url = user.get("image", FALLBACK_IMAGE)
+        user_name = user.get(
+            "username",
+            "Unknown"
+        )
+
+        user_avatar_url = user.get(
+            "image",
+            FALLBACK_IMAGE
+        )
 
         embed.add_field(
             name="Views",
@@ -451,7 +621,11 @@ def create_embed(script, page, total_items, api):
 
         embed.add_field(
             name="Links",
-            value=f"[Script Page](https://rscripts.net/script/{script.get('slug','')})",
+            value=(
+                f"[Script Page]"
+                f"(https://rscripts.net/script/"
+                f"{script.get('slug','')})"
+            ),
             inline=False
         )
 
@@ -466,21 +640,39 @@ def create_embed(script, page, total_items, api):
             icon_url=user_avatar_url
         )
 
-        image_url = script.get("image")
+        image_url = script.get(
+            "image"
+        )
 
         if validators.url(image_url):
-            embed.set_image(url=image_url)
+            embed.set_image(
+                url=image_url
+            )
         else:
-            embed.set_image(url=FALLBACK_IMAGE)
+            embed.set_image(
+                url=FALLBACK_IMAGE
+            )
 
     embed.set_footer(
-        text=f"Made by AdvanceFalling Team | Powered by {'ScriptBlox' if api=='scriptblox' else 'RScripts'} | Page {page}/{total_items}"
+        text=(
+            f"Made by AdvanceFalling Team | "
+            f"Powered by "
+            f"{'ScriptBlox' if api == 'scriptblox' else 'RScripts'} | "
+            f"Page {page}/{total_items}"
+        )
     )
 
     return embed
 
 
-async def display_scripts_dynamic(interaction, message, query, mode, api, **filters):
+async def display_scripts_dynamic(
+    interaction,
+    message,
+    query,
+    mode,
+    api,
+    **filters
+):
     current_page = 1
 
     while True:
@@ -493,16 +685,24 @@ async def display_scripts_dynamic(interaction, message, query, mode, api, **filt
         )
 
         if error:
-            await interaction.followup.send(error)
+            await interaction.followup.send(
+                error
+            )
             break
 
         if not scripts:
-            await interaction.followup.send("No scripts found.")
+            await interaction.followup.send(
+                "No scripts found."
+            )
             break
 
         script = scripts[0]
 
-        display_total = total_pages if total_pages is not None else "Unknown"
+        display_total = (
+            total_pages
+            if total_pages is not None
+            else "Unknown"
+        )
 
         embed = create_embed(
             script,
@@ -511,9 +711,12 @@ async def display_scripts_dynamic(interaction, message, query, mode, api, **filt
             api
         )
 
-        view = discord.ui.View(timeout=60)
+        view = discord.ui.View(
+            timeout=60
+        )
 
         if total_pages is None:
+
             if current_page > 1:
                 view.add_item(
                     discord.ui.Button(
@@ -543,6 +746,7 @@ async def display_scripts_dynamic(interaction, message, query, mode, api, **filt
             )
 
         else:
+
             if current_page > 1:
                 view.add_item(
                     discord.ui.Button(
@@ -591,12 +795,32 @@ async def display_scripts_dynamic(interaction, message, query, mode, api, **filt
                 )
 
         if api == "scriptblox":
-            post_url = f"https://scriptblox.com/script/{script.get('slug','')}"
-            raw_url = f"https://rawscripts.net/raw/{script.get('slug','')}"
-            download_url = f"https://scriptblox.com/download/{script.get('_id','')}"
+            post_url = (
+                f"https://scriptblox.com/script/"
+                f"{script.get('slug','')}"
+            )
+
+            raw_url = (
+                f"https://rawscripts.net/raw/"
+                f"{script.get('slug','')}"
+            )
+
+            download_url = (
+                f"https://scriptblox.com/download/"
+                f"{script.get('_id','')}"
+            )
+
         else:
-            post_url = f"https://rscripts.net/script/{script.get('slug','')}"
-            raw_url = script.get("rawScript", "")
+            post_url = (
+                f"https://rscripts.net/script/"
+                f"{script.get('slug','')}"
+            )
+
+            raw_url = script.get(
+                "rawScript",
+                ""
+            )
+
             download_url = raw_url
 
         view.add_item(
@@ -634,18 +858,31 @@ async def display_scripts_dynamic(interaction, message, query, mode, api, **filt
 
         async def copy_callback(btn_interaction):
             if api == "scriptblox":
-                content = script.get("script", "")
+                content = script.get(
+                    "script",
+                    ""
+                )
             else:
-                raw_url_local = script.get("rawScript", "")
-                content = f'loadstring(game:HttpGet("{raw_url_local}"))()'
+                raw_url_local = script.get(
+                    "rawScript",
+                    ""
+                )
 
+                content = (
+                    f'loadstring(game:HttpGet("{raw_url_local}"))()'
+                )
+
+            # تم حذف lua من هنا
             await btn_interaction.response.send_message(
-                f"```lua\n{content}\n```",
+                f"```\n{content}\n```",
                 ephemeral=True
             )
 
         copy_button.callback = copy_callback
-        view.add_item(copy_button)
+
+        view.add_item(
+            copy_button
+        )
 
         await message.edit(
             embed=embed,
@@ -653,7 +890,10 @@ async def display_scripts_dynamic(interaction, message, query, mode, api, **filt
         )
 
         def check(i: discord.Interaction):
-            return i.user == interaction.user and i.message.id == message.id
+            return (
+                i.user == interaction.user
+                and i.message.id == message.id
+            )
 
         try:
             i: discord.Interaction = await bot.wait_for(
@@ -662,14 +902,31 @@ async def display_scripts_dynamic(interaction, message, query, mode, api, **filt
                 timeout=30.0
             )
 
-            cid = i.data.get("custom_id")
+            cid = i.data.get(
+                "custom_id"
+            )
 
-            if cid == "previous" and current_page > 1:
+            if (
+                cid == "previous"
+                and current_page > 1
+            ):
                 current_page -= 1
-            elif cid == "next" and (total_pages is None or current_page < total_pages):
+
+            elif (
+                cid == "next"
+                and (
+                    total_pages is None
+                    or current_page < total_pages
+                )
+            ):
                 current_page += 1
-            elif cid == "last" and total_pages is not None:
+
+            elif (
+                cid == "last"
+                and total_pages is not None
+            ):
                 current_page = total_pages
+
             elif cid == "first":
                 current_page = 1
 
@@ -683,42 +940,111 @@ async def display_scripts_dynamic(interaction, message, query, mode, api, **filt
             break
 
 
-async def display_scripts_local(interaction, message, scripts, api):
+async def display_scripts_local(
+    interaction,
+    message,
+    scripts,
+    api
+):
     if not scripts:
-        await interaction.followup.send("No scripts found.")
+        await interaction.followup.send(
+            "No scripts found."
+        )
         return
-    
+
     scripts_per_page = 5
     page = 0
-    total_pages = (len(scripts) - 1) // scripts_per_page + 1
-    
+
+    total_pages = (
+        (len(scripts) - 1)
+        // scripts_per_page
+        + 1
+    )
+
     def create_multi_script_embed(page_num):
         embed = discord.Embed(
-            title=f"{'📊 ScriptBlox' if api == 'scriptblox' else '📜 RScripts'} Scripts",
-            description=f"Showing {len(scripts)} script{'s' if len(scripts) != 1 else ''}",
+            title=(
+                f"{'📊 ScriptBlox' if api == 'scriptblox' else '📜 RScripts'} Scripts"
+            ),
+            description=(
+                f"Showing {len(scripts)} "
+                f"script{'s' if len(scripts) != 1 else ''}"
+            ),
             color=0x206694
         )
-        
+
         start = page_num * scripts_per_page
-        end = min(start + scripts_per_page, len(scripts))
-        
+
+        end = min(
+            start + scripts_per_page,
+            len(scripts)
+        )
+
         for idx, script in enumerate(
             scripts[start:end],
-            start=start+1
+            start=start + 1
         ):
+
             if api == "scriptblox":
-                title = script.get("title", "No Title")
-                game = script.get("game", {}).get("name", "Unknown Game")
-                verified = "✅" if script.get("verified", False) else "❌"
-                patched = "❌" if script.get("isPatched", False) else "✅"
-                views = script.get("views", 0)
-                slug = script.get("slug", "")
-                
-                value = f"**Game:** {game}\n"
-                value += f"**Verified:** {verified} | **Patched:** {patched}\n"
-                value += f"**Views:** 👁️ {views}\n"
-                value += f"[View](https://scriptblox.com/script/{slug}) | [Raw](https://rawscripts.net/raw/{slug})"
-                
+                title = script.get(
+                    "title",
+                    "No Title"
+                )
+
+                game = script.get(
+                    "game",
+                    {}
+                ).get(
+                    "name",
+                    "Unknown Game"
+                )
+
+                verified = (
+                    "✅"
+                    if script.get(
+                        "verified",
+                        False
+                    )
+                    else "❌"
+                )
+
+                patched = (
+                    "❌"
+                    if script.get(
+                        "isPatched",
+                        False
+                    )
+                    else "✅"
+                )
+
+                views = script.get(
+                    "views",
+                    0
+                )
+
+                slug = script.get(
+                    "slug",
+                    ""
+                )
+
+                value = (
+                    f"**Game:** {game}\n"
+                )
+
+                value += (
+                    f"**Verified:** {verified} | "
+                    f"**Patched:** {patched}\n"
+                )
+
+                value += (
+                    f"**Views:** 👁️ {views}\n"
+                )
+
+                value += (
+                    f"[View](https://scriptblox.com/script/{slug}) | "
+                    f"[Raw](https://rawscripts.net/raw/{slug})"
+                )
+
                 embed.add_field(
                     name=f"{idx}. {title}",
                     value=value,
@@ -726,33 +1052,77 @@ async def display_scripts_local(interaction, message, scripts, api):
                 )
 
             else:
-                title = script.get("title", "No Title")
-                views = script.get("views", 0)
-                likes = script.get("likes", 0)
-                verified = "✅" if script.get("user", {}).get("verified", False) else "❌"
-                slug = script.get("slug", "")
-                
-                value = f"**Views:** 👁️ {views} | **Likes:** 👍 {likes}\n"
-                value += f"**Verified:** {verified}\n"
-                value += f"[View](https://rscripts.net/script/{slug})"
-                
+                title = script.get(
+                    "title",
+                    "No Title"
+                )
+
+                views = script.get(
+                    "views",
+                    0
+                )
+
+                likes = script.get(
+                    "likes",
+                    0
+                )
+
+                verified = (
+                    "✅"
+                    if script.get(
+                        "user",
+                        {}
+                    ).get(
+                        "verified",
+                        False
+                    )
+                    else "❌"
+                )
+
+                slug = script.get(
+                    "slug",
+                    ""
+                )
+
+                value = (
+                    f"**Views:** 👁️ {views} | "
+                    f"**Likes:** 👍 {likes}\n"
+                )
+
+                value += (
+                    f"**Verified:** {verified}\n"
+                )
+
+                value += (
+                    f"[View](https://rscripts.net/script/{slug})"
+                )
+
                 embed.add_field(
                     name=f"{idx}. {title}",
                     value=value,
                     inline=False
                 )
-        
+
         embed.set_footer(
-            text=f"Made by AdvanceFalling Team | Page {page_num + 1}/{total_pages}"
+            text=(
+                f"Made by AdvanceFalling Team | "
+                f"Page {page_num + 1}/{total_pages}"
+            )
         )
 
         return embed
-    
+
     while True:
-        embed = create_multi_script_embed(page)
-        view = discord.ui.View(timeout=60)
-        
+        embed = create_multi_script_embed(
+            page
+        )
+
+        view = discord.ui.View(
+            timeout=60
+        )
+
         if total_pages > 1:
+
             if page > 0:
                 view.add_item(
                     discord.ui.Button(
@@ -799,15 +1169,18 @@ async def display_scripts_local(interaction, message, scripts, api):
                         row=0
                     )
                 )
-        
+
         await message.edit(
             embed=embed,
             view=view
         )
-        
+
         def check(i):
-            return i.user == interaction.user and i.message.id == message.id
-        
+            return (
+                i.user == interaction.user
+                and i.message.id == message.id
+            )
+
         try:
             i = await bot.wait_for(
                 "interaction",
@@ -815,17 +1188,25 @@ async def display_scripts_local(interaction, message, scripts, api):
                 timeout=30.0
             )
 
-            cid = i.data.get("custom_id")
-            
+            cid = i.data.get(
+                "custom_id"
+            )
+
             if cid == "previous" and page > 0:
                 page -= 1
-            elif cid == "next" and page < total_pages - 1:
+
+            elif (
+                cid == "next"
+                and page < total_pages - 1
+            ):
                 page += 1
+
             elif cid == "last":
                 page = total_pages - 1
+
             elif cid == "first":
                 page = 0
-            
+
             await i.response.defer()
 
         except asyncio.TimeoutError:
@@ -839,10 +1220,13 @@ async def display_scripts_local(interaction, message, scripts, api):
 async def send_help(destination):
     embed = discord.Embed(
         title="🔍 Script Searcher Bot",
-        description="Search and browse scripts from ScriptBlox and RScripts",
+        description=(
+            "Search and browse scripts from "
+            "ScriptBlox and RScripts"
+        ),
         color=0x3498db
     )
-    
+
     search_commands = (
         "**`/search <query>`** - Search scripts across both APIs\n"
         "├ `mode` - Free or paid scripts\n"
@@ -865,7 +1249,7 @@ async def send_help(destination):
         value=search_commands,
         inline=False
     )
-    
+
     rscripts_commands = (
         "**`/rscripts_fetch`** - Browse RScripts library\n"
         "├ `verified_only` - Verified scripts\n"
@@ -881,7 +1265,7 @@ async def send_help(destination):
         value=rscripts_commands,
         inline=False
     )
-    
+
     other_commands = (
         "**`/trending`** - Hot scripts right now\n"
         "**`/script <id>`** - Get specific script\n"
@@ -894,7 +1278,7 @@ async def send_help(destination):
         value=other_commands,
         inline=False
     )
-    
+
     examples = (
         "• `/search arsenal verified:True`\n"
         "• `/rscripts_fetch no_key_system:True`\n"
@@ -907,25 +1291,36 @@ async def send_help(destination):
         value=examples,
         inline=False
     )
-    
+
     embed.set_thumbnail(
-        url="https://media1.tenor.com/m/j9Jhn5M1Xw0AAAAd/neuro-sama-ai.gif"
+        url=(
+            "https://media1.tenor.com/m/"
+            "j9Jhn5M1Xw0AAAAd/neuro-sama-ai.gif"
+        )
     )
 
     embed.set_footer(
         text="Made by AdvanceFalling Team | v2.6"
     )
-    
-    if isinstance(destination, discord.Interaction):
+
+    if isinstance(
+        destination,
+        discord.Interaction
+    ):
         await destination.response.send_message(
             embed=embed,
             ephemeral=True
         )
+
     else:
-        await destination.send(embed=embed)
+        await destination.send(
+            embed=embed
+        )
 
 
-@bot.command(name='bothelp')
+@bot.command(
+    name='bothelp'
+)
 async def prefix_help(ctx):
     await send_help(ctx)
 
@@ -934,11 +1329,17 @@ async def prefix_help(ctx):
     name="bothelp",
     description="Display help information"
 )
-async def slash_help(interaction: discord.Interaction):
-    await send_help(interaction)
+async def slash_help(
+    interaction: discord.Interaction
+):
+    await send_help(
+        interaction
+    )
 
 
-@bot.command(name='search')
+@bot.command(
+    name='search'
+)
 async def prefix_search(
     ctx,
     query: str = None,
@@ -950,12 +1351,21 @@ async def prefix_search(
             query,
             mode
         )
+
     else:
-        await send_help(ctx)
+        await send_help(
+            ctx
+        )
 
 
 class APISelect(discord.ui.Select):
-    def __init__(self, query, mode, filters=None):
+
+    def __init__(
+        self,
+        query,
+        mode,
+        filters=None
+    ):
         self.query = query
         self.mode = mode
         self.filters = filters or {}
@@ -964,26 +1374,39 @@ class APISelect(discord.ui.Select):
             discord.SelectOption(
                 label="ScriptBlox",
                 value="scriptblox",
-                description="Search scripts from ScriptBlox API"
+                description=(
+                    "Search scripts from ScriptBlox API"
+                )
             ),
+
             discord.SelectOption(
                 label="Rscripts",
                 value="rscripts",
-                description="Search scripts from RScripts API"
+                description=(
+                    "Search scripts from RScripts API"
+                )
             ),
         ]
 
         super().__init__(
-            placeholder="Choose the API to search scripts...",
+            placeholder=(
+                "Choose the API to search scripts..."
+            ),
             min_values=1,
             max_values=1,
             options=options
         )
 
-    async def callback(self, interaction: discord.Interaction):
-        await interaction.response.defer(ephemeral=True)
+    async def callback(
+        self,
+        interaction: discord.Interaction
+    ):
+        await interaction.response.defer(
+            ephemeral=True
+        )
 
         if self.values[0] == "scriptblox":
+
             await interaction.followup.send(
                 "Searching ScriptBlox API..."
             )
@@ -1003,6 +1426,7 @@ class APISelect(discord.ui.Select):
             )
 
         elif self.values[0] == "rscripts":
+
             await interaction.followup.send(
                 "Searching RScripts API..."
             )
@@ -1021,7 +1445,9 @@ class APISelect(discord.ui.Select):
             )
 
             if error:
-                await interaction.followup.send(error)
+                await interaction.followup.send(
+                    error
+                )
                 return
 
             await display_scripts_local(
@@ -1033,8 +1459,17 @@ class APISelect(discord.ui.Select):
 
 
 class APISearchView(discord.ui.View):
-    def __init__(self, query, mode, filters=None):
-        super().__init__(timeout=60)
+
+    def __init__(
+        self,
+        query,
+        mode,
+        filters=None
+    ):
+        super().__init__(
+            timeout=60
+        )
+
         self.add_item(
             APISelect(
                 query,
@@ -1044,16 +1479,30 @@ class APISearchView(discord.ui.View):
         )
 
 
-async def send_api_selection(destination, query, mode):
-    if isinstance(destination, discord.Interaction):
+async def send_api_selection(
+    destination,
+    query,
+    mode
+):
+    if isinstance(
+        destination,
+        discord.Interaction
+    ):
         await destination.response.send_message(
             "Select the API to search scripts from:",
-            view=APISearchView(query, mode)
+            view=APISearchView(
+                query,
+                mode
+            )
         )
+
     else:
         await destination.send(
             "Select the API to search scripts from:",
-            view=APISearchView(query, mode)
+            view=APISearchView(
+                query,
+                mode
+            )
         )
 
 
@@ -1110,7 +1559,7 @@ async def slash_search(
     if sort_order:
         filters["order"] = sort_order
         filters["sort"] = sort_order
-    
+
     await interaction.response.send_message(
         "Select the API to search scripts from:",
         view=APISearchView(
@@ -1158,16 +1607,24 @@ async def slash_fetch(
     }
 
     if verified is not None:
-        params["verified"] = 1 if verified else 0
+        params["verified"] = (
+            1 if verified else 0
+        )
 
     if patched is not None:
-        params["patched"] = 1 if patched else 0
+        params["patched"] = (
+            1 if patched else 0
+        )
 
     if key_system is not None:
-        params["key"] = 1 if key_system else 0
+        params["key"] = (
+            1 if key_system else 0
+        )
 
     if universal is not None:
-        params["universal"] = 1 if universal else 0
+        params["universal"] = (
+            1 if universal else 0
+        )
 
     if sort_by:
         params["sortBy"] = sort_by
@@ -1180,7 +1637,7 @@ async def slash_fetch(
 
     if place_id:
         params["placeId"] = place_id
-    
+
     data, error = fetch_scripts_from_api(
         "scriptblox",
         "fetch",
@@ -1192,8 +1649,11 @@ async def slash_fetch(
             f"❌ {error}"
         )
         return
-    
-    if "result" in data and "scripts" in data["result"]:
+
+    if (
+        "result" in data
+        and "scripts" in data["result"]
+    ):
         scripts = data["result"]["scripts"]
 
         if not scripts:
@@ -1232,12 +1692,15 @@ async def slash_trending(
 ):
     await interaction.response.defer()
 
-    if api.lower() not in ["scriptblox", "rscripts"]:
+    if api.lower() not in [
+        "scriptblox",
+        "rscripts"
+    ]:
         await interaction.followup.send(
             "❌ Invalid API. Choose 'scriptblox' or 'rscripts'."
         )
         return
-    
+
     scripts, error = fetch_trending(
         api.lower()
     )
@@ -1247,13 +1710,13 @@ async def slash_trending(
             f"❌ {error}"
         )
         return
-    
+
     if not scripts:
         await interaction.followup.send(
             "No trending scripts found."
         )
         return
-    
+
     temp_msg = await interaction.followup.send(
         "Fetching trending scripts..."
     )
@@ -1281,12 +1744,15 @@ async def slash_script(
 ):
     await interaction.response.defer()
 
-    if api.lower() not in ["scriptblox", "rscripts"]:
+    if api.lower() not in [
+        "scriptblox",
+        "rscripts"
+    ]:
         await interaction.followup.send(
             "❌ Invalid API. Choose 'scriptblox' or 'rscripts'."
         )
         return
-    
+
     script, error = fetch_script_by_id(
         api.lower(),
         script_id
@@ -1297,13 +1763,13 @@ async def slash_script(
             f"❌ {error}"
         )
         return
-    
+
     if not script:
         await interaction.followup.send(
             "Script not found."
         )
         return
-    
+
     temp_msg = await interaction.followup.send(
         "Fetching script..."
     )
@@ -1320,9 +1786,11 @@ async def slash_script(
     name="executors",
     description="View list of available executors"
 )
-async def slash_executors(interaction: discord.Interaction):
+async def slash_executors(
+    interaction: discord.Interaction
+):
     await interaction.response.defer()
-    
+
     executors, error = fetch_executors()
 
     if error:
@@ -1330,31 +1798,44 @@ async def slash_executors(interaction: discord.Interaction):
             f"❌ {error}"
         )
         return
-    
-    if not executors or not isinstance(executors, list):
+
+    if (
+        not executors
+        or not isinstance(executors, list)
+    ):
         await interaction.followup.send(
             "No executors found."
         )
         return
-    
+
     page = 0
     per_page = 5
-    total_pages = (len(executors) - 1) // per_page + 1
-    
+
+    total_pages = (
+        (len(executors) - 1)
+        // per_page
+        + 1
+    )
+
     def create_executor_embed(page_num):
         embed = discord.Embed(
             title="🎮 Available Executors",
-            description=f"List of executors from ScriptBlox (Page {page_num + 1}/{total_pages})",
+            description=(
+                f"List of executors from ScriptBlox "
+                f"(Page {page_num + 1}/{total_pages})"
+            ),
             color=0x206694
         )
 
         start = page_num * per_page
+
         end = min(
             start + per_page,
             len(executors)
         )
-        
+
         for executor in executors[start:end]:
+
             name = executor.get(
                 "name",
                 "Unknown"
@@ -1372,7 +1853,10 @@ async def slash_executors(interaction: discord.Interaction):
 
             patched = (
                 "❌ Patched"
-                if executor.get("patched", False)
+                if executor.get(
+                    "patched",
+                    False
+                )
                 else "✅ Active"
             )
 
@@ -1380,36 +1864,51 @@ async def slash_executors(interaction: discord.Interaction):
                 "version",
                 "N/A"
             )
-            
+
             value = (
                 f"**Platform:** {platform}\n"
                 f"**Type:** {exe_type}\n"
                 f"**Status:** {patched}\n"
                 f"**Version:** {version}"
             )
-            
+
             if executor.get("website"):
-                value += f"\n[Website]({executor['website']})"
+                value += (
+                    f"\n[Website]"
+                    f"({executor['website']})"
+                )
 
             if executor.get("discord"):
-                value += f" | [Discord]({executor['discord']})"
-            
+                value += (
+                    f" | [Discord]"
+                    f"({executor['discord']})"
+                )
+
             embed.add_field(
                 name=name,
                 value=value,
                 inline=False
             )
-        
+
         embed.set_footer(
-            text="Made by AdvanceFalling Team | Powered by ScriptBlox"
+            text=(
+                "Made by AdvanceFalling Team | "
+                "Powered by ScriptBlox"
+            )
         )
 
         return embed
-    
-    embed = create_executor_embed(page)
-    view = discord.ui.View(timeout=60)
-    
+
+    embed = create_executor_embed(
+        page
+    )
+
+    view = discord.ui.View(
+        timeout=60
+    )
+
     if total_pages > 1:
+
         if page > 0:
             view.add_item(
                 discord.ui.Button(
@@ -1451,13 +1950,14 @@ async def slash_executors(interaction: discord.Interaction):
                     custom_id="last"
                 )
             )
-    
+
     message = await interaction.followup.send(
         embed=embed,
         view=view
     )
-    
+
     while True:
+
         def check(i):
             return (
                 i.user == interaction.user
@@ -1471,12 +1971,20 @@ async def slash_executors(interaction: discord.Interaction):
                 timeout=30.0
             )
 
-            cid = i.data.get("custom_id")
+            cid = i.data.get(
+                "custom_id"
+            )
 
-            if cid == "previous" and page > 0:
+            if (
+                cid == "previous"
+                and page > 0
+            ):
                 page -= 1
 
-            elif cid == "next" and page < total_pages - 1:
+            elif (
+                cid == "next"
+                and page < total_pages - 1
+            ):
                 page += 1
 
             elif cid == "last":
@@ -1484,11 +1992,17 @@ async def slash_executors(interaction: discord.Interaction):
 
             elif cid == "first":
                 page = 0
-            
-            embed = create_executor_embed(page)
-            view = discord.ui.View(timeout=60)
-            
+
+            embed = create_executor_embed(
+                page
+            )
+
+            view = discord.ui.View(
+                timeout=60
+            )
+
             if total_pages > 1:
+
                 if page > 0:
                     view.add_item(
                         discord.ui.Button(
@@ -1530,7 +2044,7 @@ async def slash_executors(interaction: discord.Interaction):
                             custom_id="last"
                         )
                     )
-            
+
             await i.response.edit_message(
                 embed=embed,
                 view=view
@@ -1544,7 +2058,10 @@ async def slash_executors(interaction: discord.Interaction):
             break
 
 
-def fetch_rscripts_by_username(username, page=1):
+def fetch_rscripts_by_username(
+    username,
+    page=1
+):
     try:
         url = (
             f"https://rscripts.net/api/v2/scripts"
@@ -1567,10 +2084,13 @@ def fetch_rscripts_by_username(username, page=1):
         if "scripts" in data:
             return data["scripts"], None
 
-        return None, f"No scripts found for '{username}'"
+        return None, (
+            f"No scripts found for '{username}'"
+        )
 
     except requests.RequestException as e:
         return None, f"Something went wrong: {e}"
+
     except Exception as e:
         return None, f"Unexpected response format: {e}"
 
@@ -1599,7 +2119,7 @@ async def slash_rscripts_fetch(
     max_results: int = 20
 ):
     await interaction.response.defer()
-    
+
     params = {
         "q": "",
         "page": 1,
@@ -1623,15 +2143,25 @@ async def slash_rscripts_fetch(
 
     if sort:
         params["sort"] = sort
-    
-    query_string = urllib.parse.urlencode(params)
-    url = f"https://rscripts.net/api/v2/scripts?{query_string}"
-    
+
+    query_string = urllib.parse.urlencode(
+        params
+    )
+
+    url = (
+        f"https://rscripts.net/api/v2/scripts?"
+        f"{query_string}"
+    )
+
     try:
-        r = requests.get(url)
+        r = requests.get(
+            url
+        )
+
         r.raise_for_status()
+
         data = r.json()
-        
+
         if "scripts" in data:
             scripts = data["scripts"][:max_results]
 
@@ -1640,7 +2170,7 @@ async def slash_rscripts_fetch(
                     "No scripts found with those filters"
                 )
                 return
-            
+
             temp_msg = await interaction.followup.send(
                 "Loading scripts..."
             )
@@ -1675,7 +2205,7 @@ async def slash_rscripts_by_user(
     username: str
 ):
     await interaction.response.defer()
-    
+
     scripts, error = fetch_rscripts_by_username(
         username
     )
@@ -1685,13 +2215,13 @@ async def slash_rscripts_by_user(
             f"❌ {error}"
         )
         return
-    
+
     if not scripts:
         await interaction.followup.send(
             f"No scripts found for '{username}'"
         )
         return
-    
+
     temp_msg = await interaction.followup.send(
         f"Loading scripts by {username}..."
     )
@@ -1719,11 +2249,18 @@ async def setup(main_bot):
 
     # نقل أوامر Prefix
     for command in _extension_bot.commands:
-        main_bot.add_command(command)
+        main_bot.add_command(
+            command
+        )
 
     # نقل أوامر Slash
     for command in _extension_bot.tree.get_commands():
-        main_bot.tree.add_command(command)
+        main_bot.tree.add_command(
+            command
+        )
 
     # نقل on_ready
-    main_bot.add_listener(on_ready, "on_ready")
+    main_bot.add_listener(
+        on_ready,
+        "on_ready"
+    )
