@@ -24,11 +24,18 @@
 # بروكهافن
 # ============================================================
 
-local TweenService = game:GetService("TweenService")
-local UserInputService = game:GetService("UserInputService")
-local HttpService = game:GetService("HttpService")
-local CoreGui = game:GetService("CoreGui")
-local Players = game:GetService("Players")
+import os
+import re
+import json
+import sqlite3
+import asyncio
+import unicodedata
+from difflib import SequenceMatcher
+from urllib.request import Request, urlopen
+
+import discord
+from discord import app_commands
+from discord.ext import commands
 
 local LocalPlayer = Players.LocalPlayer
 local IsMobile = UserInputService.TouchEnabled and not UserInputService.KeyboardEnabled
