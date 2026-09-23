@@ -1224,7 +1224,24 @@ Secrets
 # FIME AI COG
 # ============================================================
 
+# ============================================================
+# Permission helper for /ai subcommands
+# ============================================================
+def is_admin(member):
+    return bool(
+        member
+        and getattr(member, "guild_permissions", None)
+        and member.guild_permissions.administrator
+    )
+
 class FimeAI(commands.Cog):
+    # ========================================================
+    # Single top-level /ai group
+    # ========================================================
+    ai_group = app_commands.Group(
+        name="ai",
+        description="إدارة فيمي وأوامره"
+    )
 
     def __init__(
         self,
@@ -2331,18 +2348,22 @@ class FimeAI(commands.Cog):
     # /ai-emoji
     # ========================================================
 
-    @app_commands.command(
+    @ai_group.command(
         name="ai-emoji",
         description="تحديد الإيموجي الذي يظهر مع ردود فيمي"
-    )
-    @app_commands.default_permissions(
-        administrator=True
     )
     async def ai_emoji(
         self,
         interaction: discord.Interaction,
         emoji: str
     ):
+
+        if interaction.guild is None or not is_admin(interaction.user):
+            await interaction.response.send_message(
+                "❌ للإداريين فقط.",
+                ephemeral=True
+            )
+            return
 
         if interaction.guild is None:
 
@@ -2390,17 +2411,21 @@ class FimeAI(commands.Cog):
     # /ai-emoji-reset
     # ========================================================
 
-    @app_commands.command(
+    @ai_group.command(
         name="ai-emoji-reset",
         description="إرجاع إيموجي فيمي الافتراضي"
-    )
-    @app_commands.default_permissions(
-        administrator=True
     )
     async def ai_emoji_reset(
         self,
         interaction: discord.Interaction
     ):
+
+        if interaction.guild is None or not is_admin(interaction.user):
+            await interaction.response.send_message(
+                "❌ للإداريين فقط.",
+                ephemeral=True
+            )
+            return
 
         if interaction.guild is None:
             return
@@ -2426,17 +2451,21 @@ class FimeAI(commands.Cog):
     # /ai-emoji-show
     # ========================================================
 
-    @app_commands.command(
+    @ai_group.command(
         name="ai-emoji-show",
         description="عرض إيموجي فيمي الحالي"
-    )
-    @app_commands.default_permissions(
-        administrator=True
     )
     async def ai_emoji_show(
         self,
         interaction: discord.Interaction
     ):
+
+        if interaction.guild is None or not is_admin(interaction.user):
+            await interaction.response.send_message(
+                "❌ للإداريين فقط.",
+                ephemeral=True
+            )
+            return
 
         if interaction.guild is None:
             return
@@ -2458,17 +2487,21 @@ class FimeAI(commands.Cog):
     # /ai-status
     # ========================================================
 
-    @app_commands.command(
+    @ai_group.command(
         name="ai-status",
         description="عرض حالة اتصال فيمي"
-    )
-    @app_commands.default_permissions(
-        administrator=True
     )
     async def ai_status(
         self,
         interaction: discord.Interaction
     ):
+
+        if interaction.guild is None or not is_admin(interaction.user):
+            await interaction.response.send_message(
+                "❌ للإداريين فقط.",
+                ephemeral=True
+            )
+            return
 
         if not GROQ_API_KEY:
 
@@ -2574,7 +2607,7 @@ class FimeAI(commands.Cog):
     # /ai-memory-clear
     # ========================================================
 
-    @app_commands.command(
+    @ai_group.command(
         name="ai-memory-clear",
         description="مسح ذاكرتك مع فيمي"
     )
@@ -2606,18 +2639,22 @@ class FimeAI(commands.Cog):
     # /ai-reset
     # ========================================================
 
-    @app_commands.command(
+    @ai_group.command(
         name="ai-reset",
         description="مسح ذاكرة عضو"
-    )
-    @app_commands.default_permissions(
-        administrator=True
     )
     async def ai_reset(
         self,
         interaction: discord.Interaction,
         member: discord.Member = None
     ):
+
+        if interaction.guild is None or not is_admin(interaction.user):
+            await interaction.response.send_message(
+                "❌ للإداريين فقط.",
+                ephemeral=True
+            )
+            return
 
         if interaction.guild is None:
 
@@ -2650,17 +2687,21 @@ class FimeAI(commands.Cog):
     # /ai-channel
     # ========================================================
 
-    @app_commands.command(
+    @ai_group.command(
         name="ai-channel",
         description="معرفة روم فيمي الحالي"
-    )
-    @app_commands.default_permissions(
-        administrator=True
     )
     async def ai_channel(
         self,
         interaction: discord.Interaction
     ):
+
+        if interaction.guild is None or not is_admin(interaction.user):
+            await interaction.response.send_message(
+                "❌ للإداريين فقط.",
+                ephemeral=True
+            )
+            return
 
         if interaction.guild is None:
 
@@ -2716,18 +2757,22 @@ class FimeAI(commands.Cog):
     # /ai-server-info
     # ========================================================
 
-    @app_commands.command(
+    @ai_group.command(
         name="ai-server-info",
         description="تحديث وصف السيرفر عند فيمي"
-    )
-    @app_commands.default_permissions(
-        administrator=True
     )
     async def ai_server_info(
         self,
         interaction: discord.Interaction,
         description: str
     ):
+
+        if interaction.guild is None or not is_admin(interaction.user):
+            await interaction.response.send_message(
+                "❌ للإداريين فقط.",
+                ephemeral=True
+            )
+            return
 
         if interaction.guild is None:
             return
@@ -2746,17 +2791,21 @@ class FimeAI(commands.Cog):
     # /ai-server-scan
     # ========================================================
 
-    @app_commands.command(
+    @ai_group.command(
         name="ai-server-scan",
         description="فيمي يتعرف تلقائيًا على رومات السيرفر"
-    )
-    @app_commands.default_permissions(
-        administrator=True
     )
     async def ai_server_scan(
         self,
         interaction: discord.Interaction
     ):
+
+        if interaction.guild is None or not is_admin(interaction.user):
+            await interaction.response.send_message(
+                "❌ للإداريين فقط.",
+                ephemeral=True
+            )
+            return
 
         if interaction.guild is None:
             return
@@ -2779,17 +2828,21 @@ class FimeAI(commands.Cog):
     # /ai-rooms
     # ========================================================
 
-    @app_commands.command(
+    @ai_group.command(
         name="ai-rooms",
         description="عرض الرومات التي يعرفها فيمي"
-    )
-    @app_commands.default_permissions(
-        administrator=True
     )
     async def ai_rooms(
         self,
         interaction: discord.Interaction
     ):
+
+        if interaction.guild is None or not is_admin(interaction.user):
+            await interaction.response.send_message(
+                "❌ للإداريين فقط.",
+                ephemeral=True
+            )
+            return
 
         if interaction.guild is None:
             return
@@ -2879,12 +2932,9 @@ class FimeAI(commands.Cog):
     # /ai-room-add
     # ========================================================
 
-    @app_commands.command(
+    @ai_group.command(
         name="ai-room-add",
         description="إضافة وصف مخصص لروم عند فيمي"
-    )
-    @app_commands.default_permissions(
-        administrator=True
     )
     async def ai_room_add(
         self,
@@ -2893,6 +2943,13 @@ class FimeAI(commands.Cog):
         name: str,
         description: str
     ):
+
+        if interaction.guild is None or not is_admin(interaction.user):
+            await interaction.response.send_message(
+                "❌ للإداريين فقط.",
+                ephemeral=True
+            )
+            return
 
         if interaction.guild is None:
             return
@@ -2925,18 +2982,22 @@ class FimeAI(commands.Cog):
     # /ai-room-remove
     # ========================================================
 
-    @app_commands.command(
+    @ai_group.command(
         name="ai-room-remove",
         description="حذف معلومات روم من معرفة فيمي"
-    )
-    @app_commands.default_permissions(
-        administrator=True
     )
     async def ai_room_remove(
         self,
         interaction: discord.Interaction,
         channel: discord.TextChannel
     ):
+
+        if interaction.guild is None or not is_admin(interaction.user):
+            await interaction.response.send_message(
+                "❌ للإداريين فقط.",
+                ephemeral=True
+            )
+            return
 
         if interaction.guild is None:
             return
@@ -2971,17 +3032,21 @@ class FimeAI(commands.Cog):
     # /ai-knowledge
     # ========================================================
 
-    @app_commands.command(
+    @ai_group.command(
         name="ai-knowledge",
         description="عرض معلومات السيرفر التي يعرفها فيمي"
-    )
-    @app_commands.default_permissions(
-        administrator=True
     )
     async def ai_knowledge(
         self,
         interaction: discord.Interaction
     ):
+
+        if interaction.guild is None or not is_admin(interaction.user):
+            await interaction.response.send_message(
+                "❌ للإداريين فقط.",
+                ephemeral=True
+            )
+            return
 
         if interaction.guild is None:
             return
@@ -3082,18 +3147,22 @@ class FimeAI(commands.Cog):
     # /ai-set-channel
     # ========================================================
 
-    @app_commands.command(
+    @ai_group.command(
         name="ai-set-channel",
         description="تحديد روم فيمي لهذا السيرفر"
-    )
-    @app_commands.default_permissions(
-        administrator=True
     )
     async def ai_set_channel(
         self,
         interaction: discord.Interaction,
         channel: discord.TextChannel
     ):
+
+        if interaction.guild is None or not is_admin(interaction.user):
+            await interaction.response.send_message(
+                "❌ للإداريين فقط.",
+                ephemeral=True
+            )
+            return
 
         if interaction.guild is None:
             return
