@@ -1,1403 +1,294 @@
 # ============================================================
 # Team Fime — bot4.py
-# Smart Script Search System
-# Fime Scripts API
-#
-# الأوامر:
-#
-# الإدارة:
-# /setscriptroom #الروم
-#
-# الجميع:
-# /scriptroom
-# /searchscript اسم اللعبة
-#
-# البحث التلقائي:
-# يكتب العضو اسم اللعبة مباشرة داخل روم البحث.
-#
-# أمثلة:
-# doors
-# دورز
-# الباب
-# mm2
-# ام ام تو
-# بروكهافن
+# Game Search System
 # ============================================================
 
 import os
 import re
-import json
 import sqlite3
-import asyncio
-import unicodedata
-from difflib import SequenceMatcher
-from urllib.request import Request, urlopen
-
 import discord
-from discord import app_commands
+
 from discord.ext import commands
+from discord import app_commands
+
 
 # ============================================================
 # CONFIG
 # ============================================================
 
-APIs = {
-    scriptblox = {
-        name = "ScriptBlox",
-        searchUrl = "https://scriptblox.com/api/script/search?q=%s&max=%d",
-        trendingUrl = "https://scriptblox.com/api/script/trending?max=%d",
-        parseResults = function(data)
-            if data and data.result and data.result.scripts then
-                return data.result.scripts
-            end
-            return {}
-        end,
-        getTitle = function(s) return s.title or "Unknown" end,
-        getGame = function(s) return (s.game and s.game.name) or "Universal" end,
-        getGameImage = function(s)
-            if s.game then
-                if s.game.imageUrl then return s.game.imageUrl end
-                if s.game.imgUrl then return s.game.imgUrl end
-                if s.game.image then return s.game.image end
-            end
-            return nil
-        end,
-        getPlaceId = function(s)
-            if s.game then
-                if s.game.gameId then return s.game.gameId end
-                if s.game.placeId then return s.game.placeId end
-                if s.game.id then return s.game.id end
-            end
-            return nil
-        end,
-        getViews = function(s) return s.views or 0 end,
-        getScript = function(s) return s.script or "" end,
-        getId = function(s) return s._id or s.slug or "" end
-    },
-    rscripts = {
-        name = "RScripts",
-        searchUrl = "https://rscripts.net/api/v2/scripts?q=%s&orderBy=views&sort=desc&page=1&limit=%d",
-        trendingUrl = "https://rscripts.net/api/v2/scripts?orderBy=views&sort=desc&page=1&limit=%d",
-        scriptUrl = "https://rscripts.net/api/v2/scripts/%s",
-        parseResults = function(data)
-            if data and data.scripts then
-                return data.scripts
-            end
-            return {}
-        end,
-        parseTrending = function(data)
-            if data and data.scripts then
-                return data.scripts
-            elseif data and data.success and type(data.success) == "table" then
+DB_FILE = "bot4.db"
+
 
 # ============================================================
-# GAME ALIASES
+# 🔐 المواقع الآمنة الخاصة بك
+# 
+# أضف مواقعك هنا فقط.
+#
+# مثال:
+#
+# SAFE_SITES = [
+#     "https://rscripts.net",
+#     "https://scriptblox.com",
+# ]
+#
+# {query} سيتم استبداله باسم اللعبة الذي كتبه العضو.
+#
+# مهم:
+# لا تضع أي موقع لا تثق فيه.
+# ============================================================
+
+SAFE_SITES = [
+
+    # 👇 ضع روابطك هنا
+
+    # "https://example.com/search?q={query}",
+
+    # "https://example2.com/search/{query}",
+
+]
+
+
+# ============================================================
+# أسماء الألعاب والاختصارات
 # ============================================================
 
 GAME_ALIASES = {
 
-    "steal an egg": [
-        "steal an egg",
-        "steal egg",
-        "سرقه بيضه",
-        "سرقة بيضة",
-        "سرقه بيض",
-        "سرقة بيض",
-        "سرقه البيض",
-        "سرقة البيض",
-        "بيضه",
-        "البيض",
+    "doors": [
+        "doors",
+        "دورز",
+        "دور",
+        "الباب",
     ],
 
-    "murder mystery 2": [
-        "murder mystery 2",
-        "murder mystery",
+    "mm2": [
         "mm2",
-        "m m 2",
+        "mm 2",
         "ام ام تو",
-        "إم إم تو",
-        "اي ام ام 2",
-        "اي ام ام تو",
-        "ام ام ٢",
-        "مردر مستري",
-        "مورد مستري",
-    ],
-
-    "keyboard escape": [
-        "keyboard escape",
-        "1 speed keyboard escape",
-        "keyboard",
-        "كيبورد",
-        "ماب الكيبورد",
-        "ماب كيبورد",
-        "الهروب من الكيبورد",
+        "ام ام 2",
+        "مستر م",
     ],
 
     "brookhaven": [
         "brookhaven",
-        "brook haven",
-        "بروك هافن",
         "بروكهافن",
-        "ماب البيوت",
-        "ماب بيوت",
-        "البيوت",
-        "بيوت",
+        "بروك هافن",
     ],
 
     "blox fruits": [
         "blox fruits",
         "bloxfruit",
+        "بلوك فروت",
+        "بلوك فروتس",
         "بلوكس فروت",
-        "بلوكس فروتس",
-        "بلوكس",
     ],
 
-    "dress to impress": [
-        "dress to impress",
-        "dti",
-        "دريس تو امبريس",
-        "دريس تو إمبريس",
-        "دريس",
+    "grow a garden": [
+        "grow a garden",
+        "growagarden",
+        "جرو جاردن",
+        "جرو اي جاردن",
+        "جرو",
     ],
 
-    "dead rails": [
-        "dead rails",
-        "deadrail",
-        "ديد ريلز",
-        "ديد ريل",
-        "ديدريلز",
+    "steal a brainrot": [
+        "steal a brainrot",
+        "stealabrainrot",
+        "سرقة برينروت",
+        "ستيل برينروت",
     ],
 
-    "tower of hell": [
-        "tower of hell",
-        "tower hell",
-        "towerofhell",
-        "برج الجحيم",
-        "ماب الجحيم",
-        "الجحيم",
+    "steal an egg": [
+        "steal an egg",
+        "stealanegg",
+        "ستيل ان ايق",
+        "ستيل ان ايغ",
     ],
 
-    "collect the alphabet": [
-        "collect the alphabet",
-        "collect alphabet",
-        "alphabet",
-        "اجمع الابجديه",
-        "اجمع الأبجدية",
-        "اجمع الحروف",
-        "جمع الحروف",
-        "الحروف",
-    ],
-
-    "driving simulator": [
-        "driving simulator",
-        "car simulator",
-        "driving",
-        "محاكي القيادة",
-        "محاكي قياده",
-        "محاكي السيارات",
-        "محاكي سيارة",
-        "السيارات",
-    ],
-
-    "infinite jump": [
-        "infinite jump",
-        "high jump",
-        "hing jump",
-        "jump",
-        "قفز",
-        "النط",
-        "قوه النط",
-        "قوة النط",
-        "القفزه",
-        "القفزة",
-        "قفزه",
-        "قفزة",
-    ],
-
-    "stands awakening": [
-        "stands awakening",
-        "stands",
-        "ستاندز",
-        "ستاندز اويكيننق",
-        "ستاندز اويكننق",
-    ],
-
-    "aim bot": [
-        "aim bot",
-        "aimbot",
-        "aim",
-        "ايم بوت",
-        "ايمبوت",
-        "ايم",
-    ],
-
-    "doors": [
-        "doors",
-        "door",
-        "دورز",
-        "دورس",
-        "باب",
-        "الباب",
-        "رعب",
-        "ماب الرعب",
-        "ماب رعب",
-    ],
 }
 
+
 # ============================================================
-# TEXT NORMALIZATION
+# تنظيف النص
 # ============================================================
 
-ARABIC_DIACRITICS = re.compile(
-    r"[\u0610-\u061A\u064B-\u065F\u0670\u06D6-\u06ED]"
-)
+def normalize_text(text: str) -> str:
+    text = text.lower().strip()
 
-def normalize_text(text: str):
-
-    if text is None:
-        return ""
-
-    text = str(text)
-
-    text = unicodedata.normalize(
-        "NFKC",
-        text
-    )
-
-    text = ARABIC_DIACRITICS.sub(
-        "",
-        text
-    )
-
-    text = text.replace(
-        "ـ",
-        ""
-    )
+    text = re.sub(r"\s+", " ", text)
 
     replacements = {
         "أ": "ا",
         "إ": "ا",
         "آ": "ا",
-        "ٱ": "ا",
         "ى": "ي",
-        "ؤ": "و",
-        "ئ": "ي",
         "ة": "ه",
     }
 
     for old, new in replacements.items():
-        text = text.replace(
-            old,
-            new
-        )
-
-    text = text.lower()
-
-    text = re.sub(
-        r"[^\w\s\u0600-\u06FF]",
-        " ",
-        text
-    )
-
-    text = re.sub(
-        r"\s+",
-        " ",
-        text
-    ).strip()
+        text = text.replace(old, new)
 
     return text
 
-def compact_text(text: str):
-
-    return normalize_text(
-        text
-    ).replace(
-        " ",
-        ""
-    )
 
 # ============================================================
-# DATABASE
+# معرفة اللعبة من كلام العضو
+# ============================================================
+
+def find_game(message: str):
+
+    normalized_message = normalize_text(message)
+
+    for game_name, aliases in GAME_ALIASES.items():
+
+        for alias in aliases:
+
+            normalized_alias = normalize_text(alias)
+
+            if normalized_message == normalized_alias:
+                return game_name
+
+            if normalized_alias in normalized_message:
+                return game_name
+
+    return None
+
+
+# ============================================================
+# قاعدة البيانات
 # ============================================================
 
 def init_database():
 
-    conn = sqlite3.connect(
-        DATABASE
-    )
+    connection = sqlite3.connect(DB_FILE)
+    cursor = connection.cursor()
 
-    conn.execute(
-        """
-        CREATE TABLE IF NOT EXISTS script_search_settings (
-            guild_id INTEGER PRIMARY KEY,
-            channel_id INTEGER NOT NULL
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS settings (
+            key TEXT PRIMARY KEY,
+            value TEXT
         )
-        """
+    """)
+
+    connection.commit()
+    connection.close()
+
+
+def get_setting(key):
+
+    connection = sqlite3.connect(DB_FILE)
+    cursor = connection.cursor()
+
+    cursor.execute(
+        "SELECT value FROM settings WHERE key = ?",
+        (key,)
     )
 
-    conn.commit()
-    conn.close()
+    result = cursor.fetchone()
 
-def get_search_channel(
-    guild_id: int
-):
+    connection.close()
 
-    conn = sqlite3.connect(
-        DATABASE
-    )
+    if result:
+        return result[0]
 
-    row = conn.execute(
-        """
-        SELECT channel_id
-        FROM script_search_settings
-        WHERE guild_id = ?
-        """,
-        (guild_id,)
-    ).fetchone()
+    return None
 
-    conn.close()
 
-    return row[0] if row else None
+def set_setting(key, value):
 
-def set_search_channel(
-    guild_id: int,
-    channel_id: int
-):
+    connection = sqlite3.connect(DB_FILE)
+    cursor = connection.cursor()
 
-    conn = sqlite3.connect(
-        DATABASE
-    )
-
-    conn.execute(
-        """
-        INSERT INTO script_search_settings (
-            guild_id,
-            channel_id
-        )
+    cursor.execute("""
+        INSERT INTO settings (key, value)
         VALUES (?, ?)
+        ON CONFLICT(key)
+        DO UPDATE SET value = excluded.value
+    """, (key, str(value)))
 
-        ON CONFLICT(guild_id)
-        DO UPDATE SET
-            channel_id = excluded.channel_id
-        """,
-        (
-            guild_id,
-            channel_id
-        )
-    )
+    connection.commit()
+    connection.close()
 
-    conn.commit()
-    conn.close()
 
 # ============================================================
-# SIMILARITY
+# بناء رابط البحث
 # ============================================================
 
-def similarity(
-    a: str,
-    b: str
-):
+def build_search_url(site, game_name):
 
-    a = normalize_text(a)
-    b = normalize_text(b)
+    query = game_name.replace(" ", "+")
 
-    if not a or not b:
-        return 0.0
+    return site.replace("{query}", query)
 
-    return SequenceMatcher(
-        None,
-        a,
-        b
-    ).ratio()
 
 # ============================================================
-# GAME DETECTION
+# إنشاء أزرار المواقع
 # ============================================================
 
-def detect_game(
-    query: str
-):
+class SearchButtons(discord.ui.View):
 
-    normalized_query = normalize_text(
-        query
-    )
+    def __init__(self, game_name):
 
-    compact_query = compact_text(
-        query
-    )
+        super().__init__(timeout=180)
 
-    best_game = None
-    best_score = 0.0
+        if not SAFE_SITES:
+            return
 
-    for game, aliases in GAME_ALIASES.items():
+        for index, site in enumerate(SAFE_SITES, start=1):
 
-        for alias in aliases:
+            url = build_search_url(site, game_name)
 
-            alias_normalized = normalize_text(
-                alias
+            button = discord.ui.Button(
+                label=f"بحث {index}",
+                style=discord.ButtonStyle.link,
+                url=url
             )
 
-            alias_compact = compact_text(
-                alias
-            )
+            self.add_item(button)
 
-            score = 0.0
-
-            if normalized_query == alias_normalized:
-
-                score = 1.0
-
-            elif compact_query == alias_compact:
-
-                score = 0.98
-
-            elif (
-                alias_normalized
-                and alias_normalized in normalized_query
-            ):
-
-                score = 0.94
-
-            elif (
-                normalized_query
-                and normalized_query in alias_normalized
-            ):
-
-                score = 0.90
-
-            else:
-
-                score = similarity(
-                    normalized_query,
-                    alias_normalized
-                )
-
-            if score > best_score:
-
-                best_score = score
-                best_game = game
-
-    if best_score < 0.58:
-
-        return None, 0.0
-
-    return best_game, best_score
 
 # ============================================================
-# HTTP
+# Cog
 # ============================================================
 
-def fetch_url(
-    url: str
-):
+class Bot4(commands.Cog):
 
-    request = Request(
-        url,
-        headers={
-            "User-Agent": "Team-Fime-Script-Search/3.0",
-            "Accept": "application/json",
-        }
-    )
-
-    try:
-
-        with urlopen(
-            request,
-            timeout=REQUEST_TIMEOUT
-        ) as response:
-
-            raw = response.read()
-
-            return raw.decode(
-                "utf-8",
-                errors="replace"
-            )
-
-    except Exception as error:
-
-        print(
-            f"[bot4] API ERROR: {url} | {error}"
-        )
-
-        return None
-
-# ============================================================
-# FIME API
-# ============================================================
-
-async def fetch_fime_scripts():
-
-    raw = await asyncio.to_thread(
-        fetch_url,
-        FIME_API_URL
-    )
-
-    if not raw:
-        return []
-
-    try:
-
-        data = json.loads(
-            raw
-        )
-
-    except json.JSONDecodeError as error:
-
-        print(
-            f"[bot4] Invalid JSON from Fime API: {error}"
-        )
-
-        return []
-
-    if isinstance(
-        data,
-        list
-    ):
-
-        scripts = data
-
-    elif isinstance(
-        data,
-        dict
-    ):
-
-        scripts = None
-
-        for key in (
-            "scripts",
-            "data",
-            "results",
-            "items"
-        ):
-
-            value = data.get(
-                key
-            )
-
-            if isinstance(
-                value,
-                list
-            ):
-
-                scripts = value
-                break
-
-        if scripts is None:
-
-            print(
-                "[bot4] Fime API returned an object "
-                "but no script list was found."
-            )
-
-            return []
-
-    else:
-
-        return []
-
-    print(
-        f"[bot4] Fime API scripts loaded: "
-        f"{len(scripts)}"
-    )
-
-    return [
-        item
-        for item in scripts
-        if isinstance(
-            item,
-            dict
-        )
-    ]
-
-# ============================================================
-# SCRIPT HELPERS
-# ============================================================
-
-def get_value(
-    script,
-    *keys
-):
-
-    for key in keys:
-
-        value = script.get(
-            key
-        )
-
-        if value is not None:
-
-            if isinstance(
-                value,
-                str
-            ):
-
-                if value.strip():
-
-                    return value.strip()
-
-            else:
-
-                return value
-
-    return ""
-
-def get_script_title(
-    script
-):
-
-    return str(
-        get_value(
-            script,
-            "title",
-            "name",
-            "script_name"
-        )
-        or "بدون عنوان"
-    )
-
-def get_script_game(
-    script
-):
-
-    return str(
-        get_value(
-            script,
-            "game",
-            "game_name",
-            "gamename",
-            "map"
-        )
-        or ""
-    )
-
-def get_script_description(
-    script
-):
-
-    return str(
-        get_value(
-            script,
-            "description",
-            "desc",
-            "summary"
-        )
-        or ""
-    )
-
-def get_script_category(
-    script
-):
-
-    return str(
-        get_value(
-            script,
-            "category",
-            "type"
-        )
-        or ""
-    )
-
-def get_script_author(
-    script
-):
-
-    return str(
-        get_value(
-            script,
-            "author",
-            "username",
-            "owner"
-        )
-        or "Fime"
-    )
-
-def get_script_id(
-    script
-):
-
-    return get_value(
-        script,
-        "id",
-        "_id",
-        "script_id"
-    )
-
-def get_script_image(
-    script
-):
-
-    return str(
-        get_value(
-            script,
-            "image",
-            "image_url",
-            "thumbnail",
-            "thumbnail_url"
-        )
-        or ""
-    )
-
-def get_script_url(
-    script
-):
-
-    script_id = get_script_id(
-        script
-    )
-
-    if script_id:
-
-        return (
-            f"{FIME_WEBSITE_URL}/script"
-            f"?id={script_id}"
-        )
-
-    direct_url = get_value(
-        script,
-        "url",
-        "link",
-        "script_url"
-    )
-
-    if direct_url:
-
-        return str(
-            direct_url
-        )
-
-    return ""
-
-def get_script_text(
-    script
-):
-
-    values = [
-        get_script_title(script),
-        get_script_game(script),
-        get_script_description(script),
-        get_script_category(script),
-        get_script_author(script),
-    ]
-
-    return " ".join(
-        str(value)
-        for value in values
-        if value
-    )
-
-# ============================================================
-# CHECK GAME MATCH
-# ============================================================
-
-def script_matches_game(
-    script,
-    detected_game
-):
-
-    if not detected_game:
-
-        return True
-
-    script_game = get_script_game(
-        script
-    )
-
-    if not script_game:
-
-        all_text = normalize_text(
-            get_script_text(
-                script
-            )
-        )
-
-        for alias in GAME_ALIASES.get(
-            detected_game,
-            []
-        ):
-
-            alias_normalized = normalize_text(
-                alias
-            )
-
-            if (
-                alias_normalized
-                and alias_normalized in all_text
-            ):
-
-                return True
-
-        return False
-
-    script_game_normalized = normalize_text(
-        script_game
-    )
-
-    detected_normalized = normalize_text(
-        detected_game
-    )
-
-    if (
-        script_game_normalized
-        == detected_normalized
-    ):
-
-        return True
-
-    if (
-        compact_text(script_game)
-        == compact_text(detected_game)
-    ):
-
-        return True
-
-    aliases = GAME_ALIASES.get(
-        detected_game,
-        []
-    )
-
-    for alias in aliases:
-
-        alias_normalized = normalize_text(
-            alias
-        )
-
-        if (
-            script_game_normalized
-            == alias_normalized
-        ):
-
-            return True
-
-        if (
-            compact_text(script_game)
-            == compact_text(alias)
-        ):
-
-            return True
-
-        if similarity(
-            script_game,
-            alias
-        ) >= 0.78:
-
-            return True
-
-    return similarity(
-        script_game,
-        detected_game
-    ) >= 0.78
-
-# ============================================================
-# SCORE SCRIPT
-# ============================================================
-
-def score_script(
-    script,
-    query,
-    detected_game
-):
-
-    title = get_script_title(
-        script
-    )
-
-    game = get_script_game(
-        script
-    )
-
-    description = get_script_description(
-        script
-    )
-
-    category = get_script_category(
-        script
-    )
-
-    normalized_query = normalize_text(
-        query
-    )
-
-    score = 0.0
-
-    # ========================================================
-    # GAME
-    # ========================================================
-
-    if detected_game:
-
-        if script_matches_game(
-            script,
-            detected_game
-        ):
-
-            score += 100
-
-        else:
-
-            score -= 100
-
-    # ========================================================
-    # TITLE
-    # ========================================================
-
-    normalized_title = normalize_text(
-        title
-    )
-
-    if normalized_query == normalized_title:
-
-        score += 80
-
-    elif (
-        normalized_query
-        and normalized_query in normalized_title
-    ):
-
-        score += 65
-
-    elif (
-        normalized_title
-        and normalized_title in normalized_query
-    ):
-
-        score += 45
-
-    else:
-
-        score += (
-            similarity(
-                query,
-                title
-            )
-            * 35
-        )
-
-    # ========================================================
-    # GAME FIELD
-    # ========================================================
-
-    if game:
-
-        normalized_game = normalize_text(
-            game
-        )
-
-        if normalized_query == normalized_game:
-
-            score += 60
-
-        elif (
-            normalized_query
-            and normalized_query in normalized_game
-        ):
-
-            score += 40
-
-        if detected_game:
-
-            score += (
-                similarity(
-                    game,
-                    detected_game
-                )
-                * 30
-            )
-
-    # ========================================================
-    # DESCRIPTION
-    # ========================================================
-
-    if (
-        normalized_query
-        and normalized_query in normalize_text(
-            description
-        )
-    ):
-
-        score += 15
-
-    # ========================================================
-    # CATEGORY
-    # ========================================================
-
-    if (
-        normalized_query
-        and normalized_query in normalize_text(
-            category
-        )
-    ):
-
-        score += 8
-
-    # ========================================================
-    # FEATURED
-    # ========================================================
-
-    if script.get(
-        "featured",
-        False
-    ):
-
-        score += 5
-
-    return score
-
-# ============================================================
-# SEARCH
-# ============================================================
-
-def search_fime_scripts(
-    scripts,
-    query,
-    detected_game
-):
-
-    results = []
-
-    for script in scripts:
-
-        if not isinstance(
-            script,
-            dict
-        ):
-
-            continue
-
-        if detected_game:
-
-            if not script_matches_game(
-                script,
-                detected_game
-            ):
-
-                continue
-
-        score = score_script(
-            script,
-            query,
-            detected_game
-        )
-
-        if score < 20:
-
-            continue
-
-        result = dict(
-            script
-        )
-
-        result["_search_score"] = score
-
-        results.append(
-            result
-        )
-
-    results.sort(
-        key=lambda item: (
-            item.get(
-                "_search_score",
-                0
-            ),
-            bool(
-                item.get(
-                    "featured",
-                    False
-                )
-            ),
-            get_script_id(item) or 0
-        ),
-        reverse=True
-    )
-
-    return results[
-        :MAX_RESULTS
-    ]
-
-# ============================================================
-# RESULT EMBED
-# ============================================================
-
-def make_result_embed(
-    query,
-    detected_game,
-    detection_score,
-    results
-):
-
-    embed = discord.Embed(
-        title="🔎 نتائج البحث — Team Fime",
-        description=(
-            f"**البحث:** `{query}`\n"
-            f"**اللعبة:** "
-            f"`{detected_game or 'غير محددة'}`\n"
-            f"**عدد النتائج:** `{len(results)}`"
-        ),
-        color=discord.Color.blurple()
-    )
-
-    if detected_game:
-
-        embed.add_field(
-            name="🧠 التعرف على اللعبة",
-            value=(
-                f"`{detected_game}`\n"
-                f"دقة التعرف: "
-                f"`{detection_score * 100:.0f}%`"
-            ),
-            inline=False
-        )
-
-    for index, script in enumerate(
-        results[
-            :MAX_RESULTS
-        ],
-        start=1
-    ):
-
-        title = get_script_title(
-            script
-        )
-
-        game = get_script_game(
-            script
-        ) or "غير محددة"
-
-        url = get_script_url(
-            script
-        )
-
-        if url:
-
-            value = (
-                f"🎮 **اللعبة:** {game}\n"
-                f"🔗 [فتح السكربت]({url})"
-            )
-
-        else:
-
-            value = (
-                f"🎮 **اللعبة:** {game}\n"
-                "⚠️ لا يوجد رابط للسكربت"
-            )
-
-        score = script.get(
-            "_search_score",
-            0
-        )
-
-        value += (
-            f"\n📊 التطابق: `{score:.0f}`"
-        )
-
-        embed.add_field(
-            name=f"{index}. {title}",
-            value=value,
-            inline=False
-        )
-
-    embed.set_footer(
-        text="Team Fime • Smart Script Search"
-    )
-
-    return embed
-
-# ============================================================
-# BUTTONS
-# ============================================================
-
-class SearchView(
-    discord.ui.View
-):
-
-    def __init__(
-        self
-    ):
-
-        super().__init__(
-            timeout=180
-        )
-
-        self.add_item(
-            discord.ui.Button(
-                label="🌐 فتح Fime Scripts",
-                url=(
-                    f"{FIME_WEBSITE_URL}/scripts"
-                )
-            )
-        )
-
-# ============================================================
-# SEARCH FUNCTION
-# ============================================================
-
-async def perform_search(
-    query: str
-):
-
-    detected_game, detection_score = detect_game(
-        query
-    )
-
-    print(
-        f"[bot4] Search='{query}' | "
-        f"Game='{detected_game}' | "
-        f"Detection={detection_score:.2f}"
-    )
-
-    fime_scripts = await fetch_fime_scripts()
-
-    results = search_fime_scripts(
-        fime_scripts,
-        query,
-        detected_game
-    )
-
-    print(
-        f"[bot4] Fime total={len(fime_scripts)} | "
-        f"Results={len(results)}"
-    )
-
-    return (
-        detected_game,
-        detection_score,
-        fime_scripts,
-        results
-    )
-
-# ============================================================
-# NO RESULTS EMBED
-# ============================================================
-
-def make_no_results_embed(
-    query,
-    detected_game,
-    detection_score
-):
-
-    if detected_game:
-
-        description = (
-            f"لم أجد سكربتات متاحة حاليًا "
-            f"للعبة **{detected_game}**.\n\n"
-            "جرّب اسمًا آخر أو جرّب البحث "
-            "بالإنجليزي."
-        )
-
-    else:
-
-        description = (
-            f"لم أتمكن من العثور على نتائج "
-            f"مطابقة لـ **{query}**.\n\n"
-            "جرّب اسم اللعبة بالعربي "
-            "أو الإنجليزي."
-        )
-
-    embed = discord.Embed(
-        title="🔎 لم نجد نتائج",
-        description=description,
-        color=discord.Color.orange()
-    )
-
-    if detected_game:
-
-        embed.add_field(
-            name="🧠 اللعبة المتعرف عليها",
-            value=(
-                f"`{detected_game}`\n"
-                f"دقة التعرف: "
-                f"`{detection_score * 100:.0f}%`"
-            ),
-            inline=False
-        )
-
-    embed.add_field(
-        name="🌐 Fime Scripts",
-        value=(
-            f"[فتح موقع Fime]("
-            f"{FIME_WEBSITE_URL}/scripts)"
-        ),
-        inline=False
-    )
-
-    embed.set_footer(
-        text="Team Fime • Smart Search"
-    )
-
-    return embed
-
-# ============================================================
-# COG
-# ============================================================
-
-class ScriptSearchCog(
-    commands.Cog
-):
-
-    def __init__(
-        self,
-        bot
-    ):
+    def __init__(self, bot):
 
         self.bot = bot
 
         init_database()
 
-        print(
-            "✅ Team Fime bot4.py — "
-            "Smart Script Search loaded."
-        )
-
     # ========================================================
-    # SET SEARCH ROOM
+    # /setscriptroom
     # ========================================================
 
     @app_commands.command(
         name="setscriptroom",
-        description="تحديد روم البحث عن السكربتات"
+        description="تحديد روم البحث عن الألعاب"
     )
-    @app_commands.default_permissions(
-        manage_guild=True
+    @app_commands.describe(
+        channel="الروم الذي سيتم البحث داخله"
     )
+    @app_commands.default_permissions(manage_guild=True)
     async def setscriptroom(
         self,
         interaction: discord.Interaction,
         channel: discord.TextChannel
     ):
 
-        if not interaction.guild:
-
-            await interaction.response.send_message(
-                "❌ هذا الأمر يعمل داخل السيرفر فقط.",
-                ephemeral=True
-            )
-
-            return
-
-        if not interaction.user.guild_permissions.manage_guild:
-
-            await interaction.response.send_message(
-                "❌ تحتاج صلاحية Manage Server.",
-                ephemeral=True
-            )
-
-            return
-
-        set_search_channel(
-            interaction.guild.id,
+        set_setting(
+            "search_channel_id",
             channel.id
         )
 
         await interaction.response.send_message(
-            (
-                "✅ تم تحديد روم البحث بنجاح.\n\n"
-                f"🔎 روم البحث: {channel.mention}\n\n"
-                "الآن اكتب اسم اللعبة مباشرة داخل الروم."
-            ),
+            f"✅ تم تحديد روم البحث:\n{channel.mention}",
             ephemeral=True
         )
 
     # ========================================================
-    # SHOW SEARCH ROOM
+    # /scriptroom
     # ========================================================
 
     @app_commands.command(
@@ -1409,36 +300,25 @@ class ScriptSearchCog(
         interaction: discord.Interaction
     ):
 
-        if not interaction.guild:
-
-            await interaction.response.send_message(
-                "❌ هذا الأمر يعمل داخل السيرفر فقط.",
-                ephemeral=True
-            )
-
-            return
-
-        channel_id = get_search_channel(
-            interaction.guild.id
-        )
+        channel_id = get_setting("search_channel_id")
 
         if not channel_id:
 
             await interaction.response.send_message(
-                "⚠️ لم يتم تحديد روم البحث حتى الآن.",
+                "❌ لم يتم تحديد روم البحث حتى الآن.",
                 ephemeral=True
             )
 
             return
 
-        channel = interaction.guild.get_channel(
-            channel_id
+        channel = self.bot.get_channel(
+            int(channel_id)
         )
 
         if not channel:
 
             await interaction.response.send_message(
-                "⚠️ الروم المحدد لم يعد موجودًا.",
+                "⚠️ روم البحث المحفوظ لم يعد موجودًا.",
                 ephemeral=True
             )
 
@@ -1450,15 +330,15 @@ class ScriptSearchCog(
         )
 
     # ========================================================
-    # MANUAL SEARCH COMMAND
+    # /searchscript
     # ========================================================
 
     @app_commands.command(
         name="searchscript",
-        description="البحث عن سكربتات لعبة معينة"
+        description="البحث عن لعبة"
     )
     @app_commands.describe(
-        game="اكتب اسم اللعبة"
+        game="اسم اللعبة"
     )
     async def searchscript(
         self,
@@ -1466,236 +346,120 @@ class ScriptSearchCog(
         game: str
     ):
 
-        if not interaction.guild:
+        await self.perform_search(
+            interaction.channel,
+            game,
+            interaction.user
+        )
+
+        if not interaction.response.is_done():
 
             await interaction.response.send_message(
-                "❌ هذا الأمر يعمل داخل السيرفر فقط.",
+                "✅ تم البحث.",
                 ephemeral=True
-            )
-
-            return
-
-        game = game.strip()
-
-        if not game:
-
-            await interaction.response.send_message(
-                "❌ اكتب اسم اللعبة.",
-                ephemeral=True
-            )
-
-            return
-
-        if len(game) > 100:
-
-            await interaction.response.send_message(
-                "❌ اسم اللعبة طويل جدًا.",
-                ephemeral=True
-            )
-
-            return
-
-        await interaction.response.defer()
-
-        try:
-
-            (
-                detected_game,
-                detection_score,
-                fime_scripts,
-                results
-            ) = await perform_search(
-                game
-            )
-
-            if not results:
-
-                embed = make_no_results_embed(
-                    game,
-                    detected_game,
-                    detection_score
-                )
-
-                await interaction.followup.send(
-                    embed=embed,
-                    view=SearchView()
-                )
-
-                return
-
-            embed = make_result_embed(
-                game,
-                detected_game,
-                detection_score,
-                results
-            )
-
-            await interaction.followup.send(
-                embed=embed,
-                view=SearchView()
-            )
-
-        except Exception as error:
-
-            print(
-                f"[bot4] MANUAL SEARCH ERROR: "
-                f"{repr(error)}"
-            )
-
-            await interaction.followup.send(
-                embed=discord.Embed(
-                    title="❌ حدث خطأ أثناء البحث",
-                    description=(
-                        "حدث خطأ أثناء الاتصال "
-                        "بنظام Fime Scripts.\n\n"
-                        "حاول مرة أخرى بعد قليل."
-                    ),
-                    color=discord.Color.red()
-                )
             )
 
     # ========================================================
-    # AUTOMATIC SEARCH
+    # البحث التلقائي
     # ========================================================
 
     @commands.Cog.listener()
-    async def on_message(
-        self,
-        message: discord.Message
-    ):
+    async def on_message(self, message):
 
+        # تجاهل البوتات
         if message.author.bot:
             return
 
-        if not message.guild:
-            return
-
-        configured_channel = get_search_channel(
-            message.guild.id
+        search_channel_id = get_setting(
+            "search_channel_id"
         )
 
-        if not configured_channel:
+        if not search_channel_id:
             return
-
-        if message.channel.id != configured_channel:
-            return
-
-        query = message.content.strip()
-
-        if not query:
-            return
-
-        if len(query) > 100:
-
-            await message.reply(
-                "❌ اسم اللعبة طويل جدًا.",
-                mention_author=False,
-                delete_after=5
-            )
-
-            return
-
-        if SEARCH_DELAY > 0:
-
-            await asyncio.sleep(
-                SEARCH_DELAY
-            )
-
-        if DELETE_SEARCH_MESSAGE:
-
-            try:
-
-                await message.delete()
-
-            except discord.HTTPException:
-
-                pass
-
-        searching_message = await message.channel.send(
-            f"🔎 **جاري البحث عن:** `{query}`"
-        )
 
         try:
-
-            (
-                detected_game,
-                detection_score,
-                fime_scripts,
-                results
-            ) = await perform_search(
-                query
+            search_channel_id = int(
+                search_channel_id
             )
+        except ValueError:
+            return
 
-            if not results:
+        # التأكد أن الرسالة في الروم المحدد
+        if message.channel.id != search_channel_id:
+            return
 
-                embed = make_no_results_embed(
-                    query,
-                    detected_game,
-                    detection_score
-                )
+        content = message.content.strip()
 
-                await searching_message.edit(
-                    content=None,
-                    embed=embed,
-                    view=SearchView()
-                )
+        if not content:
+            return
 
-                return
+        game = find_game(content)
 
-            embed = make_result_embed(
-                query,
-                detected_game,
-                detection_score,
-                results
-            )
+        if not game:
+            return
 
-            await searching_message.edit(
-                content=None,
-                embed=embed,
-                view=SearchView()
-            )
+        await self.perform_search(
+            message.channel,
+            game,
+            message.author
+        )
 
-        except Exception as error:
+    # ========================================================
+    # تنفيذ البحث
+    # ========================================================
 
-            print(
-                f"[bot4] SEARCH ERROR: "
-                f"{repr(error)}"
-            )
+    async def perform_search(
+        self,
+        channel,
+        game_name,
+        user
+    ):
 
-            error_embed = discord.Embed(
-                title="❌ حدث خطأ أثناء البحث",
+        # لا توجد مواقع
+        if not SAFE_SITES:
+
+            embed = discord.Embed(
+                title="⚠️ لم يتم إضافة مواقع البحث",
                 description=(
-                    "حدث خطأ أثناء الاتصال "
-                    "بنظام Fime Scripts.\n\n"
-                    "حاول البحث مرة أخرى بعد قليل."
+                    "صاحب البوت لم يضف مواقع البحث الآمنة "
+                    "حتى الآن."
                 ),
-                color=discord.Color.red()
+                color=discord.Color.orange()
             )
 
-            try:
+            await channel.send(
+                embed=embed
+            )
 
-                await searching_message.edit(
-                    content=None,
-                    embed=error_embed,
-                    view=None
-                )
+            return
 
-            except discord.HTTPException:
+        embed = discord.Embed(
+            title="🔎 تم العثور على اللعبة",
+            description=(
+                f"**اللعبة:** `{game_name}`\n\n"
+                "اختر الموقع الذي تريد البحث فيه:"
+            ),
+            color=discord.Color.blurple()
+        )
 
-                pass
+        embed.set_footer(
+            text=f"طلب البحث بواسطة {user.display_name}"
+        )
+
+        view = SearchButtons(game_name)
+
+        await channel.send(
+            embed=embed,
+            view=view
+        )
+
 
 # ============================================================
 # SETUP
 # ============================================================
 
-async def setup(
-    bot: commands.Bot
-):
+async def setup(bot):
 
     await bot.add_cog(
-        ScriptSearchCog(bot)
-    )
-
-    print(
-        "✅ تم تشغيل Team Fime bot4.py بالكامل."
+        Bot4(bot)
     )
