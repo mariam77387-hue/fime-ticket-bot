@@ -1,10 +1,11 @@
-============================================================
+# ============================================================
 # Team Fime AI
 # ai.py
 # Fime AI — Groq Edition
 # Strong Gulf Personality + Memory + Server Knowledge
 # ============================================================
 
+from __future__ import annotations
 from __future__ import annotations
 
 import os
