@@ -194,10 +194,10 @@ async def post_random_script():
         except Exception as e:
             pass
 
-BOT_TOKEN = os.getenv('DISCORD_BOT_TOKEN')
+    TOKEN = os.getenv('TOKEN')
 
 if __name__ == '__main__':
     if not BOT_TOKEN:
-        print("ERROR: DISCORD_BOT_TOKEN environment variable is not set!")
+        print("ERROR: TOKEN environment variable is not set!")
     else:
-        bot.run(BOT_TOKEN)
+        bot.run(TOKEN)
