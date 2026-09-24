@@ -637,7 +637,7 @@ class FimeLibrary(commands.Cog):
     # ========================================================
 
     @app_commands.command(
-        name="search",
+        name="fime_search",
         description="ابحث عن سكربت باسم الماب أو اللعبة"
     )
     async def search_scripts(
