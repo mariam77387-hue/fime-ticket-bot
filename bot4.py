@@ -960,15 +960,24 @@ async def fetch_search_results_20(query, mode="free", **filters):
             if len(results) >= 20:
                 return SearchResults(results[:20], query, mode, sort, key_filter), None
 
-    return SearchResults(results[:20], query, mode, sort, key_filter), None
+        return SearchResults(results[:20], query, mode, sort, key_filter), None
 
 
-    # ========================================================
-    # IMPORTANT:
-    # bot4.py is loaded as an extension by the main bot.
-    # Slash-command synchronization must be handled by the
-    # main bot, not by this temporary extension bot.
-    # ========================================================
+# ============================================================
+# TEMPORARY EXTENSION BOT
+# ============================================================
+
+class MyBot(commands.Bot):
+
+    def __init__(
+        self,
+        *args,
+        **kwargs
+    ):
+        super().__init__(
+            *args,
+            **kwargs
+        )
 
     async def setup_hook(self):
         pass
