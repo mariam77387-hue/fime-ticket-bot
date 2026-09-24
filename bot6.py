@@ -19,6 +19,7 @@ import random
 import xml.etree.ElementTree as ET
 from datetime import datetime, timezone
 from urllib.parse import quote_plus
+from datetime import timedelta
 
 import aiohttp
 import discord
@@ -162,6 +163,17 @@ ROBLOX_GAME_DETAILS_URL = (
 GOOGLE_NEWS_RSS_URL = (
     "https://news.google.com/rss/search"
 )
+
+# Optional lightweight AI fallback.
+# If GEMINI_API_KEY exists, it is used only when web search is empty
+# or when the owner explicitly enables AI fallback in the watcher.
+GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "").strip()
+GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-2.5-flash").strip()
+AI_FALLBACK_ENABLED = os.getenv("STOCK_AI_FALLBACK", "true").lower() not in ("false", "0", "no", "off")
+
+DEFAULT_WATCH_INTERVAL_MINUTES = 120
+MIN_WATCH_INTERVAL_MINUTES = 60
+MAX_WATCH_INTERVAL_MINUTES = 1440
 
 
 
@@ -341,9 +353,23 @@ def setup_database():
             query TEXT NOT NULL,
             last_fingerprint TEXT,
             updated_at TEXT NOT NULL,
+            interval_minutes INTEGER NOT NULL DEFAULT 120,
+            ai_fallback INTEGER NOT NULL DEFAULT 1,
+            random_mode INTEGER NOT NULL DEFAULT 0,
             PRIMARY KEY (guild_id, channel_id, game_name)
         )
     """)
+
+    # Upgrade older bot6 databases without destroying existing data.
+    watcher_columns = {
+        row[1] for row in cur.execute("PRAGMA table_info(event_watchers)").fetchall()
+    }
+    if "interval_minutes" not in watcher_columns:
+        cur.execute("ALTER TABLE event_watchers ADD COLUMN interval_minutes INTEGER NOT NULL DEFAULT 120")
+    if "ai_fallback" not in watcher_columns:
+        cur.execute("ALTER TABLE event_watchers ADD COLUMN ai_fallback INTEGER NOT NULL DEFAULT 1")
+    if "random_mode" not in watcher_columns:
+        cur.execute("ALTER TABLE event_watchers ADD COLUMN random_mode INTEGER NOT NULL DEFAULT 0")
 
     cur.execute("""
         CREATE TABLE IF NOT EXISTS notification_roles (
@@ -1883,76 +1909,110 @@ async def fetch_steal_stock(
 # ============================================================
 
 
-async def roblox_game_search(session, query, limit=GENERAL_SEARCH_LIMIT):
+ARABIC_GAME_ALIASES = {
+    "سرقة البيض": ["Steal An Egg", "Steal a Egg"],
+    "سرقه البيض": ["Steal An Egg", "Steal a Egg"],
+    "سرقة عقل": ["Steal a Brainrot", "Steal A Brainrot"],
+    "سرقه عقل": ["Steal a Brainrot", "Steal A Brainrot"],
+    "المزرعة": ["Grow a Garden"],
+    "مزرعة": ["Grow a Garden"],
+    "جرو جاردن": ["Grow a Garden"],
+    "بلوكس فروت": ["Blox Fruits"],
+    "بلوك فروت": ["Blox Fruits"],
+    "بلوكس فروتس": ["Blox Fruits"],
+    "بوكس فروت": ["Blox Fruits"],
+    "البات": ["update patch Roblox"],
+    "حدث": ["Roblox event update"],
+    "احداث": ["Roblox events update"],
+    "أحداث": ["Roblox events update"],
+}
 
+def normalize_arabic_query(query):
+    text = re.sub(r"[إأآا]", "ا", str(query or "").lower())
+    text = text.replace("ة", "ه").replace("ى", "ي")
+    text = re.sub(r"\s+", " ", text).strip()
+    return text
+
+
+def expand_search_queries(query):
+    original = str(query or "").strip()
+    normalized = normalize_arabic_query(original)
+    candidates = [original]
+    for alias, replacements in ARABIC_GAME_ALIASES.items():
+        if normalize_arabic_query(alias) in normalized:
+            candidates.extend(replacements)
+    if any("عرب" in token for token in normalized.split()):
+        candidates.append(original.replace("عربي", ""))
+    # Always keep an Arabic Google search query first.
+    candidates.extend([
+        f"{original} روبلوكس",
+        f"{original} تحديث روبلوكس",
+        f"{original} حدث روبلوكس",
+    ])
+    out=[]
+    seen=set()
+    for q in candidates:
+        q=str(q).strip()
+        if q and q.lower() not in seen:
+            seen.add(q.lower()); out.append(q)
+    return out[:10]
+
+
+async def roblox_game_search(session, query, limit=GENERAL_SEARCH_LIMIT):
     query = str(query or "").strip()
     if not query:
         return []
-
-    params = {
-        "model.keyword": query,
-        "model.maxRows": min(max(int(limit), 1), 25),
-        "model.startRows": 0,
-    }
-
-    try:
-        timeout = aiohttp.ClientTimeout(total=12)
-        async with session.get(
-            ROBLOX_GAME_SEARCH_URL,
-            params=params,
-            timeout=timeout,
-            headers={"User-Agent": "Team-Fime/1.0"},
-        ) as response:
-            if response.status != 200:
-                return []
-            data = await response.json(content_type=None)
-
-        rows = data.get("games", []) if isinstance(data, dict) else []
-        results = []
-        for row in rows:
-            if not isinstance(row, dict):
-                continue
-            universe_id = row.get("universeId") or row.get("id")
-            if not universe_id:
-                continue
-            results.append({
-                "universe_id": int(universe_id),
-                "name": str(row.get("name") or "Roblox Game").strip(),
-                "description": str(row.get("description") or "").strip(),
-                "creator": str(row.get("creatorName") or row.get("creator") or "Unknown").strip(),
-                "place_id": row.get("placeId"),
-            })
-        return results[:limit]
-    except Exception as error:
-        print("⚠️ Roblox game search error:", error)
-        return []
+    # Roblox search is English-biased, so Arabic aliases are expanded locally.
+    search_terms = expand_search_queries(query)
+    for term in search_terms:
+        if any(ch >= "\u0600" and ch <= "\u06ff" for ch in term):
+            continue
+        params = {
+            "model.keyword": term,
+            "model.maxRows": min(max(int(limit), 1), 25),
+            "model.startRows": 0,
+        }
+        try:
+            timeout = aiohttp.ClientTimeout(total=12)
+            async with session.get(ROBLOX_GAME_SEARCH_URL, params=params, timeout=timeout,
+                                   headers={"User-Agent": "Team-Fime/2.0"}) as response:
+                if response.status != 200:
+                    continue
+                data = await response.json(content_type=None)
+            rows = data.get("games", []) if isinstance(data, dict) else []
+            results=[]
+            for row in rows:
+                if not isinstance(row, dict):
+                    continue
+                uid=row.get("universeId") or row.get("id")
+                if not uid: continue
+                results.append({
+                    "universe_id": int(uid),
+                    "name": str(row.get("name") or "Roblox Game").strip(),
+                    "description": str(row.get("description") or "").strip(),
+                    "creator": str(row.get("creatorName") or row.get("creator") or "غير معروف").strip(),
+                    "place_id": row.get("placeId"),
+                })
+            if results:
+                return results[:limit]
+        except Exception as error:
+            print("⚠️ Roblox game search error:", error)
+    return []
 
 
 async def roblox_game_details(session, universe_ids):
-
-    ids = []
+    ids=[]
     for value in universe_ids:
-        try:
-            ids.append(int(value))
-        except Exception:
-            pass
-
-    if not ids:
-        return []
-
+        try: ids.append(int(value))
+        except Exception: pass
+    if not ids: return []
     try:
-        params = {"universeIds": ",".join(map(str, ids[:50]))}
-        timeout = aiohttp.ClientTimeout(total=12)
-        async with session.get(
-            ROBLOX_GAME_DETAILS_URL,
-            params=params,
-            timeout=timeout,
-            headers={"User-Agent": "Team-Fime/1.0"},
-        ) as response:
-            if response.status != 200:
-                return []
-            data = await response.json(content_type=None)
-
+        timeout=aiohttp.ClientTimeout(total=12)
+        async with session.get(ROBLOX_GAME_DETAILS_URL,
+                               params={"universeIds": ",".join(map(str, ids[:50]))},
+                               timeout=timeout, headers={"User-Agent":"Team-Fime/2.0"}) as response:
+            if response.status != 200: return []
+            data=await response.json(content_type=None)
         return data.get("data", []) if isinstance(data, dict) else []
     except Exception as error:
         print("⚠️ Roblox game details error:", error)
@@ -1960,108 +2020,91 @@ async def roblox_game_details(session, universe_ids):
 
 
 async def general_roblox_search(session, query, limit=GENERAL_SEARCH_LIMIT):
-
-    """General Roblox search: games + live player counts + basic metadata."""
-
-    games = await roblox_game_search(session, query, limit)
-    if not games:
-        return {"games": [], "news": []}
-
-    details = await roblox_game_details(
-        session,
-        [game["universe_id"] for game in games]
-    )
-    by_id = {int(row.get("id")): row for row in details if row.get("id")}
-
+    games=await roblox_game_search(session, query, limit)
+    if not games: return {"games": [], "news": []}
+    details=await roblox_game_details(session, [g["universe_id"] for g in games])
+    by_id={int(r.get("id")):r for r in details if r.get("id")}
     for game in games:
-        row = by_id.get(game["universe_id"], {})
-        game["playing"] = int(row.get("playing") or 0)
-        game["visits"] = int(row.get("visits") or 0)
-        game["favorites"] = int(row.get("favoritedCount") or 0)
-        game["updated"] = row.get("updated") or row.get("created") or ""
-        game["root_place_id"] = row.get("rootPlaceId") or game.get("place_id")
-
-    return {"games": games, "news": []}
+        row=by_id.get(game["universe_id"], {})
+        game["playing"]=int(row.get("playing") or 0)
+        game["visits"]=int(row.get("visits") or 0)
+        game["favorites"]=int(row.get("favoritedCount") or 0)
+        game["updated"]=row.get("updated") or row.get("created") or ""
+        game["root_place_id"]=row.get("rootPlaceId") or game.get("place_id")
+    return {"games":games,"news":[]}
 
 
 async def general_news_search(session, query, limit=8):
+    query=str(query or "").strip()
+    if not query: return []
+    results=[]
+    # Arabic-first: Google News is asked for Arabic/Saudi results, then a second Arabic query.
+    queries=[query, f"{query} روبلوكس", f"{query} تحديث", f"{query} حدث"]
+    seen=set()
+    for q in queries:
+        try:
+            params={"q":q,"hl":"ar","gl":"SA","ceid":"SA:ar"}
+            timeout=aiohttp.ClientTimeout(total=15)
+            async with session.get(GOOGLE_NEWS_RSS_URL, params=params, timeout=timeout,
+                                   headers={"User-Agent":"Team-Fime/2.0"}) as response:
+                if response.status != 200: continue
+                raw=await response.text()
+            root=ET.fromstring(raw)
+            for item in root.findall("./channel/item")[:limit]:
+                title=html.unescape((item.findtext("title") or "").strip())
+                link=(item.findtext("link") or "").strip()
+                pub=(item.findtext("pubDate") or "").strip()
+                if not title: continue
+                key=title.casefold()
+                if key in seen: continue
+                seen.add(key)
+                results.append({"title":title,"link":link,"published":pub,"source":""})
+                if len(results)>=limit: return results
+        except Exception as error:
+            print("⚠️ Arabic news search error:", error)
+    return results
 
-    """Public RSS search used for events, updates, pets, eggs, rarity, etc."""
 
-    query = str(query or "").strip()
-    if not query:
-        return []
-
+async def gemini_fallback(session, query):
+    if not AI_FALLBACK_ENABLED or not GEMINI_API_KEY:
+        return None
+    prompt=(
+        "اكتب ردًا عربيًا مختصرًا ودقيقًا عن الشيء التالي في Roblox. "
+        "إذا كانت المعلومة غير مؤكدة قل إنها غير مؤكدة ولا تخترع تفاصيل. "
+        "ركز على الأحداث والتحديثات والحيوانات والبيض والندرة والأشياء الجديدة.\n\n"
+        f"البحث: {query}"
+    )
+    url=f"https://generativelanguage.googleapis.com/v1beta/models/{quote_plus(GEMINI_MODEL)}:generateContent"
     try:
-        params = {
-            "q": query,
-            "hl": "ar",
-            "gl": "SA",
-            "ceid": "SA:ar",
-        }
-        timeout = aiohttp.ClientTimeout(total=15)
-        async with session.get(
-            GOOGLE_NEWS_RSS_URL,
-            params=params,
-            timeout=timeout,
-            headers={"User-Agent": "Team-Fime/1.0"},
-        ) as response:
-            if response.status != 200:
-                return []
-            raw = await response.text()
-
-        root = ET.fromstring(raw)
-        results = []
-        for item in root.findall("./channel/item")[:limit]:
-            title = (item.findtext("title") or "").strip()
-            link = (item.findtext("link") or "").strip()
-            pub = (item.findtext("pubDate") or "").strip()
-            source = item.find("source")
-            source_name = (source.text or "").strip() if source is not None else ""
-            if title:
-                results.append({
-                    "title": html.unescape(title),
-                    "link": link,
-                    "published": pub,
-                    "source": source_name,
-                })
-        return results
+        async with session.post(url, params={"key":GEMINI_API_KEY}, json={
+            "contents":[{"parts":[{"text":prompt}]}],
+            "generationConfig":{"temperature":0.2,"maxOutputTokens":500},
+        }, timeout=aiohttp.ClientTimeout(total=20)) as response:
+            if response.status != 200: return None
+            data=await response.json(content_type=None)
+        parts=data.get("candidates", [{}])[0].get("content", {}).get("parts", [])
+        text="\n".join(str(p.get("text","")) for p in parts if p.get("text"))
+        return text.strip() or None
     except Exception as error:
-        print("⚠️ General event/news search error:", error)
-        return []
+        print("⚠️ Gemini fallback error:", error)
+        return None
 
 
 async def general_game_intelligence(session, query):
-
-    """Search anything related to a Roblox map/game without pretending data is live."""
-
-    query = str(query or "").strip()
-    if not query:
-        return None
-
-    roblox = await general_roblox_search(session, query, GENERAL_SEARCH_LIMIT)
-    news_queries = [
-        f'Roblox "{query}" update event',
-        f'Roblox "{query}" new update pets eggs rarity',
-    ]
-
-    news = []
-    seen = set()
-    for news_query in news_queries:
-        for item in await general_news_search(session, news_query, 6):
-            key = item.get("title", "").lower()
-            if key and key not in seen:
-                seen.add(key)
-                news.append(item)
-            if len(news) >= 10:
-                break
-        if len(news) >= 10:
-            break
-
-    roblox["news"] = news
-    roblox["query"] = query
+    query=str(query or "").strip()
+    if not query: return None
+    roblox=await general_roblox_search(session, query, GENERAL_SEARCH_LIMIT)
+    news=await general_news_search(session, query, 10)
+    # If search is weak, try aliases/expanded Arabic queries.
+    if not news:
+        for expanded in expand_search_queries(query)[1:5]:
+            news=await general_news_search(session, expanded, 8)
+            if news: break
+    roblox["news"]=news
+    roblox["query"]=query
+    if not roblox["games"] and not news:
+        roblox["ai"] = await gemini_fallback(session, query)
     return roblox
-
 
 def event_fingerprint(items):
     return "|".join(
@@ -2070,58 +2113,31 @@ def event_fingerprint(items):
     )
 
 
-def set_event_watcher(guild_id, channel_id, game_name, query):
-    conn = get_db()
+def set_event_watcher(guild_id, channel_id, game_name, query, interval_minutes=DEFAULT_WATCH_INTERVAL_MINUTES, ai_fallback=True, random_mode=False):
+    interval_minutes=max(MIN_WATCH_INTERVAL_MINUTES, min(MAX_WATCH_INTERVAL_MINUTES, int(interval_minutes)))
+    conn=get_db()
     conn.execute("""
         INSERT INTO event_watchers
-        (guild_id, channel_id, game_name, query, last_fingerprint, updated_at)
-        VALUES (?, ?, ?, ?, '', ?)
+        (guild_id, channel_id, game_name, query, last_fingerprint, updated_at, interval_minutes, ai_fallback, random_mode)
+        VALUES (?, ?, ?, ?, '', ?, ?, ?, ?)
         ON CONFLICT(guild_id, channel_id, game_name)
-        DO UPDATE SET query=excluded.query, updated_at=excluded.updated_at
-    """, (
-        guild_id, channel_id, game_name, query,
-        datetime.now(timezone.utc).isoformat(),
-    ))
-    conn.commit()
-    conn.close()
+        DO UPDATE SET query=excluded.query, updated_at=excluded.updated_at,
+                      interval_minutes=excluded.interval_minutes, ai_fallback=excluded.ai_fallback,
+                      random_mode=excluded.random_mode
+    """, (guild_id,channel_id,game_name,query,"",interval_minutes,1 if ai_fallback else 0,1 if random_mode else 0))
+    conn.commit(); conn.close()
 
 
 def remove_event_watcher(guild_id, channel_id, game_name):
-    conn = get_db()
-    conn.execute("""
-        DELETE FROM event_watchers
-        WHERE guild_id=? AND channel_id=? AND game_name=?
-    """, (guild_id, channel_id, game_name))
-    conn.commit()
-    conn.close()
+    conn=get_db(); conn.execute("DELETE FROM event_watchers WHERE guild_id=? AND channel_id=? AND game_name=?", (guild_id,channel_id,game_name)); conn.commit(); conn.close()
 
 
 def get_event_watchers():
-    conn = get_db()
-    rows = conn.execute("""
-        SELECT guild_id, channel_id, game_name, query, last_fingerprint
-        FROM event_watchers
-    """).fetchall()
-    conn.close()
-    return [dict(row) for row in rows]
+    conn=get_db(); rows=conn.execute("SELECT guild_id,channel_id,game_name,query,last_fingerprint,updated_at,interval_minutes,ai_fallback,random_mode FROM event_watchers").fetchall(); conn.close(); return [dict(r) for r in rows]
 
 
 def update_event_fingerprint(guild_id, channel_id, game_name, fingerprint):
-    conn = get_db()
-    conn.execute("""
-        UPDATE event_watchers
-        SET last_fingerprint=?, updated_at=?
-        WHERE guild_id=? AND channel_id=? AND game_name=?
-    """, (
-        fingerprint,
-        datetime.now(timezone.utc).isoformat(),
-        guild_id,
-        channel_id,
-        game_name,
-    ))
-    conn.commit()
-    conn.close()
-
+    conn=get_db(); conn.execute("UPDATE event_watchers SET last_fingerprint=?,updated_at=? WHERE guild_id=? AND channel_id=? AND game_name=?", (fingerprint,datetime.now(timezone.utc).isoformat(),guild_id,channel_id,game_name)); conn.commit(); conn.close()
 
 def build_game_intelligence_embed(query, data):
 
@@ -2170,6 +2186,13 @@ def build_game_intelligence_embed(query, data):
             inline=False,
         )
 
+    if data.get("ai"):
+        embed.add_field(
+            name="🤖 مساعد Fime",
+            value=str(data["ai"])[:1024],
+            inline=False,
+        )
+
     embed.add_field(
         name="ℹ️ وش يقدر يبحث عنه؟",
         value=(
@@ -2193,11 +2216,7 @@ def build_event_embed(game_name, news):
     lines = []
     for item in news[:8]:
         title = item.get("title", "تحديث جديد")[:180]
-        link = item.get("link") or ""
-        if link:
-            lines.append(f"• [{title}]({link})")
-        else:
-            lines.append(f"• {title}")
+        lines.append(f"• {title}")
 
     embed.description = "\n".join(lines)[:4096] if lines else "تم رصد تحديث جديد، لكن تفاصيله غير متاحة حاليًا."
     embed.set_footer(text="حقوق Fime • تنبيهات الأحداث")
@@ -4685,45 +4704,40 @@ class FimeStock(
 
     @tasks.loop(minutes=EVENT_CHECK_MINUTES)
     async def game_event_loop(self):
-
         await self.bot.wait_until_ready()
         await self.ensure_session()
-
+        now=datetime.now(timezone.utc)
         for watcher in get_event_watchers():
             try:
-                channel = self.bot.get_channel(watcher["channel_id"])
-                if channel is None:
+                channel=self.bot.get_channel(watcher["channel_id"])
+                if channel is None: continue
+                try:
+                    last=datetime.fromisoformat(watcher.get("updated_at") or "")
+                    if last.tzinfo is None: last=last.replace(tzinfo=timezone.utc)
+                except Exception:
+                    last=now-timedelta(days=1)
+                interval=max(MIN_WATCH_INTERVAL_MINUTES, int(watcher.get("interval_minutes") or DEFAULT_WATCH_INTERVAL_MINUTES))
+                if now-last < timedelta(minutes=interval):
                     continue
-
-                data = await general_game_intelligence(
-                    self.session,
-                    watcher["query"]
-                )
-                news = data.get("news", []) if data else []
-                if not news:
-                    continue
-
-                fingerprint = event_fingerprint(news)
-                old = watcher.get("last_fingerprint") or ""
-                update_event_fingerprint(
-                    watcher["guild_id"],
-                    watcher["channel_id"],
-                    watcher["game_name"],
-                    fingerprint,
-                )
-
-                if old and old == fingerprint:
-                    continue
-
-                await channel.send(
-                    embed=build_event_embed(
-                        watcher["game_name"],
-                        news,
-                    )
-                )
-
+                query=watcher["query"]
+                if watcher.get("random_mode"):
+                    buckets=["anime Roblox","horror Roblox","simulator Roblox","roleplay Roblox","obby Roblox","survival Roblox","adventure Roblox"]
+                    query=random.choice(buckets)
+                data=await general_game_intelligence(self.session, query)
+                news=data.get("news", []) if data else []
+                ai_text=data.get("ai") if data else None
+                fingerprint=event_fingerprint(news)
+                old=watcher.get("last_fingerprint") or ""
+                update_event_fingerprint(watcher["guild_id"],watcher["channel_id"],watcher["game_name"],fingerprint or old)
+                # AI is a fallback, not a replacement for actual search results.
+                if news and fingerprint != old:
+                    await channel.send(embed=build_event_embed(watcher["game_name"],news))
+                elif not news and watcher.get("ai_fallback") and ai_text:
+                    embed=discord.Embed(title=f"🤖 تحديث معلومات — {watcher['game_name']}",description=ai_text[:4096],color=discord.Color.blurple())
+                    embed.set_footer(text="حقوق Fime • معلومات مولدة عند تعذر العثور على نتيجة")
+                    await channel.send(embed=embed)
             except Exception as error:
-                print("⚠️ General game event watcher error:", error)
+                print("⚠️ General game event watcher error:",error)
 
     @game_event_loop.before_loop
     async def before_game_event_loop(self):
@@ -4764,36 +4778,24 @@ class FimeStock(
     # /STOCK WATCH — WATCH ANY ROBLOX GAME
     # ========================================================
 
-    @stock_group.command(
-        name="watch",
-        description="تحديد ماب لمراقبة أحداثه وتحديثاته في روم معين"
-    )
+    @stock_group.command(name="watch", description="مراقبة أخبار وأحداث ماب في روم وبفاصل تحدده")
     @app_commands.checks.has_permissions(manage_guild=True)
-    @app_commands.describe(
-        game="اسم الماب / اللعبة",
-        channel="الروم الذي تصله فيه الأحداث والتحديثات"
-    )
-    async def watch_game_command(self, interaction, game: str, channel: discord.TextChannel):
-
-        game = game.strip()
-        if len(game) < 2:
-            await interaction.response.send_message(
-                "❌ اكتب اسم ماب صحيح.", ephemeral=True
-            )
-            return
-
-        set_event_watcher(
-            interaction.guild.id,
-            channel.id,
-            game,
-            game,
-        )
-
+    @app_commands.describe(game="اسم الماب", channel="الروم", hours="كل كم ساعة يفحص (1 إلى 24)")
+    async def watch_game_command(self, interaction, game: str, channel: discord.TextChannel, hours: app_commands.Range[int,1,24]):
+        game=game.strip()
+        set_event_watcher(interaction.guild.id,channel.id,game,game,int(hours)*60,True,False)
         await interaction.response.send_message(
             f"✅ تم تفعيل مراقبة **{game}** في {channel.mention}.\n"
-            "البوت بيبحث عن الأحداث والتحديثات والأشياء الجديدة ويرسلها هناك.",
-            ephemeral=True,
-        )
+            f"⏱️ الفحص كل **{hours} ساعة**.\n"
+            "📰 بيراقب الأحداث والتحديثات والأشياء الجديدة والحيوانات والبيض والندرة، وإذا ما لقى نتيجة يحاول مساعد الذكاء الاصطناعي.", ephemeral=True)
+
+    @stock_group.command(name="watch-random", description="مراقبة مابات Roblox عشوائية وإرسال أخبارها")
+    @app_commands.checks.has_permissions(manage_guild=True)
+    @app_commands.describe(channel="الروم", hours="كل كم ساعة يفحص (1 إلى 24)")
+    async def watch_random_command(self, interaction, channel: discord.TextChannel, hours: app_commands.Range[int,1,24]):
+        name="🎲 مابات عشوائية"
+        set_event_watcher(interaction.guild.id,channel.id,name,"Roblox",int(hours)*60,True,True)
+        await interaction.response.send_message(f"✅ تم تفعيل مراقبة المابات العشوائية في {channel.mention} كل **{hours} ساعة**.",ephemeral=True)
 
     # ========================================================
     # /STOCK UNWATCH
@@ -4908,7 +4910,7 @@ class FimeStock(
         for row in rows:
             channel = interaction.guild.get_channel(row["channel_id"])
             mention = channel.mention if channel else f"`{row['channel_id']}`"
-            lines.append(f"• **{row['game_name']}** → {mention}")
+            lines.append(f"• **{row['game_name']}** → {mention} • كل **{int(row.get('interval_minutes') or 120)//60}س**")
 
         embed = discord.Embed(
             title="📡 مراقبة أحداث المابات",
