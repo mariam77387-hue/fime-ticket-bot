@@ -763,116 +763,118 @@ class ScriptResultSelect(discord.ui.Select):
         script = self.scripts[index]
         await interaction.response.edit_message(
             embed=create_arabic_script_embed(script, index + 1, len(self.scripts)),
-            view=ScriptDetailView(self.scripts, index)
-        )
-
-
-SORT_LABELS = {
-    "latest": "🆕 الأحدث",
-    "strongest": "🔥 الأقوى",
-}
-
-SORT_PARAMS = {
-    "latest": {"sortBy": "createdAt", "order": "desc"},
-    "strongest": {"sortBy": "views", "order": "desc"},
-}
-
-KEY_LABELS = {
-    None: "🔓 الكل",
-    False: "✅ بدون مفتاح",
-    True: "🔑 بمفتاح",
-}
-
-
-class SearchResults(list):
-    def __init__(self, items=(), query="", mode="free", sort="latest", key=None):
-        super().__init__(items)
-        self.query = query
-        self.mode = mode
-        self.sort = sort
-        self.key = key
-
-
-class ScriptResultsView(discord.ui.View):
-    def __init__(self, scripts, page=0):
+            class ScriptDetailView(discord.ui.View):
+    def __init__(self, scripts, index):
         super().__init__(timeout=180)
         self.scripts = scripts
-        self.page = page
-        self.add_item(ScriptResultSelect(scripts, page))
+        self.index = index
 
-        total_pages = max(1, (len(scripts) - 1) // 20 + 1)
-        if total_pages > 1:
-            if page > 0:
-                b = discord.ui.Button(label="◀️ السابق", style=discord.ButtonStyle.secondary, row=1)
-                b.callback = self.previous_page
-                self.add_item(b)
-            self.add_item(discord.ui.Button(
-                label=f"صفحة {page + 1}/{total_pages}",
-                style=discord.ButtonStyle.secondary,
-                disabled=True,
-                row=1
-            ))
-            if page < total_pages - 1:
-                b = discord.ui.Button(label="التالي ▶️", style=discord.ButtonStyle.secondary, row=1)
-                b.callback = self.next_page
-                self.add_item(b)
+        if index > 0:
+            b = discord.ui.Button(label="◀️ السابق", style=discord.ButtonStyle.secondary)
+            b.callback = self.previous
+            self.add_item(b)
 
-        if getattr(scripts, "query", ""):
-            cur_sort = getattr(scripts, "sort", "latest")
-            cur_key = getattr(scripts, "key", None)
+        if index < len(scripts) - 1:
+            b = discord.ui.Button(label="التالي ▶️", style=discord.ButtonStyle.secondary)
+            b.callback = self.next
+            self.add_item(b)
 
-            for sort_id, label in SORT_LABELS.items():
-                b = discord.ui.Button(
-                    label=label,
-                    style=discord.ButtonStyle.success if sort_id == cur_sort else discord.ButtonStyle.secondary,
-                    row=2
-                )
-                b.callback = self.make_filter_callback(sort_id, cur_key)
-                self.add_item(b)
+        b = discord.ui.Button(label="📋 نسخ", style=discord.ButtonStyle.success)
+        b.callback = self.copy_script
+        self.add_item(b)
 
-            for key_id, label in KEY_LABELS.items():
-                b = discord.ui.Button(
-                    label=label,
-                    style=discord.ButtonStyle.success if key_id is cur_key else discord.ButtonStyle.secondary,
-                    row=3
-                )
-                b.callback = self.make_filter_callback(cur_sort, key_id)
-                self.add_item(b)
+        b = discord.ui.Button(label="↩️ قائمة النتائج", style=discord.ButtonStyle.primary)
+        b.callback = self.back
+        self.add_item(b)
 
-    def make_filter_callback(self, new_sort, new_key):
-        async def callback(interaction):
-            await interaction.response.defer()
-            results, error = await fetch_search_results_20(
-                self.scripts.query,
-                self.scripts.mode,
-                sort=new_sort,
-                key=new_key
-            )
-            if error or not results:
-                await interaction.followup.send(
-                    "❌ ما لقيت نتائج بهذا الفلتر، جرب خيار ثاني.",
-                    ephemeral=True
-                )
-                return
-            embed = build_results_embed(results)
-            embed.add_field(name="🎮 البحث", value=f"`{results.query}`", inline=True)
-            embed.set_footer(text="حقوق Fime")
-            await interaction.edit_original_response(
-                embed=embed,
-                view=ScriptResultsView(results)
-            )
-        return callback
-
-    async def previous_page(self, interaction):
+    async def previous(self, interaction):
+        i = self.index - 1
         await interaction.response.edit_message(
-            view=ScriptResultsView(self.scripts, self.page - 1)
+            embed=create_arabic_script_embed(self.scripts[i], i + 1, len(self.scripts)),
+            view=ScriptDetailView(self.scripts, i)
         )
 
-    async def next_page(self, interaction):
+    async def next(self, interaction):
+        i = self.index + 1
         await interaction.response.edit_message(
-            view=ScriptResultsView(self.scripts, self.page + 1)
+            embed=create_arabic_script_embed(self.scripts[i], i + 1, len(self.scripts)),
+            class ScriptDetailView(discord.ui.View):
+    def __init__(self, scripts, index):
+        super().__init__(timeout=180)
+        self.scripts = scripts
+        self.index = index
+
+        if index > 0:
+            b = discord.ui.Button(label="◀️ السابق", style=discord.ButtonStyle.secondary)
+            b.callback = self.previous
+            self.add_item(b)
+
+        if index < len(scripts) - 1:
+            b = discord.ui.Button(label="التالي ▶️", style=discord.ButtonStyle.secondary)
+            b.callback = self.next
+            self.add_item(b)
+
+        b = discord.ui.Button(label="📋 نسخ", style=discord.ButtonStyle.success)
+        b.callback = self.copy_script
+        self.add_item(b)
+
+        b = discord.ui.Button(label="↩️ قائمة النتائج", style=discord.ButtonStyle.primary)
+        b.callback = self.back
+        self.add_item(b)
+
+    async def previous(self, interaction):
+        i = self.index - 1
+        await interaction.response.edit_message(
+            embed=create_arabic_script_embed(self.scripts[i], i + 1, len(self.scripts)),
+            view=ScriptDetailView(self.scripts, i)
         )
 
+    async def next(self, interaction):
+        i = self.index + 1
+        await interaction.response.edit_message(
+            embed=create_arabic_script_embed(self.scripts[i], i + 1, len(self.scripts)),
+            view=ScriptDetailView(self.scripts, i)
+        )
+
+    async def copy_script(self, interaction):
+        script = self.scripts[self.index]
+        content = str(script.get("script", "") or "").strip()
+
+        if not content:
+            raw = script.get("rawScript", "")
+            if raw:
+                content = f'loadstring(game:HttpGet("{raw}"))()'
+
+        if not content:
+            await interaction.response.send_message(
+                "❌ ما فيه كود لهذا السكربت.",
+                ephemeral=True
+            )
+            return
+
+        if len(content) <= 1990:
+            await interaction.response.send_message(
+                content,
+                ephemeral=True,
+                allowed_mentions=discord.AllowedMentions.none()
+            )
+        else:
+            import io
+            file = discord.File(
+                io.BytesIO(content.encode("utf-8")),
+                filename="script.lua"
+            )
+            await interaction.response.send_message(
+                "📜 الكود طويل، هذا ملف السكربت:",
+                file=file,
+                ephemeral=True
+            )
+
+    async def back(self, interaction):
+        await interaction.response.edit_message(
+            embed=build_results_embed(self.scripts),
+            view=ScriptResultsView(self.scripts, min(self.index // 20, max(0, (len(self.scripts)-1)//20)))
+        )
 
 
 def create_arabic_script_embed(script, number, total):
@@ -960,7 +962,36 @@ async def fetch_search_results_20(query, mode="free", **filters):
             if len(results) >= 20:
                 return SearchResults(results[:20], query, mode, sort, key_filter), None
 
-        return SearchResults(results[:20], query, mode, sort, key_filter), None
+    return SearchResults(results[:20], query, mode, sort, key_filter), None
+
+
+async def send_script_results(destination, query, scripts):
+    if not scripts:
+        text = f"❌ ما لقيت نتائج لـ **{query}**."
+        if isinstance(destination, discord.Interaction):
+            await destination.followup.send(text)
+        else:
+            await destination.send(text)
+        return
+
+    embed = build_results_embed(scripts)
+    embed.add_field(name="🎮 البحث", value=f"`{query}`", inline=True)
+    embed.set_footer(text="حقوق Fime")
+
+    if isinstance(destination, discord.Interaction):
+        await destination.followup.send(embed=embed, view=ScriptResultsView(scripts))
+    else:
+        await destination.send(embed=embed, view=ScriptResultsView(scripts))
+
+
+async def automatic_game_search(message, query):
+    resolved_query = resolve_game_query(query)
+    scripts, error = await fetch_search_results_20(resolved_query, "free")
+    if error or not scripts:
+        await message.channel.send(f"❌ ما لقيت نتائج لـ **{query}**.")
+        return
+    await send_script_results(message.channel, query, scripts)
+
 
 
 # ============================================================
