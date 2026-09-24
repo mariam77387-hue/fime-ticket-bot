@@ -763,42 +763,46 @@ class ScriptResultSelect(discord.ui.Select):
         script = self.scripts[index]
         await interaction.response.edit_message(
             embed=create_arabic_script_embed(script, index + 1, len(self.scripts)),
-            class ScriptDetailView(discord.ui.View):
-    def __init__(self, scripts, index):
-        super().__init__(timeout=180)
-        self.scripts = scripts
-        self.index = index
-
-        if index > 0:
-            b = discord.ui.Button(label="◀️ السابق", style=discord.ButtonStyle.secondary)
-            b.callback = self.previous
-            self.add_item(b)
-
-        if index < len(scripts) - 1:
-            b = discord.ui.Button(label="التالي ▶️", style=discord.ButtonStyle.secondary)
-            b.callback = self.next
-            self.add_item(b)
-
-        b = discord.ui.Button(label="📋 نسخ", style=discord.ButtonStyle.success)
-        b.callback = self.copy_script
-        self.add_item(b)
-
-        b = discord.ui.Button(label="↩️ قائمة النتائج", style=discord.ButtonStyle.primary)
-        b.callback = self.back
-        self.add_item(b)
-
-    async def previous(self, interaction):
-        i = self.index - 1
-        await interaction.response.edit_message(
-            embed=create_arabic_script_embed(self.scripts[i], i + 1, len(self.scripts)),
-            view=ScriptDetailView(self.scripts, i)
+            view=ScriptDetailView(self.scripts, index)
         )
 
-    async def next(self, interaction):
-        i = self.index + 1
+
+class ScriptResultsView(discord.ui.View):
+    def __init__(self, scripts, page=0):
+        super().__init__(timeout=180)
+        self.scripts = scripts
+        self.page = page
+        self.add_item(ScriptResultSelect(scripts, page))
+
+        total_pages = max(1, (len(scripts) - 1) // 20 + 1)
+        if total_pages > 1:
+            if page > 0:
+                b = discord.ui.Button(label="◀️ السابق", style=discord.ButtonStyle.secondary, row=1)
+                b.callback = self.previous_page
+                self.add_item(b)
+            self.add_item(discord.ui.Button(
+                label=f"صفحة {page + 1}/{total_pages}",
+                style=discord.ButtonStyle.secondary,
+                disabled=True,
+                row=1
+            ))
+            if page < total_pages - 1:
+                b = discord.ui.Button(label="التالي ▶️", style=discord.ButtonStyle.secondary, row=1)
+                b.callback = self.next_page
+                self.add_item(b)
+
+    async def previous_page(self, interaction):
         await interaction.response.edit_message(
-            embed=create_arabic_script_embed(self.scripts[i], i + 1, len(self.scripts)),
-            class ScriptDetailView(discord.ui.View):
+            view=ScriptResultsView(self.scripts, self.page - 1)
+        )
+
+    async def next_page(self, interaction):
+        await interaction.response.edit_message(
+            view=ScriptResultsView(self.scripts, self.page + 1)
+        )
+
+
+class ScriptDetailView(discord.ui.View):
     def __init__(self, scripts, index):
         super().__init__(timeout=180)
         self.scripts = scripts
@@ -877,6 +881,7 @@ class ScriptResultSelect(discord.ui.Select):
         )
 
 
+
 def create_arabic_script_embed(script, number, total):
     game = script.get("game", {})
     game_name = game.get("name", "غير معروف") if isinstance(game, dict) else "غير معروف"
@@ -912,57 +917,31 @@ def create_arabic_script_embed(script, number, total):
 
 
 def build_results_embed(scripts):
-    description = (
-        f"لقيت **{len(scripts)}** نتيجة.\n"
-        "اختَر من القائمة تحت الرسالة، وتقدر تتنقل بين النتائج والصفحات."
-    )
-    if getattr(scripts, "query", ""):
-        sort_label = SORT_LABELS.get(getattr(scripts, "sort", "latest"), "")
-        key_label = KEY_LABELS.get(getattr(scripts, "key", None), "")
-        description += f"\n\n**الترتيب:** {sort_label}\n**المفتاح:** {key_label}"
-
     return discord.Embed(
         title="🔎 نتائج البحث",
-        description=description,
+        description=(
+            f"لقيت **{len(scripts)}** نتيجة.\n"
+            "اختَر من القائمة تحت الرسالة، وتقدر تتنقل بين النتائج والصفحات."
+        ),
         color=0x7c5cff
     )
 
 
 async def fetch_search_results_20(query, mode="free", **filters):
-    sort = filters.pop("sort", "latest")
-    key_filter = filters.pop("key", None)
-
-    if sort not in SORT_PARAMS:
-        sort = "latest"
-
-    filters.update(SORT_PARAMS[sort])
-    filters.setdefault("patched", False)
-
-    if key_filter is not None:
-        filters["key"] = key_filter
-
-    loop = asyncio.get_running_loop()
     results, seen = [], set()
-
     for page in (1, 2):
-        scripts, _, error = await loop.run_in_executor(
-            None,
-            lambda p=page: fetch_scripts("scriptblox", query, mode, p, **filters)
-        )
+        scripts, _, error = fetch_scripts("scriptblox", query, mode, page, **filters)
         if error and not results:
             return [], error
-        if not scripts:
-            break
-        for script in scripts:
-            script_key = script.get("_id") or script.get("slug") or script.get("title")
-            if script_key in seen:
+        for script in scripts or []:
+            key = script.get("_id") or script.get("slug") or script.get("title")
+            if key in seen:
                 continue
-            seen.add(script_key)
+            seen.add(key)
             results.append(script)
             if len(results) >= 20:
-                return SearchResults(results[:20], query, mode, sort, key_filter), None
-
-    return SearchResults(results[:20], query, mode, sort, key_filter), None
+                return results[:20], None
+    return results[:20], None
 
 
 async def send_script_results(destination, query, scripts):
@@ -993,11 +972,6 @@ async def automatic_game_search(message, query):
     await send_script_results(message.channel, query, scripts)
 
 
-
-# ============================================================
-# TEMPORARY EXTENSION BOT
-# ============================================================
-
 class MyBot(commands.Bot):
 
     def __init__(
@@ -1009,6 +983,15 @@ class MyBot(commands.Bot):
             *args,
             **kwargs
         )
+
+        self.active_searches = {}
+
+    # ========================================================
+    # IMPORTANT:
+    # bot4.py is loaded as an extension by the main bot.
+    # Slash-command synchronization must be handled by the
+    # main bot, not by this temporary extension bot.
+    # ========================================================
 
     async def setup_hook(self):
         pass
