@@ -615,11 +615,11 @@ class ScriptDetailView(discord.ui.View):
             )
             return
 
-        if len(content) <= 1900:
-            safe = content.replace("```", "`\u200b``")
+        if len(content) <= 1990:
             await interaction.response.send_message(
-                f"```lua\n{safe}\n```",
-                ephemeral=True
+                content,
+                ephemeral=True,
+                allowed_mentions=discord.AllowedMentions.none()
             )
         else:
             import io
