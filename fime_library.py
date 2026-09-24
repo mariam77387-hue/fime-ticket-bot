@@ -784,13 +784,11 @@ TOKEN = os.getenv('TOKEN')
 
 
 # ============================================================
-# START BOT
+# BOT START
 # ============================================================
 
-if __name__ == '__main__':
+# ملاحظة:
+# هذا الملف يتم تحميله من bot.py
+# لذلك لا يوجد bot.run(TOKEN) هنا.
+# bot.py هو المسؤول عن تشغيل البوت الرئيسي.
 
-    if not TOKEN:
-        print("ERROR: TOKEN environment variable is not set!")
-
-    else:
-        bot.run(TOKEN)
