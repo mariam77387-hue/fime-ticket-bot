@@ -4622,6 +4622,21 @@ if __name__ == "__main__":
                 raise
 
             # =====================================================
+            # تحميل نظام Fime Library من fime_libary.py
+            # =====================================================
+            try:
+                await bot.load_extension("fime_libary")
+                print(
+                    "✅ تم تحميل نظام Fime Library "
+                    "من fime_libary.py"
+                )
+            except Exception as error:
+                print(
+                    f"❌ تعذر تحميل fime_libary.py: {error}"
+                )
+                raise
+                
+            # =====================================================
             # تحميل نظام الذكاء الاصطناعي من ai.py
             # =====================================================
             try:
