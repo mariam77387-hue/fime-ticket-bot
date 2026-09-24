@@ -4625,7 +4625,7 @@ if __name__ == "__main__":
             # تحميل نظام Fime Library من fime_libary.py
             # =====================================================
             try:
-                await bot.load_extension("fime_libary")
+                await bot.load_extension("fime_library")
                 print(
                     "✅ تم تحميل نظام Fime Library "
                     "من fime_libary.py"
