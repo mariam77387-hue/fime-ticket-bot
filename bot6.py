@@ -14,6 +14,7 @@ import json
 import sqlite3
 import asyncio
 import html
+import re
 from datetime import datetime, timezone
 from urllib.parse import quote_plus
 
@@ -1849,199 +1850,142 @@ async def fetch_steal_stock(
 # GENERAL WEB SEARCH
 # ============================================================
 
+
 async def general_stock_search(
     session,
-    game
+    query,
+    game=None
 ):
-
     if not WEB_SEARCH_ENABLED:
         return None
 
-    queries = {
-        GAME_GAG: (
-            "Grow a Garden stock today Roblox"
-        ),
-        GAME_BLOX: (
-            "Blox Fruits stock today Roblox"
-        ),
-        GAME_STEAL: (
-            "Steal An Egg stock today Roblox"
-        ),
-    }
+    clean_query = str(query or "").strip()
+    if not clean_query:
+        return None
 
-    query = queries.get(
-        game,
-        f"{game} stock today"
-    )
+    if game:
+        game_name = GAME_NAMES.get(game, game)
+        search_query = f"{game_name} {clean_query}"
+    else:
+        search_query = clean_query
+
+    search_query = f"{search_query} Roblox stock items pets eggs rarity"
 
     try:
-
         url = (
             f"{WEB_SEARCH_URL}"
-            f"?q={quote_plus(query)}"
-            f"&format=json"
-            f"&no_html=1"
-            f"&no_redirect=1"
+            f"?q={quote_plus(search_query)}"
+            f"&format=json&no_html=1&no_redirect=1"
+        )
+        data = await fetch_json(session, url)
+
+        if isinstance(data, dict):
+            heading = str(data.get("Heading") or "").strip()
+            abstract = str(data.get("AbstractText") or "").strip()
+            topics = []
+
+            related = data.get("RelatedTopics")
+            if isinstance(related, list):
+                for topic in related:
+                    if not isinstance(topic, dict):
+                        continue
+                    text_value = str(topic.get("Text") or "").strip()
+                    if text_value:
+                        topics.append(text_value)
+                    if len(topics) >= 8:
+                        break
+
+            if heading or abstract or topics:
+                return {
+                    "query": search_query,
+                    "heading": heading,
+                    "abstract": abstract,
+                    "topics": topics,
+                }
+    except Exception as error:
+        print("⚠️ DuckDuckGo API search error:", error)
+
+    try:
+        url = (
+            "https://html.duckduckgo.com/html/"
+            f"?q={quote_plus(search_query)}"
+        )
+        async with session.get(
+            url,
+            headers={"User-Agent": "Mozilla/5.0 (Team Fime)"},
+            timeout=aiohttp.ClientTimeout(total=15)
+        ) as response:
+            if response.status != 200:
+                return None
+            page = await response.text()
+
+        results = []
+        matches = re.findall(
+            r'class="result__snippet"[^>]*>(.*?)</a>',
+            page,
+            flags=re.IGNORECASE | re.DOTALL
         )
 
-        data = await fetch_json(
-            session,
-            url
-        )
+        for match in matches[:8]:
+            text_value = re.sub(r"<[^>]+>", " ", match)
+            text_value = html.unescape(text_value)
+            text_value = re.sub(r"\s+", " ", text_value).strip()
+            if text_value:
+                results.append(text_value)
 
-        if not isinstance(
-            data,
-            dict
-        ):
-            return None
-
-        abstract = str(
-            data.get(
-                "AbstractText"
-            )
-            or ""
-        ).strip()
-
-        abstract_url = str(
-            data.get(
-                "AbstractURL"
-            )
-            or ""
-        ).strip()
-
-        heading = str(
-            data.get(
-                "Heading"
-            )
-            or ""
-        ).strip()
-
-        topics = []
-
-        related = data.get(
-            "RelatedTopics"
-        )
-
-        if isinstance(
-            related,
-            list
-        ):
-
-            for topic in related[:5]:
-
-                if not isinstance(
-                    topic,
-                    dict
-                ):
-                    continue
-
-                text_value = str(
-                    topic.get(
-                        "Text"
-                    )
-                    or ""
-                ).strip()
-
-                if text_value:
-                    topics.append(
-                        text_value
-                    )
-
-        if not abstract and not topics:
-            return None
-
-        return {
-            "query": query,
-            "heading": heading,
-            "abstract": abstract,
-            "url": abstract_url,
-            "topics": topics,
-        }
+        if results:
+            return {
+                "query": search_query,
+                "heading": "نتائج بحث عامة",
+                "abstract": "",
+                "topics": results,
+            }
 
     except Exception as error:
+        print("⚠️ General HTML search error:", error)
 
-        print(
-            "⚠️ General stock search error:",
-            error
-        )
-
-        return None
+    return None
 
 
 def build_search_embed(
     game,
     result
 ):
+    title = str(
+        result.get("heading") or "نتيجة البحث العام"
+    ).strip()
 
     embed = discord.Embed(
-        title=(
-            f"🔎 {GAME_NAMES.get(game, game)}"
-            " | بحث عام"
-        ),
+        title=f"🔎 {title}",
         description=(
-            "ما لقيت مصدر ستوك مباشر متاح حاليًا، "
-            "فتم إجراء بحث عام بدل اختراع بيانات ستوك."
+            f"بحث عام عن **{GAME_NAMES.get(game, game)}**.\n"
+            "المعلومات هنا من نتائج البحث العامة، "
+            "بدون الحاجة إلى API خاص باللعبة."
         ),
-        color=discord.Color.orange(),
-        timestamp=datetime.now(
-            timezone.utc
-        )
+        color=discord.Color.blurple(),
+        timestamp=datetime.now(timezone.utc)
     )
-
-    if result.get("heading"):
-
-        embed.add_field(
-            name="📌 النتيجة",
-            value=result["heading"][:1024],
-            inline=False
-        )
 
     if result.get("abstract"):
-
         embed.add_field(
-            name="🔎 ملخص البحث",
-            value=result["abstract"][:1024],
+            name="📌 المعلومات",
+            value=str(result["abstract"])[:1024],
             inline=False
         )
 
-    topics = result.get(
-        "topics",
-        []
-    )
-
+    topics = result.get("topics", [])
     if topics:
-
         text = "\n".join(
-            f"• {html.unescape(topic)[:250]}"
-            for topic in topics[:5]
+            f"• {html.unescape(str(topic))[:250]}"
+            for topic in topics[:8]
         )
-
         embed.add_field(
             name="📚 نتائج إضافية",
             value=text[:1024],
             inline=False
         )
 
-    embed.add_field(
-        name="🔍 البحث",
-        value=f"`{result.get('query', '')}`",
-        inline=False
-    )
-
-    if result.get("url"):
-
-        embed.add_field(
-            name="🌐 المصدر",
-            value=result["url"][:1024],
-            inline=False
-        )
-
-    embed.set_footer(
-        text=(
-            "Team Fime • General Search Fallback"
-        )
-    )
-
+    embed.set_footer(text="حقوق Fime")
     return embed
 
 
@@ -4422,6 +4366,7 @@ class FimeStock(
 
                 search_result = await general_stock_search(
                     self.session,
+                    "stock current live",
                     game.value
                 )
 
@@ -4478,6 +4423,37 @@ class FimeStock(
             )
 
     # ========================================================
+
+    # ========================================================
+    # /STOCK SEARCH
+    # ========================================================
+
+    @stock_group.command(
+        name="search",
+        description="بحث عام عن ستوك أو عنصر أو حيوان أو بيضة أو ندرة"
+    )
+    @app_commands.describe(
+        query="اسم اللعبة أو العنصر أو الحيوان أو البيضة أو الندرة"
+    )
+    async def stock_search(self, interaction, query: str):
+        await interaction.response.defer()
+        await self.ensure_session()
+
+        result = await general_stock_search(
+            self.session,
+            query
+        )
+
+        if not result:
+            await interaction.followup.send(
+                f"❌ ما لقيت معلومات مفيدة عن **{query}** حاليًا."
+            )
+            return
+
+        await interaction.followup.send(
+            embed=build_search_embed("عام", result)
+        )
+
     # /STOCK CHANNEL
     # ========================================================
 
