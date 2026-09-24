@@ -15,6 +15,8 @@ import sqlite3
 import asyncio
 import html
 import re
+import random
+import xml.etree.ElementTree as ET
 from datetime import datetime, timezone
 from urllib.parse import quote_plus
 
@@ -143,6 +145,24 @@ STEAL_EGG_RESET_MINUTES = 5
 STEAL_EGG_RIFT_MINUTES = 30
 
 MAX_SELECT_OPTIONS = 25
+
+# ============================================================
+# GENERAL ROBLOX / EVENT SEARCH
+# ============================================================
+
+GENERAL_SEARCH_LIMIT = 8
+EVENT_CHECK_MINUTES = 5
+
+ROBLOX_GAME_SEARCH_URL = (
+    "https://games.roblox.com/v1/games/list"
+)
+ROBLOX_GAME_DETAILS_URL = (
+    "https://games.roblox.com/v1/games"
+)
+GOOGLE_NEWS_RSS_URL = (
+    "https://news.google.com/rss/search"
+)
+
 
 
 # ============================================================
@@ -310,6 +330,18 @@ def setup_database():
                 guild_id,
                 game
             )
+        )
+    """)
+
+    cur.execute("""
+        CREATE TABLE IF NOT EXISTS event_watchers (
+            guild_id INTEGER NOT NULL,
+            channel_id INTEGER NOT NULL,
+            game_name TEXT NOT NULL,
+            query TEXT NOT NULL,
+            last_fingerprint TEXT,
+            updated_at TEXT NOT NULL,
+            PRIMARY KEY (guild_id, channel_id, game_name)
         )
     """)
 
@@ -1851,141 +1883,520 @@ async def fetch_steal_stock(
 # ============================================================
 
 
+async def roblox_game_search(session, query, limit=GENERAL_SEARCH_LIMIT):
+
+    query = str(query or "").strip()
+    if not query:
+        return []
+
+    params = {
+        "model.keyword": query,
+        "model.maxRows": min(max(int(limit), 1), 25),
+        "model.startRows": 0,
+    }
+
+    try:
+        timeout = aiohttp.ClientTimeout(total=12)
+        async with session.get(
+            ROBLOX_GAME_SEARCH_URL,
+            params=params,
+            timeout=timeout,
+            headers={"User-Agent": "Team-Fime/1.0"},
+        ) as response:
+            if response.status != 200:
+                return []
+            data = await response.json(content_type=None)
+
+        rows = data.get("games", []) if isinstance(data, dict) else []
+        results = []
+        for row in rows:
+            if not isinstance(row, dict):
+                continue
+            universe_id = row.get("universeId") or row.get("id")
+            if not universe_id:
+                continue
+            results.append({
+                "universe_id": int(universe_id),
+                "name": str(row.get("name") or "Roblox Game").strip(),
+                "description": str(row.get("description") or "").strip(),
+                "creator": str(row.get("creatorName") or row.get("creator") or "Unknown").strip(),
+                "place_id": row.get("placeId"),
+            })
+        return results[:limit]
+    except Exception as error:
+        print("⚠️ Roblox game search error:", error)
+        return []
+
+
+async def roblox_game_details(session, universe_ids):
+
+    ids = []
+    for value in universe_ids:
+        try:
+            ids.append(int(value))
+        except Exception:
+            pass
+
+    if not ids:
+        return []
+
+    try:
+        params = {"universeIds": ",".join(map(str, ids[:50]))}
+        timeout = aiohttp.ClientTimeout(total=12)
+        async with session.get(
+            ROBLOX_GAME_DETAILS_URL,
+            params=params,
+            timeout=timeout,
+            headers={"User-Agent": "Team-Fime/1.0"},
+        ) as response:
+            if response.status != 200:
+                return []
+            data = await response.json(content_type=None)
+
+        return data.get("data", []) if isinstance(data, dict) else []
+    except Exception as error:
+        print("⚠️ Roblox game details error:", error)
+        return []
+
+
+async def general_roblox_search(session, query, limit=GENERAL_SEARCH_LIMIT):
+
+    """General Roblox search: games + live player counts + basic metadata."""
+
+    games = await roblox_game_search(session, query, limit)
+    if not games:
+        return {"games": [], "news": []}
+
+    details = await roblox_game_details(
+        session,
+        [game["universe_id"] for game in games]
+    )
+    by_id = {int(row.get("id")): row for row in details if row.get("id")}
+
+    for game in games:
+        row = by_id.get(game["universe_id"], {})
+        game["playing"] = int(row.get("playing") or 0)
+        game["visits"] = int(row.get("visits") or 0)
+        game["favorites"] = int(row.get("favoritedCount") or 0)
+        game["updated"] = row.get("updated") or row.get("created") or ""
+        game["root_place_id"] = row.get("rootPlaceId") or game.get("place_id")
+
+    return {"games": games, "news": []}
+
+
+async def general_news_search(session, query, limit=8):
+
+    """Public RSS search used for events, updates, pets, eggs, rarity, etc."""
+
+    query = str(query or "").strip()
+    if not query:
+        return []
+
+    try:
+        params = {
+            "q": query,
+            "hl": "ar",
+            "gl": "SA",
+            "ceid": "SA:ar",
+        }
+        timeout = aiohttp.ClientTimeout(total=15)
+        async with session.get(
+            GOOGLE_NEWS_RSS_URL,
+            params=params,
+            timeout=timeout,
+            headers={"User-Agent": "Team-Fime/1.0"},
+        ) as response:
+            if response.status != 200:
+                return []
+            raw = await response.text()
+
+        root = ET.fromstring(raw)
+        results = []
+        for item in root.findall("./channel/item")[:limit]:
+            title = (item.findtext("title") or "").strip()
+            link = (item.findtext("link") or "").strip()
+            pub = (item.findtext("pubDate") or "").strip()
+            source = item.find("source")
+            source_name = (source.text or "").strip() if source is not None else ""
+            if title:
+                results.append({
+                    "title": html.unescape(title),
+                    "link": link,
+                    "published": pub,
+                    "source": source_name,
+                })
+        return results
+    except Exception as error:
+        print("⚠️ General event/news search error:", error)
+        return []
+
+
+async def general_game_intelligence(session, query):
+
+    """Search anything related to a Roblox map/game without pretending data is live."""
+
+    query = str(query or "").strip()
+    if not query:
+        return None
+
+    roblox = await general_roblox_search(session, query, GENERAL_SEARCH_LIMIT)
+    news_queries = [
+        f'Roblox "{query}" update event',
+        f'Roblox "{query}" new update pets eggs rarity',
+    ]
+
+    news = []
+    seen = set()
+    for news_query in news_queries:
+        for item in await general_news_search(session, news_query, 6):
+            key = item.get("title", "").lower()
+            if key and key not in seen:
+                seen.add(key)
+                news.append(item)
+            if len(news) >= 10:
+                break
+        if len(news) >= 10:
+            break
+
+    roblox["news"] = news
+    roblox["query"] = query
+    return roblox
+
+
+def event_fingerprint(items):
+    return "|".join(
+        str(item.get("title", "")).strip().lower()
+        for item in items[:8]
+    )
+
+
+def set_event_watcher(guild_id, channel_id, game_name, query):
+    conn = get_db()
+    conn.execute("""
+        INSERT INTO event_watchers
+        (guild_id, channel_id, game_name, query, last_fingerprint, updated_at)
+        VALUES (?, ?, ?, ?, '', ?)
+        ON CONFLICT(guild_id, channel_id, game_name)
+        DO UPDATE SET query=excluded.query, updated_at=excluded.updated_at
+    """, (
+        guild_id, channel_id, game_name, query,
+        datetime.now(timezone.utc).isoformat(),
+    ))
+    conn.commit()
+    conn.close()
+
+
+def remove_event_watcher(guild_id, channel_id, game_name):
+    conn = get_db()
+    conn.execute("""
+        DELETE FROM event_watchers
+        WHERE guild_id=? AND channel_id=? AND game_name=?
+    """, (guild_id, channel_id, game_name))
+    conn.commit()
+    conn.close()
+
+
+def get_event_watchers():
+    conn = get_db()
+    rows = conn.execute("""
+        SELECT guild_id, channel_id, game_name, query, last_fingerprint
+        FROM event_watchers
+    """).fetchall()
+    conn.close()
+    return [dict(row) for row in rows]
+
+
+def update_event_fingerprint(guild_id, channel_id, game_name, fingerprint):
+    conn = get_db()
+    conn.execute("""
+        UPDATE event_watchers
+        SET last_fingerprint=?, updated_at=?
+        WHERE guild_id=? AND channel_id=? AND game_name=?
+    """, (
+        fingerprint,
+        datetime.now(timezone.utc).isoformat(),
+        guild_id,
+        channel_id,
+        game_name,
+    ))
+    conn.commit()
+    conn.close()
+
+
+def build_game_intelligence_embed(query, data):
+
+    embed = discord.Embed(
+        title=f"🎮 {query}",
+        color=discord.Color.blurple(),
+        timestamp=datetime.now(timezone.utc),
+    )
+
+    games = data.get("games", [])
+    news = data.get("news", [])
+
+    if games:
+        lines = []
+        for index, game in enumerate(games[:8], 1):
+            playing = f"{game.get('playing', 0):,}"
+            creator = game.get("creator") or "غير معروف"
+            lines.append(
+                f"**{index}. {game['name'][:70]}**\n"
+                f"👥 يلعبون الآن: **{playing}** • 👤 {creator[:40]}"
+            )
+        embed.add_field(
+            name="🕹️ ألعاب وخرائط Roblox",
+            value="\n\n".join(lines)[:1024],
+            inline=False,
+        )
+    else:
+        embed.add_field(
+            name="🕹️ Roblox",
+            value="ما لقيت لعبة مطابقة مباشرة في بحث Roblox.",
+            inline=False,
+        )
+
+    if news:
+        lines = []
+        for item in news[:6]:
+            title = item.get("title", "خبر جديد")[:160]
+            link = item.get("link") or ""
+            if link:
+                lines.append(f"• [{title}]({link})")
+            else:
+                lines.append(f"• {title}")
+        embed.add_field(
+            name="📰 أحداث وتحديثات وأخبار",
+            value="\n".join(lines)[:1024],
+            inline=False,
+        )
+
+    embed.add_field(
+        name="ℹ️ وش يقدر يبحث عنه؟",
+        value=(
+            "أحداث، تحديثات، حيوانات، بيض، ندرة، لاعبين، "
+            "معلومات الماب وأي شيء تكتبه مرتبط بروبلوكس."
+        ),
+        inline=False,
+    )
+    embed.set_footer(text="حقوق Fime • بحث عام")
+    return embed
+
+
+def build_event_embed(game_name, news):
+
+    embed = discord.Embed(
+        title=f"🚨 حدث / تحديث جديد — {game_name}",
+        color=discord.Color.orange(),
+        timestamp=datetime.now(timezone.utc),
+    )
+
+    lines = []
+    for item in news[:8]:
+        title = item.get("title", "تحديث جديد")[:180]
+        link = item.get("link") or ""
+        if link:
+            lines.append(f"• [{title}]({link})")
+        else:
+            lines.append(f"• {title}")
+
+    embed.description = "\n".join(lines)[:4096] if lines else "تم رصد تحديث جديد، لكن تفاصيله غير متاحة حاليًا."
+    embed.set_footer(text="حقوق Fime • تنبيهات الأحداث")
+    return embed
+
+
 async def general_stock_search(
     session,
-    query,
-    game=None
+    game
 ):
+
     if not WEB_SEARCH_ENABLED:
         return None
 
-    clean_query = str(query or "").strip()
-    if not clean_query:
-        return None
+    queries = {
+        GAME_GAG: (
+            "Grow a Garden stock today Roblox"
+        ),
+        GAME_BLOX: (
+            "Blox Fruits stock today Roblox"
+        ),
+        GAME_STEAL: (
+            "Steal An Egg stock today Roblox"
+        ),
+    }
 
-    if game:
-        game_name = GAME_NAMES.get(game, game)
-        search_query = f"{game_name} {clean_query}"
-    else:
-        search_query = clean_query
-
-    search_query = f"{search_query} Roblox stock items pets eggs rarity"
+    query = queries.get(
+        game,
+        f"{game} stock today"
+    )
 
     try:
+
         url = (
             f"{WEB_SEARCH_URL}"
-            f"?q={quote_plus(search_query)}"
-            f"&format=json&no_html=1&no_redirect=1"
+            f"?q={quote_plus(query)}"
+            f"&format=json"
+            f"&no_html=1"
+            f"&no_redirect=1"
         )
-        data = await fetch_json(session, url)
 
-        if isinstance(data, dict):
-            heading = str(data.get("Heading") or "").strip()
-            abstract = str(data.get("AbstractText") or "").strip()
-            topics = []
+        data = await fetch_json(
+            session,
+            url
+        )
 
-            related = data.get("RelatedTopics")
-            if isinstance(related, list):
-                for topic in related:
-                    if not isinstance(topic, dict):
-                        continue
-                    text_value = str(topic.get("Text") or "").strip()
-                    if text_value:
-                        topics.append(text_value)
-                    if len(topics) >= 8:
-                        break
+        if not isinstance(
+            data,
+            dict
+        ):
+            return None
 
-            if heading or abstract or topics:
-                return {
-                    "query": search_query,
-                    "heading": heading,
-                    "abstract": abstract,
-                    "topics": topics,
-                }
+        abstract = str(
+            data.get(
+                "AbstractText"
+            )
+            or ""
+        ).strip()
+
+        abstract_url = str(
+            data.get(
+                "AbstractURL"
+            )
+            or ""
+        ).strip()
+
+        heading = str(
+            data.get(
+                "Heading"
+            )
+            or ""
+        ).strip()
+
+        topics = []
+
+        related = data.get(
+            "RelatedTopics"
+        )
+
+        if isinstance(
+            related,
+            list
+        ):
+
+            for topic in related[:5]:
+
+                if not isinstance(
+                    topic,
+                    dict
+                ):
+                    continue
+
+                text_value = str(
+                    topic.get(
+                        "Text"
+                    )
+                    or ""
+                ).strip()
+
+                if text_value:
+                    topics.append(
+                        text_value
+                    )
+
+        if not abstract and not topics:
+            return None
+
+        return {
+            "query": query,
+            "heading": heading,
+            "abstract": abstract,
+            "url": abstract_url,
+            "topics": topics,
+        }
+
     except Exception as error:
-        print("⚠️ DuckDuckGo API search error:", error)
 
-    try:
-        url = (
-            "https://html.duckduckgo.com/html/"
-            f"?q={quote_plus(search_query)}"
-        )
-        async with session.get(
-            url,
-            headers={"User-Agent": "Mozilla/5.0 (Team Fime)"},
-            timeout=aiohttp.ClientTimeout(total=15)
-        ) as response:
-            if response.status != 200:
-                return None
-            page = await response.text()
-
-        results = []
-        matches = re.findall(
-            r'class="result__snippet"[^>]*>(.*?)</a>',
-            page,
-            flags=re.IGNORECASE | re.DOTALL
+        print(
+            "⚠️ General stock search error:",
+            error
         )
 
-        for match in matches[:8]:
-            text_value = re.sub(r"<[^>]+>", " ", match)
-            text_value = html.unescape(text_value)
-            text_value = re.sub(r"\s+", " ", text_value).strip()
-            if text_value:
-                results.append(text_value)
-
-        if results:
-            return {
-                "query": search_query,
-                "heading": "نتائج بحث عامة",
-                "abstract": "",
-                "topics": results,
-            }
-
-    except Exception as error:
-        print("⚠️ General HTML search error:", error)
-
-    return None
+        return None
 
 
 def build_search_embed(
     game,
     result
 ):
-    title = str(
-        result.get("heading") or "نتيجة البحث العام"
-    ).strip()
 
     embed = discord.Embed(
-        title=f"🔎 {title}",
-        description=(
-            f"بحث عام عن **{GAME_NAMES.get(game, game)}**.\n"
-            "المعلومات هنا من نتائج البحث العامة، "
-            "بدون الحاجة إلى API خاص باللعبة."
+        title=(
+            f"🔎 {GAME_NAMES.get(game, game)}"
+            " | بحث عام"
         ),
-        color=discord.Color.blurple(),
-        timestamp=datetime.now(timezone.utc)
+        description=(
+            "ما لقيت مصدر ستوك مباشر متاح حاليًا، "
+            "فتم إجراء بحث عام بدل اختراع بيانات ستوك."
+        ),
+        color=discord.Color.orange(),
+        timestamp=datetime.now(
+            timezone.utc
+        )
     )
 
-    if result.get("abstract"):
+    if result.get("heading"):
+
         embed.add_field(
-            name="📌 المعلومات",
-            value=str(result["abstract"])[:1024],
+            name="📌 النتيجة",
+            value=result["heading"][:1024],
             inline=False
         )
 
-    topics = result.get("topics", [])
-    if topics:
-        text = "\n".join(
-            f"• {html.unescape(str(topic))[:250]}"
-            for topic in topics[:8]
+    if result.get("abstract"):
+
+        embed.add_field(
+            name="🔎 ملخص البحث",
+            value=result["abstract"][:1024],
+            inline=False
         )
+
+    topics = result.get(
+        "topics",
+        []
+    )
+
+    if topics:
+
+        text = "\n".join(
+            f"• {html.unescape(topic)[:250]}"
+            for topic in topics[:5]
+        )
+
         embed.add_field(
             name="📚 نتائج إضافية",
             value=text[:1024],
             inline=False
         )
 
-    embed.set_footer(text="حقوق Fime")
+    embed.add_field(
+        name="🔍 البحث",
+        value=f"`{result.get('query', '')}`",
+        inline=False
+    )
+
+    if result.get("url"):
+
+        embed.add_field(
+            name="🌐 المصدر",
+            value=result["url"][:1024],
+            inline=False
+        )
+
+    embed.set_footer(
+        text=(
+            "Team Fime • General Search Fallback"
+        )
+    )
+
     return embed
 
 
@@ -2908,8 +3319,9 @@ class FimeStock(
         self.steal_reset_counter = 0
         self.steal_rift_counter = 0
 
-        self.stock_loop.start()
-        self.steal_event_loop.start()
+        # Old stock polling is intentionally disabled.
+        # bot6 is now focused on general Roblox information/events.
+        self.game_event_loop.start()
 
     # ========================================================
     # LOAD
@@ -2941,10 +3353,8 @@ class FimeStock(
                 error
             )
 
-        # Restore saved notification panels.
-        asyncio.create_task(
-            self.restore_notification_panels()
-        )
+        # Old stock notification panels are no longer restored.
+        # bot6 now focuses on general game information and events.
 
     # ========================================================
     # RESTORE NOTIFICATION PANELS
@@ -4270,12 +4680,251 @@ class FimeStock(
                 )
 
     # ========================================================
+    # GENERAL GAME EVENT LOOP
+    # ========================================================
+
+    @tasks.loop(minutes=EVENT_CHECK_MINUTES)
+    async def game_event_loop(self):
+
+        await self.bot.wait_until_ready()
+        await self.ensure_session()
+
+        for watcher in get_event_watchers():
+            try:
+                channel = self.bot.get_channel(watcher["channel_id"])
+                if channel is None:
+                    continue
+
+                data = await general_game_intelligence(
+                    self.session,
+                    watcher["query"]
+                )
+                news = data.get("news", []) if data else []
+                if not news:
+                    continue
+
+                fingerprint = event_fingerprint(news)
+                old = watcher.get("last_fingerprint") or ""
+                update_event_fingerprint(
+                    watcher["guild_id"],
+                    watcher["channel_id"],
+                    watcher["game_name"],
+                    fingerprint,
+                )
+
+                if old and old == fingerprint:
+                    continue
+
+                await channel.send(
+                    embed=build_event_embed(
+                        watcher["game_name"],
+                        news,
+                    )
+                )
+
+            except Exception as error:
+                print("⚠️ General game event watcher error:", error)
+
+    @game_event_loop.before_loop
+    async def before_game_event_loop(self):
+        await self.bot.wait_until_ready()
+
+    # ========================================================
+    # /STOCK SEARCH — GENERAL ROBLOX SEARCH
+    # ========================================================
+
+    @stock_group.command(
+        name="search",
+        description="بحث عام عن أي ماب أو حدث أو تحديث في Roblox"
+    )
+    @app_commands.describe(
+        query="اكتب اسم الماب أو الحيوان أو البيضة أو الحدث أو أي شيء تبيه"
+    )
+    async def general_search_command(self, interaction, query: str):
+
+        await interaction.response.defer()
+        await self.ensure_session()
+
+        data = await general_game_intelligence(
+            self.session,
+            query
+        )
+
+        if not data or (not data.get("games") and not data.get("news")):
+            await interaction.followup.send(
+                f"🔎 ما لقيت نتيجة واضحة عن **{query}** حاليًا. جرّب اسم الماب بشكل أوضح."
+            )
+            return
+
+        await interaction.followup.send(
+            embed=build_game_intelligence_embed(query, data)
+        )
+
+    # ========================================================
+    # /STOCK WATCH — WATCH ANY ROBLOX GAME
+    # ========================================================
+
+    @stock_group.command(
+        name="watch",
+        description="تحديد ماب لمراقبة أحداثه وتحديثاته في روم معين"
+    )
+    @app_commands.checks.has_permissions(manage_guild=True)
+    @app_commands.describe(
+        game="اسم الماب / اللعبة",
+        channel="الروم الذي تصله فيه الأحداث والتحديثات"
+    )
+    async def watch_game_command(self, interaction, game: str, channel: discord.TextChannel):
+
+        game = game.strip()
+        if len(game) < 2:
+            await interaction.response.send_message(
+                "❌ اكتب اسم ماب صحيح.", ephemeral=True
+            )
+            return
+
+        set_event_watcher(
+            interaction.guild.id,
+            channel.id,
+            game,
+            game,
+        )
+
+        await interaction.response.send_message(
+            f"✅ تم تفعيل مراقبة **{game}** في {channel.mention}.\n"
+            "البوت بيبحث عن الأحداث والتحديثات والأشياء الجديدة ويرسلها هناك.",
+            ephemeral=True,
+        )
+
+    # ========================================================
+    # /STOCK UNWATCH
+    # ========================================================
+
+    @stock_group.command(
+        name="unwatch",
+        description="إيقاف مراقبة ماب"
+    )
+    @app_commands.checks.has_permissions(manage_guild=True)
+    @app_commands.describe(
+        game="اسم الماب",
+        channel="الروم"
+    )
+    async def unwatch_game_command(self, interaction, game: str, channel: discord.TextChannel):
+
+        remove_event_watcher(
+            interaction.guild.id,
+            channel.id,
+            game.strip(),
+        )
+
+        await interaction.response.send_message(
+            f"✅ تم إيقاف مراقبة **{game.strip()}** في {channel.mention}.",
+            ephemeral=True,
+        )
+
+    # ========================================================
+    # /STOCK RANDOM — RANDOM ROBLOX MAP
+    # ========================================================
+
+    @stock_group.command(
+        name="random",
+        description="عرض ماب Roblox عشوائي مع معلوماته واللاعبين"
+    )
+    async def random_game_command(self, interaction):
+
+        await interaction.response.defer()
+        await self.ensure_session()
+
+        # Different search buckets make the result genuinely varied
+        # without inventing a game or its player count.
+        buckets = [
+            "Roblox", "anime", "horror", "simulator", "tycoon",
+            "roleplay", "obby", "battlegrounds", "survival", "adventure"
+        ]
+        query = random.choice(buckets)
+        data = await general_roblox_search(
+            self.session,
+            query,
+            GENERAL_SEARCH_LIMIT
+        )
+
+        games = data.get("games", []) if data else []
+        if not games:
+            await interaction.followup.send(
+                "🎲 ما قدرت أجيب ماب عشوائي حاليًا، جرّب مرة ثانية."
+            )
+            return
+
+        game = random.choice(games)
+        embed = discord.Embed(
+            title=f"🎲 ماب عشوائي: {game['name'][:200]}",
+            description=(
+                game.get("description") or
+                "ما فيه وصف متاح حاليًا من Roblox."
+            )[:4096],
+            color=discord.Color.blurple(),
+        )
+        embed.add_field(
+            name="👥 اللاعبين الآن",
+            value=f"**{game.get('playing', 0):,}**",
+            inline=True,
+        )
+        embed.add_field(
+            name="👤 المطور",
+            value=(game.get("creator") or "غير معروف")[:100],
+            inline=True,
+        )
+        embed.add_field(
+            name="⭐ الزيارات",
+            value=f"**{game.get('visits', 0):,}**",
+            inline=True,
+        )
+        embed.set_footer(text="حقوق Fime • معلومات Roblox عامة")
+        await interaction.followup.send(embed=embed)
+
+    # ========================================================
+    # /STOCK WATCHES
+    # ========================================================
+
+    @stock_group.command(
+        name="watches",
+        description="عرض المابات التي تتم مراقبة أحداثها"
+    )
+    @app_commands.checks.has_permissions(manage_guild=True)
+    async def watches_command(self, interaction):
+
+        rows = [
+            row for row in get_event_watchers()
+            if row["guild_id"] == interaction.guild.id
+        ]
+
+        if not rows:
+            await interaction.response.send_message(
+                "📭 ما فيه أي ماب تتم مراقبة أحداثه حاليًا.",
+                ephemeral=True,
+            )
+            return
+
+        lines = []
+        for row in rows:
+            channel = interaction.guild.get_channel(row["channel_id"])
+            mention = channel.mention if channel else f"`{row['channel_id']}`"
+            lines.append(f"• **{row['game_name']}** → {mention}")
+
+        embed = discord.Embed(
+            title="📡 مراقبة أحداث المابات",
+            description="\n".join(lines)[:4000],
+            color=discord.Color.blurple(),
+        )
+        embed.set_footer(text="حقوق Fime")
+        await interaction.response.send_message(embed=embed, ephemeral=True)
+
+    # ========================================================
     # /STOCK VIEW
     # ========================================================
 
     @stock_group.command(
-        name="view",
-        description="عرض الستوك الحالي"
+        name="legacy-view",
+        description="نظام الستوك القديم (متوافقية فقط)"
     )
     @app_commands.describe(
         game="اللعبة"
@@ -4366,7 +5015,6 @@ class FimeStock(
 
                 search_result = await general_stock_search(
                     self.session,
-                    "stock current live",
                     game.value
                 )
 
@@ -4423,37 +5071,6 @@ class FimeStock(
             )
 
     # ========================================================
-
-    # ========================================================
-    # /STOCK SEARCH
-    # ========================================================
-
-    @stock_group.command(
-        name="search",
-        description="بحث عام عن ستوك أو عنصر أو حيوان أو بيضة أو ندرة"
-    )
-    @app_commands.describe(
-        query="اسم اللعبة أو العنصر أو الحيوان أو البيضة أو الندرة"
-    )
-    async def stock_search(self, interaction, query: str):
-        await interaction.response.defer()
-        await self.ensure_session()
-
-        result = await general_stock_search(
-            self.session,
-            query
-        )
-
-        if not result:
-            await interaction.followup.send(
-                f"❌ ما لقيت معلومات مفيدة عن **{query}** حاليًا."
-            )
-            return
-
-        await interaction.followup.send(
-            embed=build_search_embed("عام", result)
-        )
-
     # /STOCK CHANNEL
     # ========================================================
 
@@ -5133,7 +5750,7 @@ class FimeStock(
 
     @stock_group.command(
         name="status",
-        description="عرض حالة نظام الستوك"
+        description="عرض حالة نظام البحث والأحداث"
     )
     @app_commands.checks.has_permissions(
         manage_guild=True
