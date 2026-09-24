@@ -2035,33 +2035,135 @@ async def general_roblox_search(session, query, limit=GENERAL_SEARCH_LIMIT):
 
 
 async def general_news_search(session, query, limit=8):
-    query=str(query or "").strip()
-    if not query: return []
-    results=[]
-    # Arabic-first: Google News is asked for Arabic/Saudi results, then a second Arabic query.
-    queries=[query, f"{query} روبلوكس", f"{query} تحديث", f"{query} حدث"]
-    seen=set()
+    query = str(query or "").strip()
+
+    if not query:
+        return []
+
+    results = []
+    seen = set()
+
+    # --------------------------------------------------------
+    # Roblox-only news search
+    # --------------------------------------------------------
+    # مهم:
+    # لا نبحث عن query لوحده حتى لا تظهر أخبار أشخاص
+    # أو أخبار عامة خارج Roblox.
+    # --------------------------------------------------------
+
+    queries = [
+        f'"{query}" Roblox',
+        f'"{query}" Roblox update',
+        f'"{query}" Roblox event',
+        f'"{query}" Roblox news',
+        f'"{query}" روبلوكس تحديث',
+        f'"{query}" روبلوكس حدث',
+    ]
+
     for q in queries:
+
         try:
-            params={"q":q,"hl":"ar","gl":"SA","ceid":"SA:ar"}
-            timeout=aiohttp.ClientTimeout(total=15)
-            async with session.get(GOOGLE_NEWS_RSS_URL, params=params, timeout=timeout,
-                                   headers={"User-Agent":"Team-Fime/2.0"}) as response:
-                if response.status != 200: continue
-                raw=await response.text()
-            root=ET.fromstring(raw)
-            for item in root.findall("./channel/item")[:limit]:
-                title=html.unescape((item.findtext("title") or "").strip())
-                link=(item.findtext("link") or "").strip()
-                pub=(item.findtext("pubDate") or "").strip()
-                if not title: continue
-                key=title.casefold()
-                if key in seen: continue
+
+            params = {
+                "q": q,
+                "hl": "ar",
+                "gl": "SA",
+                "ceid": "SA:ar",
+            }
+
+            timeout = aiohttp.ClientTimeout(
+                total=15
+            )
+
+            async with session.get(
+                GOOGLE_NEWS_RSS_URL,
+                params=params,
+                timeout=timeout,
+                headers={
+                    "User-Agent": "Team-Fime/2.0"
+                },
+            ) as response:
+
+                if response.status != 200:
+                    continue
+
+                raw = await response.text()
+
+            root = ET.fromstring(raw)
+
+            for item in root.findall(
+                "./channel/item"
+            )[:limit]:
+
+                title = html.unescape(
+                    (
+                        item.findtext("title")
+                        or ""
+                    ).strip()
+                )
+
+                link = (
+                    item.findtext("link")
+                    or ""
+                ).strip()
+
+                pub = (
+                    item.findtext("pubDate")
+                    or ""
+                ).strip()
+
+                if not title:
+                    continue
+
+                # ------------------------------------------------
+                # فلترة قوية:
+                # الخبر لازم يكون واضح أنه متعلق بروبلوكس.
+                # ------------------------------------------------
+
+                title_lower = title.casefold()
+
+                roblox_words = [
+                    "roblox",
+                    "روبلوكس",
+                    "روبلوكس",
+                ]
+
+                if not any(
+                    word in title_lower
+                    for word in roblox_words
+                ):
+                    continue
+
+                # ------------------------------------------------
+                # منع تكرار نفس الخبر
+                # ------------------------------------------------
+
+                key = title.casefold()
+
+                if key in seen:
+                    continue
+
                 seen.add(key)
-                results.append({"title":title,"link":link,"published":pub,"source":""})
-                if len(results)>=limit: return results
+
+                results.append(
+                    {
+                        "title": title,
+                        "link": link,
+                        "published": pub,
+                        "source": "",
+                    }
+                )
+
+                if len(results) >= limit:
+                    return results
+
         except Exception as error:
-            print("⚠️ Arabic news search error:", error)
+
+            print(
+                "⚠️ Roblox news search error:",
+                error
+            )
+
     return results
 
 
@@ -2091,135 +2193,490 @@ async def gemini_fallback(session, query):
 
 
 async def general_game_intelligence(session, query):
-    query=str(query or "").strip()
-    if not query: return None
-    roblox=await general_roblox_search(session, query, GENERAL_SEARCH_LIMIT)
-    news=await general_news_search(session, query, 10)
-    # If search is weak, try aliases/expanded Arabic queries.
-    if not news:
-        for expanded in expand_search_queries(query)[1:5]:
-            news=await general_news_search(session, expanded, 8)
-            if news: break
-    roblox["news"]=news
-    roblox["query"]=query
-    if not roblox["games"] and not news:
-        roblox["ai"] = await gemini_fallback(session, query)
+    query = str(query or "").strip()
+
+    if not query:
+        return None
+
+    # ========================================================
+    # 1) البحث الحقيقي داخل Roblox أولًا
+    # ========================================================
+
+    roblox = await general_roblox_search(
+        session,
+        query,
+        GENERAL_SEARCH_LIMIT
+    )
+
+    games = roblox.get("games", []) if roblox else []
+    news = []
+
+    # ========================================================
+    # 2) إذا وجدنا ألعاب Roblox مطابقة
+    #    نبحث عن الأخبار باستخدام أسماء الألعاب نفسها
+    #    بدل البحث بكلمة المستخدم بشكل مباشر.
+    # ========================================================
+
+    if games:
+
+        searched_names = []
+
+        for game in games[:5]:
+
+            game_name = str(
+                game.get("name") or ""
+            ).strip()
+
+            if not game_name:
+                continue
+
+            if game_name.casefold() in {
+                name.casefold()
+                for name in searched_names
+            }:
+                continue
+
+            searched_names.append(
+                game_name
+            )
+
+        for game_name in searched_names:
+
+            game_news = await general_news_search(
+                session,
+                game_name,
+                6
+            )
+
+            for item in game_news:
+
+                title = str(
+                    item.get("title") or ""
+                ).strip()
+
+                if not title:
+                    continue
+
+                # منع تكرار نفس الخبر
+                existing_titles = {
+                    str(x.get("title") or "").strip().casefold()
+                    for x in news
+                }
+
+                if title.casefold() in existing_titles:
+                    continue
+
+                news.append(item)
+
+                if len(news) >= 10:
+                    break
+
+            if len(news) >= 10:
+                break
+
+    # ========================================================
+    # 3) إذا ما وجدنا لعبة مباشرة
+    #    نسمح بالبحث الإخباري، لكن general_news_search
+    #    نفسه مسؤول عن فلترة أخبار Roblox.
+    # ========================================================
+
+    else:
+
+        news = await general_news_search(
+            session,
+            query,
+            10
+        )
+
+        # ====================================================
+        # 4) محاولة البحث بالاختصارات والأسماء البديلة
+        # ====================================================
+
+        if not news:
+
+            expanded_queries = expand_search_queries(
+                query
+            )
+
+            for expanded in expanded_queries[1:5]:
+
+                news = await general_news_search(
+                    session,
+                    expanded,
+                    8
+                )
+
+                if news:
+                    break
+
+    # ========================================================
+    # 5) حفظ النتائج
+    # ========================================================
+
+    roblox["news"] = news
+    roblox["query"] = query
+
+    # ========================================================
+    # 6) Gemini فقط إذا ما حصلنا أي نتيجة
+    # ========================================================
+
+    if not roblox.get("games") and not news:
+
+        roblox["ai"] = await gemini_fallback(
+            session,
+            query
+        )
+
     return roblox
+
 
 def event_fingerprint(items):
     return "|".join(
-        str(item.get("title", "")).strip().lower()
+        str(
+            item.get("title", "")
+        ).strip().lower()
         for item in items[:8]
     )
 
 
-def set_event_watcher(guild_id, channel_id, game_name, query, interval_minutes=DEFAULT_WATCH_INTERVAL_MINUTES, ai_fallback=True, random_mode=False):
-    interval_minutes=max(MIN_WATCH_INTERVAL_MINUTES, min(MAX_WATCH_INTERVAL_MINUTES, int(interval_minutes)))
-    conn=get_db()
-    conn.execute("""
+def set_event_watcher(
+    guild_id,
+    channel_id,
+    game_name,
+    query,
+    interval_minutes=DEFAULT_WATCH_INTERVAL_MINUTES,
+    ai_fallback=True,
+    random_mode=False
+):
+
+    interval_minutes = max(
+        MIN_WATCH_INTERVAL_MINUTES,
+        min(
+            MAX_WATCH_INTERVAL_MINUTES,
+            int(interval_minutes)
+        )
+    )
+
+    conn = get_db()
+
+    conn.execute(
+        """
         INSERT INTO event_watchers
-        (guild_id, channel_id, game_name, query, last_fingerprint, updated_at, interval_minutes, ai_fallback, random_mode)
+        (
+            guild_id,
+            channel_id,
+            game_name,
+            query,
+            last_fingerprint,
+            updated_at,
+            interval_minutes,
+            ai_fallback,
+            random_mode
+        )
         VALUES (?, ?, ?, ?, '', ?, ?, ?, ?)
-        ON CONFLICT(guild_id, channel_id, game_name)
-        DO UPDATE SET query=excluded.query, updated_at=excluded.updated_at,
-                      interval_minutes=excluded.interval_minutes, ai_fallback=excluded.ai_fallback,
-                      random_mode=excluded.random_mode
-    """, (guild_id,channel_id,game_name,query,"",interval_minutes,1 if ai_fallback else 0,1 if random_mode else 0))
-    conn.commit(); conn.close()
+
+        ON CONFLICT(
+            guild_id,
+            channel_id,
+            game_name
+        )
+
+        DO UPDATE SET
+            query=excluded.query,
+            updated_at=excluded.updated_at,
+            interval_minutes=excluded.interval_minutes,
+            ai_fallback=excluded.ai_fallback,
+            random_mode=excluded.random_mode
+        """,
+        (
+            guild_id,
+            channel_id,
+            game_name,
+            query,
+            "",
+            interval_minutes,
+            1 if ai_fallback else 0,
+            1 if random_mode else 0
+        )
+    )
+
+    conn.commit()
+    conn.close()
 
 
-def remove_event_watcher(guild_id, channel_id, game_name):
-    conn=get_db(); conn.execute("DELETE FROM event_watchers WHERE guild_id=? AND channel_id=? AND game_name=?", (guild_id,channel_id,game_name)); conn.commit(); conn.close()
+def remove_event_watcher(
+    guild_id,
+    channel_id,
+    game_name
+):
+
+    conn = get_db()
+
+    conn.execute(
+        """
+        DELETE FROM event_watchers
+        WHERE guild_id=?
+        AND channel_id=?
+        AND game_name=?
+        """,
+        (
+            guild_id,
+            channel_id,
+            game_name
+        )
+    )
+
+    conn.commit()
+    conn.close()
 
 
 def get_event_watchers():
-    conn=get_db(); rows=conn.execute("SELECT guild_id,channel_id,game_name,query,last_fingerprint,updated_at,interval_minutes,ai_fallback,random_mode FROM event_watchers").fetchall(); conn.close(); return [dict(r) for r in rows]
+
+    conn = get_db()
+
+    rows = conn.execute(
+        """
+        SELECT
+            guild_id,
+            channel_id,
+            game_name,
+            query,
+            last_fingerprint,
+            updated_at,
+            interval_minutes,
+            ai_fallback,
+            random_mode
+
+        FROM event_watchers
+        """
+    ).fetchall()
+
+    conn.close()
+
+    return [
+        dict(row)
+        for row in rows
+    ]
 
 
-def update_event_fingerprint(guild_id, channel_id, game_name, fingerprint):
-    conn=get_db(); conn.execute("UPDATE event_watchers SET last_fingerprint=?,updated_at=? WHERE guild_id=? AND channel_id=? AND game_name=?", (fingerprint,datetime.now(timezone.utc).isoformat(),guild_id,channel_id,game_name)); conn.commit(); conn.close()
+def update_event_fingerprint(
+    guild_id,
+    channel_id,
+    game_name,
+    fingerprint
+):
 
-def build_game_intelligence_embed(query, data):
+    conn = get_db()
+
+    conn.execute(
+        """
+        UPDATE event_watchers
+        SET
+            last_fingerprint=?,
+            updated_at=?
+
+        WHERE guild_id=?
+        AND channel_id=?
+        AND game_name=?
+        """,
+        (
+            fingerprint,
+            datetime.now(
+                timezone.utc
+            ).isoformat(),
+            guild_id,
+            channel_id,
+            game_name
+        )
+    )
+
+    conn.commit()
+    conn.close()
+
+
+def build_game_intelligence_embed(
+    query,
+    data
+):
 
     embed = discord.Embed(
         title=f"🎮 {query}",
         color=discord.Color.blurple(),
-        timestamp=datetime.now(timezone.utc),
+        timestamp=datetime.now(
+            timezone.utc
+        ),
     )
 
-    games = data.get("games", [])
-    news = data.get("news", [])
+    games = data.get(
+        "games",
+        []
+    )
+
+    news = data.get(
+        "news",
+        [])
+
+    # ========================================================
+    # ألعاب وخرائط Roblox
+    # ========================================================
 
     if games:
+
         lines = []
-        for index, game in enumerate(games[:8], 1):
+
+        for index, game in enumerate(
+            games[:8],
+            1
+        ):
+
             playing = f"{game.get('playing', 0):,}"
-            creator = game.get("creator") or "غير معروف"
+
+            creator = (
+                game.get("creator")
+                or "غير معروف"
+            )
+
             lines.append(
                 f"**{index}. {game['name'][:70]}**\n"
-                f"👥 يلعبون الآن: **{playing}** • 👤 {creator[:40]}"
+                f"👥 يلعبون الآن: **{playing}** • "
+                f"👤 {creator[:40]}"
             )
+
         embed.add_field(
             name="🕹️ ألعاب وخرائط Roblox",
             value="\n\n".join(lines)[:1024],
             inline=False,
         )
+
     else:
+
         embed.add_field(
             name="🕹️ Roblox",
-            value="ما لقيت لعبة مطابقة مباشرة في بحث Roblox.",
+            value=(
+                "ما لقيت لعبة مطابقة مباشرة "
+                "في بحث Roblox."
+            ),
             inline=False,
         )
 
+    # ========================================================
+    # أخبار Roblox المرتبطة بالنتيجة
+    # ========================================================
+
     if news:
+
         lines = []
+
         for item in news[:6]:
-            title = item.get("title", "خبر جديد")[:160]
-            link = item.get("link") or ""
+
+            title = str(
+                item.get(
+                    "title",
+                    "خبر جديد"
+                )
+            )[:160]
+
+            link = (
+                item.get("link")
+                or ""
+            )
+
             if link:
-                lines.append(f"• [{title}]({link})")
+
+                lines.append(
+                    f"• [{title}]({link})"
+                )
+
             else:
-                lines.append(f"• {title}")
+
+                lines.append(
+                    f"• {title}"
+                )
+
         embed.add_field(
             name="📰 أحداث وتحديثات وأخبار",
             value="\n".join(lines)[:1024],
             inline=False,
         )
 
+    # ========================================================
+    # Gemini fallback
+    # ========================================================
+
     if data.get("ai"):
+
         embed.add_field(
             name="🤖 مساعد Fime",
-            value=str(data["ai"])[:1024],
+            value=str(
+                data["ai"]
+            )[:1024],
             inline=False,
         )
+
+    # ========================================================
+    # معلومات البحث
+    # ========================================================
 
     embed.add_field(
         name="ℹ️ وش يقدر يبحث عنه؟",
         value=(
-            "أحداث، تحديثات، حيوانات، بيض، ندرة، لاعبين، "
-            "معلومات الماب وأي شيء تكتبه مرتبط بروبلوكس."
+            "أحداث، تحديثات، حيوانات، بيض، ندرة، "
+            "لاعبين، معلومات الماب وأي شيء تكتبه "
+            "مرتبط بروبلوكس."
         ),
         inline=False,
     )
-    embed.set_footer(text="حقوق Fime • بحث عام")
+
+    embed.set_footer(
+        text="حقوق Fime • بحث عام"
+    )
+
     return embed
 
 
-def build_event_embed(game_name, news):
+def build_event_embed(
+    game_name,
+    news
+):
 
     embed = discord.Embed(
-        title=f"🚨 حدث / تحديث جديد — {game_name}",
+        title=(
+            f"🚨 حدث / تحديث جديد — "
+            f"{game_name}"
+        ),
         color=discord.Color.orange(),
-        timestamp=datetime.now(timezone.utc),
+        timestamp=datetime.now(
+            timezone.utc
+        ),
     )
 
     lines = []
-    for item in news[:8]:
-        title = item.get("title", "تحديث جديد")[:180]
-        lines.append(f"• {title}")
 
-    embed.description = "\n".join(lines)[:4096] if lines else "تم رصد تحديث جديد، لكن تفاصيله غير متاحة حاليًا."
-    embed.set_footer(text="حقوق Fime • تنبيهات الأحداث")
+    for item in news[:8]:
+
+        title = str(
+            item.get(
+                "title",
+                "تحديث جديد"
+            )
+        )[:180]
+
+        lines.append(
+            f"• {title}"
+        )
+
+    embed.description = (
+        "\n".join(lines)[:4096]
+        if lines
+        else
+        "تم رصد تحديث جديد، لكن تفاصيله "
+        "غير متاحة حاليًا."
+    )
+
+    embed.set_footer(
+        text="حقوق Fime • تنبيهات الأحداث"
+    )
+
     return embed
 
 
@@ -2232,12 +2689,15 @@ async def general_stock_search(
         return None
 
     queries = {
+
         GAME_GAG: (
             "Grow a Garden stock today Roblox"
         ),
+
         GAME_BLOX: (
             "Blox Fruits stock today Roblox"
         ),
+
         GAME_STEAL: (
             "Steal An Egg stock today Roblox"
         ),
@@ -2411,9 +2871,7 @@ def build_search_embed(
         )
 
     embed.set_footer(
-        text=(
-            "Team Fime • General Search Fallback"
-        )
+        text="Team Fime • General Search Fallback"
     )
 
     return embed
