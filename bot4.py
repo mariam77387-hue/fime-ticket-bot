@@ -320,7 +320,23 @@ GAME_ALIASES = {
         "مردر ميستري",
         "مردر"
     ]
-}
+,
+
+    "steal an egg": [
+        "steal an egg",
+        "steal a egg",
+        "steal egg",
+        "steal the egg",
+        "steal an egg roblox",
+        "سرقة البيض",
+        "سرقه البيض",
+        "سرق البيض",
+        "سرقة البيضة",
+        "سرقه البيضة",
+        "سرقه بيض",
+        "سرقة بيض",
+        "بيض",
+    ],}
 
 
 def normalize_game_name(text):
@@ -463,130 +479,217 @@ def resolve_game_query(query):
             if matched_alias in aliases:
                 return game_name
 
-    # البحث العادي إذا لم تكن اللعبة من القائمة
-    return query
+    arabic_fallbacks = {
+        "سرقه البيض": "steal an egg",
+        "سرقة البيض": "steal an egg",
+        "سرق البيض": "steal an egg",
+        "جرو جاردن": "grow a garden",
+        "قرو جاردن": "grow a garden",
+        "بلوك فروت": "blox fruits",
+        "بلوكس فروت": "blox fruits",
+        "مردر مستري 2": "murder mystery 2",
+        "ام ام 2": "murder mystery 2",
+    }
+    return arabic_fallbacks.get(normalized_query, query)
 
 
-async def automatic_game_search(
-    message,
-    query
-):
-    resolved_query = resolve_game_query(
-        query
-    )
 
-    # نستخدم ScriptBlox مباشرة في البحث التلقائي
-    scripts, total_pages, error = fetch_scripts(
-        "scriptblox",
-        resolved_query,
-        "free",
-        1
-    )
-
-    if error:
-        await message.channel.send(
-            f"❌ ما لقيت نتائج لـ **{query}**."
+class ScriptResultSelect(discord.ui.Select):
+    def __init__(self, scripts, page=0):
+        self.scripts = scripts
+        self.page = page
+        start = page * 20
+        options = []
+        for i, script in enumerate(scripts[start:start + 20], start=start + 1):
+            title = str(script.get("title", "بدون اسم")).strip() or "بدون اسم"
+            game = script.get("game", {})
+            game = game.get("name", "") if isinstance(game, dict) else ""
+            options.append(discord.SelectOption(
+                label=f"{i}. {title}"[:100],
+                description=(f"{game} • عرض المعلومات بالعربي" if game else "عرض المعلومات بالعربي")[:100],
+                value=str(i - 1)
+            ))
+        super().__init__(
+            placeholder="🎮 اختر السكربت...",
+            min_values=1,
+            max_values=1,
+            options=options,
+            row=0
         )
-        return
 
+    async def callback(self, interaction):
+        index = int(self.values[0])
+        script = self.scripts[index]
+        await interaction.response.edit_message(
+            embed=create_arabic_script_embed(script, index + 1, len(self.scripts)),
+            view=ScriptDetailView(self.scripts, index)
+        )
+
+
+class ScriptResultsView(discord.ui.View):
+    def __init__(self, scripts, page=0):
+        super().__init__(timeout=180)
+        self.scripts = scripts
+        self.page = page
+        self.add_item(ScriptResultSelect(scripts, page))
+
+        total_pages = max(1, (len(scripts) - 1) // 20 + 1)
+        if total_pages > 1:
+            if page > 0:
+                b = discord.ui.Button(label="◀️ السابق", style=discord.ButtonStyle.secondary, row=1)
+                b.callback = self.previous_page
+                self.add_item(b)
+            self.add_item(discord.ui.Button(
+                label=f"صفحة {page + 1}/{total_pages}",
+                style=discord.ButtonStyle.secondary,
+                disabled=True,
+                row=1
+            ))
+            if page < total_pages - 1:
+                b = discord.ui.Button(label="التالي ▶️", style=discord.ButtonStyle.secondary, row=1)
+                b.callback = self.next_page
+                self.add_item(b)
+
+    async def previous_page(self, interaction):
+        await interaction.response.edit_message(
+            view=ScriptResultsView(self.scripts, self.page - 1)
+        )
+
+    async def next_page(self, interaction):
+        await interaction.response.edit_message(
+            view=ScriptResultsView(self.scripts, self.page + 1)
+        )
+
+
+class ScriptDetailView(discord.ui.View):
+    def __init__(self, scripts, index):
+        super().__init__(timeout=180)
+        self.scripts = scripts
+        self.index = index
+
+        if index > 0:
+            b = discord.ui.Button(label="◀️ السابق", style=discord.ButtonStyle.secondary)
+            b.callback = self.previous
+            self.add_item(b)
+
+        if index < len(scripts) - 1:
+            b = discord.ui.Button(label="التالي ▶️", style=discord.ButtonStyle.secondary)
+            b.callback = self.next
+            self.add_item(b)
+
+        b = discord.ui.Button(label="↩️ قائمة النتائج", style=discord.ButtonStyle.primary)
+        b.callback = self.back
+        self.add_item(b)
+
+    async def previous(self, interaction):
+        i = self.index - 1
+        await interaction.response.edit_message(
+            embed=create_arabic_script_embed(self.scripts[i], i + 1, len(self.scripts)),
+            view=ScriptDetailView(self.scripts, i)
+        )
+
+    async def next(self, interaction):
+        i = self.index + 1
+        await interaction.response.edit_message(
+            embed=create_arabic_script_embed(self.scripts[i], i + 1, len(self.scripts)),
+            view=ScriptDetailView(self.scripts, i)
+        )
+
+    async def back(self, interaction):
+        await interaction.response.edit_message(
+            embed=build_results_embed(self.scripts),
+            view=ScriptResultsView(self.scripts, min(self.index // 20, max(0, (len(self.scripts)-1)//20)))
+        )
+
+
+def create_arabic_script_embed(script, number, total):
+    game = script.get("game", {})
+    game_name = game.get("name", "غير معروف") if isinstance(game, dict) else "غير معروف"
+    title = str(script.get("title", "بدون اسم")).strip() or "بدون اسم"
+    verified = "موثّق ✅" if script.get("verified") else "غير موثّق ❌"
+    patched = "متوقف/مصحح ❌" if script.get("isPatched") else "يعمل حاليًا ✅"
+    kind = "مجاني" if str(script.get("scriptType", "free")).lower() == "free" else "مدفوع"
+    key = "يحتاج مفتاح 🔑" if script.get("key") else "بدون مفتاح ✅"
+    code = str(script.get("script", "") or "").strip()
+    if len(code) > 700:
+        code = code[:697] + "..."
+
+    embed = discord.Embed(
+        title=f"🎮 {title}",
+        description=(
+            f"**اللعبة:** {game_name}\n"
+            f"**النوع:** {kind}\n"
+            f"**الحالة:** {patched}\n"
+            f"**التوثيق:** {verified}\n"
+            f"**المفتاح:** {key}\n"
+            f"**المشاهدات:** {script.get('views', 0)}\n\n"
+            "هذه معلومات السكربت بالعربي. استخدم الأزرار للتنقل بين النتائج."
+        ),
+        color=0x7c5cff
+    )
+    if code:
+        embed.add_field(name="📜 معاينة", value=f"```lua\n{code}\n```", inline=False)
+    embed.set_footer(text=f"حقوق Fime • النتيجة {number}/{total}")
+    image = script.get("image")
+    if isinstance(image, str) and image.startswith(("http://", "https://")):
+        embed.set_thumbnail(url=image)
+    return embed
+
+
+def build_results_embed(scripts):
+    return discord.Embed(
+        title="🔎 نتائج البحث",
+        description=(
+            f"لقيت **{len(scripts)}** نتيجة.\n"
+            "اختَر من القائمة تحت الرسالة، وتقدر تتنقل بين النتائج والصفحات."
+        ),
+        color=0x7c5cff
+    )
+
+
+async def fetch_search_results_20(query, mode="free", **filters):
+    results, seen = [], set()
+    for page in (1, 2):
+        scripts, _, error = fetch_scripts("scriptblox", query, mode, page, **filters)
+        if error and not results:
+            return [], error
+        for script in scripts or []:
+            key = script.get("_id") or script.get("slug") or script.get("title")
+            if key in seen:
+                continue
+            seen.add(key)
+            results.append(script)
+            if len(results) >= 20:
+                return results[:20], None
+    return results[:20], None
+
+
+async def send_script_results(destination, query, scripts):
     if not scripts:
-        await message.channel.send(
-            f"❌ ما لقيت نتائج لـ **{query}**."
-        )
+        text = f"❌ ما لقيت نتائج لـ **{query}**."
+        if isinstance(destination, discord.Interaction):
+            await destination.followup.send(text)
+        else:
+            await destination.send(text)
         return
 
-    script = scripts[0]
+    embed = build_results_embed(scripts)
+    embed.add_field(name="🎮 البحث", value=f"`{query}`", inline=True)
+    embed.set_footer(text="حقوق Fime")
 
-    display_total = (
-        total_pages
-        if total_pages is not None
-        else "Unknown"
-    )
+    if isinstance(destination, discord.Interaction):
+        await destination.followup.send(embed=embed, view=ScriptResultsView(scripts))
+    else:
+        await destination.send(embed=embed, view=ScriptResultsView(scripts))
 
-    embed = create_embed(
-        script,
-        1,
-        display_total,
-        "scriptblox"
-    )
 
-    post_url = (
-        f"https://scriptblox.com/script/"
-        f"{script.get('slug','')}"
-    )
-
-    raw_url = (
-        f"https://rawscripts.net/raw/"
-        f"{script.get('slug','')}"
-    )
-
-    download_url = (
-        f"https://scriptblox.com/download/"
-        f"{script.get('_id','')}"
-    )
-
-    view = discord.ui.View(
-        timeout=60
-    )
-
-    view.add_item(
-        discord.ui.Button(
-            label="View",
-            url=post_url,
-            style=discord.ButtonStyle.link,
-            row=1
-        )
-    )
-
-    view.add_item(
-        discord.ui.Button(
-            label="Raw",
-            url=raw_url,
-            style=discord.ButtonStyle.link,
-            row=1
-        )
-    )
-
-    view.add_item(
-        discord.ui.Button(
-            label="Download",
-            url=download_url,
-            style=discord.ButtonStyle.link,
-            row=1
-        )
-    )
-
-    copy_button = discord.ui.Button(
-        label="Copy",
-        style=discord.ButtonStyle.primary,
-        row=1
-    )
-
-    async def auto_copy_callback(
-        btn_interaction
-    ):
-        content = script.get(
-            "script",
-            ""
-        )
-
-        await btn_interaction.response.send_message(
-            f"```\n{content}\n```",
-            ephemeral=True
-        )
-
-    copy_button.callback = (
-        auto_copy_callback
-    )
-
-    view.add_item(
-        copy_button
-    )
-
-    await message.channel.send(
-        embed=embed,
-        view=view
-    )
+async def automatic_game_search(message, query):
+    resolved_query = resolve_game_query(query)
+    scripts, error = await fetch_search_results_20(resolved_query, "free")
+    if error or not scripts:
+        await message.channel.send(f"❌ ما لقيت نتائج لـ **{query}**.")
+        return
+    await send_script_results(message.channel, query, scripts)
 
 
 class MyBot(commands.Bot):
@@ -2900,14 +3003,13 @@ class APISelect(
                 )
             )
 
-            await display_scripts_dynamic(
-                interaction,
-                temp_msg,
+            scripts, error = await fetch_search_results_20(
                 self.query,
                 self.mode,
-                api="scriptblox",
                 **self.filters
             )
+            await temp_msg.edit(content="", embed=None, view=None)
+            await send_script_results(interaction, self.query, scripts)
 
         elif self.values[0] == "rscripts":
 
@@ -3002,76 +3104,24 @@ async def send_api_selection(
 
 @bot.tree.command(
     name="search",
-    description="Search for scripts with advanced filters"
+    description="البحث عن سكربتات وعرض النتائج بالعربي"
 )
 @app_commands.describe(
-    query="The search query",
-    mode="Search mode (free or paid)",
-    verified="Filter by verified status",
-    patched="Filter by patched status (ScriptBlox only)",
-    key_system="Filter by key system requirement",
-    universal="Filter by universal scripts (ScriptBlox only)",
-    mobile_only="Mobile ready scripts only (RScripts only)",
-    sort_by="Sort by field (views, likes, date, etc.)",
-    sort_order="Sort order (asc or desc)"
+    query="اسم الماب بالعربي أو الإنجليزي",
+    mode="نوع السكربت"
 )
 async def slash_search(
     interaction: discord.Interaction,
     query: str,
-    mode: str = 'free',
-    verified: bool = None,
-    patched: bool = None,
-    key_system: bool = None,
-    universal: bool = None,
-    mobile_only: bool = None,
-    sort_by: str = None,
-    sort_order: str = None
+    mode: str = "free"
 ):
-
-    filters = {}
-
-    if verified is not None:
-
-        filters["verified"] = verified
-        filters["verifiedOnly"] = verified
-
-    if patched is not None:
-
-        filters["patched"] = patched
-
-    if key_system is not None:
-
-        filters["key"] = key_system
-        filters["noKeySystem"] = (
-            not key_system
-        )
-
-    if universal is not None:
-
-        filters["universal"] = universal
-
-    if mobile_only is not None:
-
-        filters["mobileOnly"] = mobile_only
-
-    if sort_by:
-
-        filters["sortBy"] = sort_by
-        filters["orderBy"] = sort_by
-
-    if sort_order:
-
-        filters["order"] = sort_order
-        filters["sort"] = sort_order
-
-    await interaction.response.send_message(
-        "Select the API to search scripts from:",
-        view=APISearchView(
-            query,
-            mode,
-            filters
-        )
-    )
+    await interaction.response.defer()
+    resolved_query = resolve_game_query(query)
+    scripts, error = await fetch_search_results_20(resolved_query, mode)
+    if error or not scripts:
+        await interaction.followup.send(f"❌ ما لقيت نتائج لـ **{query}**.")
+        return
+    await send_script_results(interaction, query, scripts)
 
 
 @bot.tree.command(
