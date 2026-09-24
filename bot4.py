@@ -577,6 +577,10 @@ class ScriptDetailView(discord.ui.View):
             b.callback = self.next
             self.add_item(b)
 
+        b = discord.ui.Button(label="📋 نسخ", style=discord.ButtonStyle.success)
+        b.callback = self.copy_script
+        self.add_item(b)
+
         b = discord.ui.Button(label="↩️ قائمة النتائج", style=discord.ButtonStyle.primary)
         b.callback = self.back
         self.add_item(b)
@@ -595,11 +599,46 @@ class ScriptDetailView(discord.ui.View):
             view=ScriptDetailView(self.scripts, i)
         )
 
+    async def copy_script(self, interaction):
+        script = self.scripts[self.index]
+        content = str(script.get("script", "") or "").strip()
+
+        if not content:
+            raw = script.get("rawScript", "")
+            if raw:
+                content = f'loadstring(game:HttpGet("{raw}"))()'
+
+        if not content:
+            await interaction.response.send_message(
+                "❌ ما فيه كود لهذا السكربت.",
+                ephemeral=True
+            )
+            return
+
+        if len(content) <= 1900:
+            safe = content.replace("```", "`\u200b``")
+            await interaction.response.send_message(
+                f"```lua\n{safe}\n```",
+                ephemeral=True
+            )
+        else:
+            import io
+            file = discord.File(
+                io.BytesIO(content.encode("utf-8")),
+                filename="script.lua"
+            )
+            await interaction.response.send_message(
+                "📜 الكود طويل، هذا ملف السكربت:",
+                file=file,
+                ephemeral=True
+            )
+
     async def back(self, interaction):
         await interaction.response.edit_message(
             embed=build_results_embed(self.scripts),
             view=ScriptResultsView(self.scripts, min(self.index // 20, max(0, (len(self.scripts)-1)//20)))
         )
+
 
 
 def create_arabic_script_embed(script, number, total):
