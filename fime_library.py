@@ -255,8 +255,6 @@ class FimeLibrary(commands.Cog):
 
         text = str(text).lower().strip()
 
-        # إزالة التشكيل العربي
-
         arabic_diacritics = (
             "ًٌٍَُِّْـ"
         )
@@ -267,8 +265,6 @@ class FimeLibrary(commands.Cog):
                 char,
                 ""
             )
-
-        # توحيد بعض الحروف العربية
 
         replacements = {
 
@@ -288,8 +284,6 @@ class FimeLibrary(commands.Cog):
                 old,
                 new
             )
-
-        # توحيد المسافات
 
         text = " ".join(
             text.split()
@@ -374,8 +368,6 @@ class FimeLibrary(commands.Cog):
 
             return
 
-        # إذا فيه أكثر من نتيجة نختار واحدة
-
         chosen_script = random.choice(
             matching_scripts
         )
@@ -411,12 +403,8 @@ class FimeLibrary(commands.Cog):
         message: discord.Message
     ):
 
-        # تجاهل البوتات
-
         if message.author.bot:
             return
-
-        # التأكد من السيرفر
 
         if not message.guild:
             return
@@ -424,8 +412,6 @@ class FimeLibrary(commands.Cog):
         guild_id = str(
             message.guild.id
         )
-
-        # هل يوجد روم بحث؟
 
         target_auto_search_channel = (
             self.auto_search_channels.get(
@@ -436,19 +422,13 @@ class FimeLibrary(commands.Cog):
         if not target_auto_search_channel:
             return
 
-        # هل الرسالة في روم البحث؟
-
         if message.channel.id != target_auto_search_channel:
             return
 
         query = message.content.strip()
 
-        # تجاهل الفارغ
-
         if not query:
             return
-
-        # تجاهل أوامر Discord
 
         if query.startswith(
             (
@@ -457,8 +437,6 @@ class FimeLibrary(commands.Cog):
             )
         ):
             return
-
-        # حماية من الرسائل الطويلة
 
         if len(query) > 100:
             return
@@ -617,7 +595,7 @@ class FimeLibrary(commands.Cog):
     # ========================================================
 
     @app_commands.command(
-        name="script",
+        name="fime_script",
         description="احصل على سكربت عشوائي"
     )
     async def slash_random_script(
@@ -1055,8 +1033,6 @@ class FimeLibrary(commands.Cog):
         if self.post_random_script.is_running():
 
             self.post_random_script.cancel()
-
-        # إيقاف حلقات النشر اليدوية
 
         self.active_loops.clear()
 
