@@ -322,7 +322,7 @@ GAME_ALIASES = {
     ]
 ,
 
-    "steal an egg": [
+        "steal an egg": [
         "steal an egg",
         "steal a egg",
         "steal egg",
@@ -336,7 +336,248 @@ GAME_ALIASES = {
         "سرقه بيض",
         "سرقة بيض",
         "بيض",
-    ],}
+    ],
+
+    "phantom forces": [
+        "phantom forces",
+        "phantomforces",
+        "phantom force",
+        "phantom",
+        "pf",
+        "بلانتوم",
+        "بلانتوم العسكريه",
+        "بلانتوم العسكرية",
+        "العسكريه بلانتوم",
+        "العسكرية بلانتوم",
+        "بلانتوم فورسز",
+        "بلانتوم فورس",
+        "فانتوم",
+        "فانتوم فورسز",
+        "فانتوم العسكريه",
+        "العسكريه فانتوم"
+    ],
+
+    "aimbot": [
+        "aimbot",
+        "aim bot",
+        "aim",
+        "ايم بوت",
+        "ايمبوت",
+        "ايم",
+        "ايم بوت روبلوكس"
+    ],
+
+    "da hood": [
+        "da hood",
+        "dahood",
+        "دا هود",
+        "داهود"
+    ],
+
+    "king legacy": [
+        "king legacy",
+        "kinglegacy",
+        "كينق ليقسي",
+        "كنق ليقسي",
+        "كينج ليجاسي",
+        "كنق ليجاسي"
+    ],
+
+    "bee swarm simulator": [
+        "bee swarm simulator",
+        "bee swarm",
+        "beeswarm",
+        "bss",
+        "بي سوارم",
+        "بي سورم",
+        "بي سوارم سيميوليتر"
+    ],
+
+    "blue lock rivals": [
+        "blue lock rivals",
+        "blue lock",
+        "بلو لوك",
+        "بلو لوك رايفلز"
+    ],
+
+    "rivals": [
+        "rivals",
+        "رايفلز",
+        "رايفلس"
+    ],
+
+    "forsaken": [
+        "forsaken",
+        "فورسيكن",
+        "فورسكن"
+    ],
+
+    "99 nights in the forest": [
+        "99 nights in the forest",
+        "99 nights",
+        "99nights",
+        "99 ليله",
+        "99 ليلة",
+        "99 نايتس"
+    ],
+
+    "dead rails": [
+        "dead rails",
+        "deadrails",
+        "ديد ريلز",
+        "ديد رايلز"
+    ],
+
+    "sols rng": [
+        "sols rng",
+        "sol's rng",
+        "solsrng",
+        "سولز",
+        "سولز ار ان جي"
+    ],
+
+    "slap battles": [
+        "slap battles",
+        "slap battle",
+        "slap",
+        "سلاب باتلز",
+        "سلاب باتل",
+        "سلاب"
+    ],
+
+    "combat warriors": [
+        "combat warriors",
+        "كومبات وريرز",
+        "كومبات ووريرز"
+    ],
+
+    "bad business": [
+        "bad business",
+        "باد بزنس",
+        "باد بيزنس"
+    ],
+
+    "build a boat for treasure": [
+        "build a boat for treasure",
+        "build a boat",
+        "babft",
+        "بيلد ا بوت",
+        "بيلد اي بوت"
+    ],
+
+    "work at a pizza place": [
+        "work at a pizza place",
+        "pizza place",
+        "ورك ات ا بيتزا",
+        "بيتزا بليس"
+    ],
+
+    "mad city": [
+        "mad city",
+        "madcity",
+        "مد سيتي",
+        "ماد سيتي"
+    ],
+
+    "tower defense simulator": [
+        "tower defense simulator",
+        "tds",
+        "تاور ديفينس",
+        "تاور ديفنس"
+    ],
+
+    "all star tower defense": [
+        "all star tower defense",
+        "astd",
+        "اول ستار تاور ديفنس",
+        "اول ستار"
+    ],
+
+    "royale high": [
+        "royale high",
+        "رويال هاي"
+    ],
+
+    "lumber tycoon 2": [
+        "lumber tycoon 2",
+        "lumber tycoon",
+        "لمبر تايكون",
+        "لامبر تايكون"
+    ],
+
+    "project slayers": [
+        "project slayers",
+        "بروجكت سلايرز",
+        "بروجكت سليرز"
+    ],
+
+    "type soul": [
+        "type soul",
+        "تايب سول"
+    ],
+
+    "a one piece game": [
+        "a one piece game",
+        "aopg",
+        "one piece",
+        "ون بيس",
+        "ون بيس روبلوكس"
+    ],
+
+    "deepwoken": [
+        "deepwoken",
+        "ديب ووكن",
+        "ديبووكن"
+    ],
+
+    "bizarre lineage": [
+        "bizarre lineage",
+        "بيزار لينيج",
+        "بيزار لينيدج"
+    ],
+
+    "ability wars": [
+        "ability wars",
+        "ابيلتي وورز"
+    ],
+
+    "ragdoll engine": [
+        "ragdoll engine",
+        "راق دول",
+        "ريق دول"
+    ],
+
+    "survive the killer": [
+        "survive the killer",
+        "سرفايف ذا كيلر",
+        "النجاة من القاتل"
+    ],
+
+    "flee the facility": [
+        "flee the facility",
+        "فلي ذا فاسيليتي",
+        "الهروب من المنشاه"
+    ],
+
+    "untitled boxing game": [
+        "untitled boxing game",
+        "ubg",
+        "انتايتلد بوكسنق",
+        "بوكسنق"
+    ],
+
+    "volleyball legends": [
+        "volleyball legends",
+        "فولي بول ليجندز",
+        "فولي بول"
+    ],
+
+    "break in": [
+        "break in",
+        "بريك ان"
+    ],
+}
+
 
 
 def normalize_game_name(text):
