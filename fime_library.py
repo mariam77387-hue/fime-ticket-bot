@@ -343,7 +343,7 @@ class FimeLibrary(commands.Cog):
     def normalize_search_text(self, text):
         text = str(text or "").lower().strip()
 
-        arabic_diacritics = "ًٌٍَُِّْـ"
+        arabic_diacritics = "ًٌٍَُِّْـ"
         for char in arabic_diacritics:
             text = text.replace(char, "")
 
@@ -364,6 +364,17 @@ class FimeLibrary(commands.Cog):
         # نخلي اختلاف المسافات والرموز ما يفسد البحث.
         text = re.sub(r"[^a-z0-9\u0600-\u06FF]+", " ", text)
         text = " ".join(text.split())
+
+        # نشيل "ال" التعريف من الكلمات الطويلة حتى يتطابق
+        # "الدورز" مع "دورز" وغيرها من صيغ الكتابة.
+        words = []
+        for word in text.split():
+            if len(word) > 4 and word.startswith("ال"):
+                words.append(word[2:])
+            else:
+                words.append(word)
+        text = " ".join(words)
+
         return text
 
     # ========================================================
@@ -410,10 +421,32 @@ class FimeLibrary(commands.Cog):
         return (direct * 0.35) + (word_score * 0.50) + (overlap * 0.15)
 
     def get_script_search_candidates(self, script):
-        return [
+        """كل الحقول اللي ممكن يبحث فيها العضو: اسم الماب والعنوان
+        بالإضافة لأي حقول ثانوية موجودة في بيانات السكربت (aliases،
+        tags، keywords...) إن وجدت، بدون ما نكسر السكربتات اللي ماعندها
+        هالحقول."""
+
+        candidates = [
             script.get("map", ""),
-            script.get("title", "")
+            script.get("title", ""),
+            script.get("name", ""),
+            script.get("game", ""),
+            script.get("category", ""),
         ]
+
+        extra_fields = ("aliases", "alt_names", "tags", "keywords")
+
+        for field in extra_fields:
+            value = script.get(field)
+
+            if isinstance(value, str):
+                candidates.append(value)
+            elif isinstance(value, (list, tuple, set)):
+                for item in value:
+                    if isinstance(item, str):
+                        candidates.append(item)
+
+        return [c for c in candidates if c]
 
     def find_matching_scripts(self, script_data, query):
         normalized_query = self.normalize_search_text(query)
@@ -441,11 +474,11 @@ class FimeLibrary(commands.Cog):
             if len(normalized_query) <= 2:
                 minimum_score = 0.86
             elif len(normalized_query) <= 4:
-                minimum_score = 0.70
+                minimum_score = 0.68
             elif len(query_words) > 1:
-                minimum_score = 0.52
+                minimum_score = 0.50
             else:
-                minimum_score = 0.48
+                minimum_score = 0.46
 
             if best_score >= minimum_score:
                 scored.append((best_score, script))
