@@ -38,50 +38,195 @@ def load_scripts_data():
 class ScriptCopyView(ui.View):
     def __init__(self, script_to_copy, script_title=None):
         super().__init__(timeout=None)
-        self.script_to_copy = script_to_copy
+        self.script_to_copy = str(script_to_copy or "")
         self.script_title = script_title
 
     @ui.button(label="📋 نسخ السكربت", style=discord.ButtonStyle.green)
     async def copy_full_button(self, interaction: discord.Interaction, button: ui.Button):
         try:
-            await interaction.response.defer(ephemeral=True)
-            await interaction.followup.send(
-                f"✅ **تم نسخ السكربت بنجاح**\n\n```lua\n{self.script_to_copy}\n```",
+            # Discord لا يسمح برسالة أطول من 2000 حرف؛ نرسل النص خام بدون ```.
+            if len(self.script_to_copy) <= 2000:
+                await interaction.response.send_message(
+                    self.script_to_copy or "⚠️ السكربت فارغ.",
+                    ephemeral=True
+                )
+                return
+
+            import io
+            await interaction.response.send_message(
+                "⚠️ السكربت أطول من حد رسالة Discord، أرسلته لك كملف نصي بدون أي تنسيق.",
+                file=discord.File(
+                    io.BytesIO(self.script_to_copy.encode("utf-8")),
+                    filename=f"{self.script_title or 'script'}.txt"
+                ),
                 ephemeral=True
             )
         except Exception as e:
             try:
-                await interaction.followup.send(f"❌ حدث خطأ: {str(e)}", ephemeral=True)
+                if not interaction.response.is_done():
+                    await interaction.response.send_message(f"❌ حدث خطأ: {e}", ephemeral=True)
+                else:
+                    await interaction.followup.send(f"❌ حدث خطأ: {e}", ephemeral=True)
             except Exception:
                 pass
 
     @ui.button(label="🔗 نسخ رابط", style=discord.ButtonStyle.blurple)
     async def copy_loadstring_button(self, interaction: discord.Interaction, button: ui.Button):
         try:
-            await interaction.response.defer(ephemeral=True)
-            await interaction.followup.send(
-                f"✅ **رابط التحميل:**\n\n```\n{self.script_to_copy}\n```",
+            # هذا الزر كان يعرض المحتوى داخل ```؛ الآن يعرضه خام أيضًا.
+            await interaction.response.send_message(
+                self.script_to_copy or "⚠️ السكربت فارغ.",
                 ephemeral=True
             )
         except Exception as e:
             try:
-                await interaction.followup.send(f"❌ خطأ: {str(e)}", ephemeral=True)
+                await interaction.followup.send(f"❌ خطأ: {e}", ephemeral=True)
             except Exception:
                 pass
 
     @ui.button(label="💾 حفظ", style=discord.ButtonStyle.grey)
     async def save_button(self, interaction: discord.Interaction, button: ui.Button):
         try:
-            await interaction.response.defer(ephemeral=True)
+            import io
             title = self.script_title or "Script"
-            await interaction.followup.send(
-                f"✅ **تم حفظ السكربت: {title}**\n\n"
-                f"```lua\n{self.script_to_copy[:500]}...\n```",
+            await interaction.response.send_message(
+                f"✅ تم تجهيز **{title}** للحفظ.",
+                file=discord.File(
+                    io.BytesIO(self.script_to_copy.encode("utf-8")),
+                    filename=f"{title}.txt"
+                ),
                 ephemeral=True
             )
         except Exception as e:
             try:
-                await interaction.followup.send(f"❌ خطأ: {str(e)}", ephemeral=True)
+                await interaction.followup.send(f"❌ خطأ: {e}", ephemeral=True)
+            except Exception:
+                pass
+
+
+class ScriptBrowserView(ui.View):
+    """تصفح نتائج البحث والتنقل بينها بدل إظهار أول نتيجة فقط."""
+
+    def __init__(self, scripts, requester_id, query):
+        super().__init__(timeout=180)
+        self.scripts = list(scripts or [])
+        self.requester_id = requester_id
+        self.query = query
+        self.index = 0
+        self.message = None
+        self.refresh_buttons()
+
+    async def interaction_check(self, interaction: discord.Interaction):
+        if interaction.user.id != self.requester_id:
+            await interaction.response.send_message(
+                "⚠️ أزرار البحث للشخص اللي طلب البحث فقط.",
+                ephemeral=True
+            )
+            return False
+        return True
+
+    def refresh_buttons(self):
+        self.clear_items()
+
+        previous = ui.Button(
+            label="◀️ السابق",
+            style=discord.ButtonStyle.secondary,
+            disabled=self.index <= 0,
+            row=0
+        )
+        previous.callback = self.previous_callback
+        self.add_item(previous)
+
+        position = ui.Button(
+            label=f"{self.index + 1}/{len(self.scripts)}",
+            style=discord.ButtonStyle.secondary,
+            disabled=True,
+            row=0
+        )
+        self.add_item(position)
+
+        next_button = ui.Button(
+            label="التالي ▶️",
+            style=discord.ButtonStyle.secondary,
+            disabled=self.index >= len(self.scripts) - 1,
+            row=0
+        )
+        next_button.callback = self.next_callback
+        self.add_item(next_button)
+
+        copy_button = ui.Button(
+            label="📋 نسخ السكربت",
+            style=discord.ButtonStyle.success,
+            row=1
+        )
+        copy_button.callback = self.copy_callback
+        self.add_item(copy_button)
+
+    async def render(self, interaction=None, initial=False):
+        script = self.scripts[self.index]
+        embed = await create_script_embed(script)
+        self.refresh_buttons()
+
+        content = (
+            f"🔎 نتائج البحث عن **{self.query}**\n"
+            f"📚 النتيجة **{self.index + 1} من {len(self.scripts)}**\n"
+            f"🗺️ الماب: **{script.get('map') or script.get('title', 'غير معروف')}**"
+        )
+
+        if initial:
+            return content, embed, self
+
+        await interaction.response.edit_message(
+            content=content,
+            embed=embed,
+            view=self
+        )
+
+    async def previous_callback(self, interaction: discord.Interaction):
+        if self.index <= 0:
+            return await interaction.response.defer()
+        self.index -= 1
+        await self.render(interaction)
+
+    async def next_callback(self, interaction: discord.Interaction):
+        if self.index >= len(self.scripts) - 1:
+            return await interaction.response.defer()
+        self.index += 1
+        await self.render(interaction)
+
+    async def copy_callback(self, interaction: discord.Interaction):
+        script = self.scripts[self.index]
+        code = str(script.get("script_code", "") or "")
+        title = script.get("title") or script.get("map") or "Script"
+
+        try:
+            if len(code) <= 2000:
+                await interaction.response.send_message(
+                    code or "⚠️ السكربت فارغ.",
+                    ephemeral=True
+                )
+                return
+
+            import io
+            await interaction.response.send_message(
+                "⚠️ السكربت أطول من حد Discord، أرسلته لك كملف نصي خام.",
+                file=discord.File(
+                    io.BytesIO(code.encode("utf-8")),
+                    filename=f"{title}.txt"
+                ),
+                ephemeral=True
+            )
+        except Exception as e:
+            try:
+                await interaction.followup.send(f"❌ حدث خطأ أثناء النسخ: {e}", ephemeral=True)
+            except Exception:
+                pass
+
+    async def on_timeout(self):
+        self.clear_items()
+        if self.message:
+            try:
+                await self.message.edit(view=self)
             except Exception:
                 pass
 
@@ -222,7 +367,7 @@ class FimeLibrary(commands.Cog):
         return text
 
     # ========================================================
-    # FUZZY MATCHING
+    # NATURAL FUZZY MATCHING
     # ========================================================
 
     def similarity_score(self, query, candidate):
@@ -231,38 +376,38 @@ class FimeLibrary(commands.Cog):
 
         if not query or not candidate:
             return 0.0
-
         if query == candidate:
             return 1.0
 
-        if query in candidate or candidate in query:
-            shorter = min(len(query), len(candidate))
-            longer = max(len(query), len(candidate))
-            return 0.88 + (shorter / max(longer, 1)) * 0.12
+        # البحث الطبيعي: بداية الاسم أو وجود كلمة البحث داخله يعتبر تطابقًا قويًا.
+        if candidate.startswith(query) or query.startswith(candidate):
+            return 0.96
+        if query in candidate:
+            return 0.93
 
         direct = difflib.SequenceMatcher(None, query, candidate).ratio()
+        query_words = [w for w in query.split() if w]
+        candidate_words = [w for w in candidate.split() if w]
 
-        query_words = set(query.split())
-        candidate_words = set(candidate.split())
+        if not query_words or not candidate_words:
+            return direct
 
-        if query_words and candidate_words:
-            overlap = len(query_words & candidate_words) / len(query_words | candidate_words)
-        else:
-            overlap = 0.0
+        word_scores = []
+        for qword in query_words:
+            best = 0.0
+            for cword in candidate_words:
+                if qword == cword:
+                    best = 1.0
+                    break
+                if len(qword) >= 3 and (cword.startswith(qword) or qword.startswith(cword)):
+                    best = max(best, 0.94)
+                best = max(best, difflib.SequenceMatcher(None, qword, cword).ratio())
+            word_scores.append(best)
 
-        partial = 0.0
-        for word in query_words:
-            if len(word) < 3:
-                continue
-            for candidate_word in candidate_words:
-                if len(candidate_word) < 3:
-                    continue
-                partial = max(
-                    partial,
-                    difflib.SequenceMatcher(None, word, candidate_word).ratio()
-                )
+        word_score = sum(word_scores) / len(word_scores)
+        overlap = len(set(query_words) & set(candidate_words)) / max(len(set(query_words) | set(candidate_words)), 1)
 
-        return (direct * 0.45) + (overlap * 0.30) + (partial * 0.25)
+        return (direct * 0.35) + (word_score * 0.50) + (overlap * 0.15)
 
     def get_script_search_candidates(self, script):
         return [
@@ -277,37 +422,37 @@ class FimeLibrary(commands.Cog):
 
         exact = []
         scored = []
+        query_words = normalized_query.split()
 
         for script in script_data:
             candidates = self.get_script_search_candidates(script)
+            normalized_candidates = [self.normalize_search_text(c) for c in candidates if c]
+
+            if any(normalized_query == candidate for candidate in normalized_candidates):
+                exact.append(script)
+                continue
+
             best_score = max(
                 (self.similarity_score(normalized_query, candidate) for candidate in candidates),
                 default=0.0
             )
 
-            normalized_candidates = [
-                self.normalize_search_text(candidate)
-                for candidate in candidates
-            ]
-
-            if any(
-                normalized_query in candidate
-                for candidate in normalized_candidates
-                if candidate
-            ):
-                exact.append(script)
-                continue
-
-            query_word_count = len(normalized_query.split())
-            minimum_score = 0.62
-            if len(normalized_query) <= 3 or (query_word_count == 1 and len(normalized_query) <= 4):
-                minimum_score = 0.72
+            # كلمات طويلة = سماح أكبر بالأخطاء الإملائية، والكلمات القصيرة تحتاج تطابقًا أقوى.
+            if len(normalized_query) <= 2:
+                minimum_score = 0.86
+            elif len(normalized_query) <= 4:
+                minimum_score = 0.70
+            elif len(query_words) > 1:
+                minimum_score = 0.52
+            else:
+                minimum_score = 0.48
 
             if best_score >= minimum_score:
                 scored.append((best_score, script))
 
         if exact:
-            return exact
+            # التطابق الكامل أولًا، ثم بقية النتائج المطابقة إذا وجدت.
+            return exact + [script for _, script in sorted(scored, key=lambda item: item[0], reverse=True)]
 
         scored.sort(key=lambda item: item[0], reverse=True)
         return [script for _, script in scored]
@@ -319,7 +464,7 @@ class FimeLibrary(commands.Cog):
     # SEND AUTO SEARCH RESULT
     # ========================================================
 
-    async def send_auto_search_result(self, channel, query):
+    async def send_auto_search_result(self, channel, query, requester_id=None):
         script_data = load_scripts_data()
 
         if not script_data:
@@ -340,34 +485,17 @@ class FimeLibrary(commands.Cog):
 
         if not matching_scripts:
             if no_key_system:
-                await channel.send(
-                    f"❌ ما لقيت سكربت مناسب لـ **{query}** بدون مفتاح."
-                )
+                await channel.send(f"❌ ما لقيت سكربت مناسب لـ **{query}** بدون مفتاح.")
             else:
-                await channel.send(
-                    f"❌ ما لقيت سكربت مناسب لـ **{query}**"
-                )
+                await channel.send(f"❌ ما لقيت سكربت مناسب لـ **{query}**")
             return
 
-        chosen_script = matching_scripts[0]
-        script_embed = await create_script_embed(chosen_script)
-
-        view = ScriptCopyView(
-            chosen_script.get('script_code', ''),
-            chosen_script.get('title', 'Script')
-        )
-
-        matched_name = chosen_script.get("map") or chosen_script.get("title", query)
-        prefix = "🔎" if self.normalize_search_text(query) == self.normalize_search_text(matched_name) else "🧠"
-
-        await channel.send(
-            content=(
-                f"{prefix} لقيت **{matched_name}** من بحثك: **{query}**\n"
-                f"📚 عدد النتائج المطابقة: **{len(matching_scripts)}**"
-            ),
-            embed=script_embed,
-            view=view
-        )
+        # حد النتائج حتى لا تتحول رسالة البحث إلى عدد ضخم من النتائج.
+        matching_scripts = matching_scripts[:25]
+        view = ScriptBrowserView(matching_scripts, requester_id, query)
+        content, embed, view = await view.render(initial=True)
+        message = await channel.send(content=content, embed=embed, view=view)
+        view.message = message
 
     # ========================================================
     # AUTO SEARCH MESSAGE LISTENER
@@ -405,7 +533,8 @@ class FimeLibrary(commands.Cog):
             async with message.channel.typing():
                 await self.send_auto_search_result(
                     message.channel,
-                    query
+                    query,
+                    message.author.id
                 )
         except Exception as e:
             print(f"Auto search error: {e}")
@@ -607,19 +736,19 @@ class FimeLibrary(commands.Cog):
                 ephemeral=True
             )
 
-        chosen_script = matching_scripts[0]
-        script_embed = await create_script_embed(chosen_script)
-
-        view = ScriptCopyView(
-            chosen_script.get('script_code', ''),
-            chosen_script.get('title', 'Script')
-        )
+        matching_scripts = matching_scripts[:25]
+        view = ScriptBrowserView(matching_scripts, interaction.user.id, query)
+        content, embed, view = await view.render(initial=True)
 
         await interaction.response.send_message(
-            f"🧠 عثرت على **{len(matching_scripts)}** نتيجة قريبة من **{query}**\n",
-            embed=script_embed,
+            content=content,
+            embed=embed,
             view=view
         )
+        try:
+            view.message = await interaction.original_response()
+        except Exception:
+            pass
 
     # ========================================================
     # START POSTING
