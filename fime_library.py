@@ -1,4 +1,4 @@
-# Fime Library Search Engine — Improved Arabic/English Fuzzy Search v2.1
+# Fime Library Search Engine — Fast Arabic/English Search v3.0
 import discord
 from discord.ext import commands, tasks
 from discord import app_commands
@@ -9,26 +9,175 @@ import os
 import asyncio
 import difflib
 import re
+import time
+import copy
+
+try:
+    from rapidfuzz import fuzz
+except Exception:
+    fuzz = None
 
 
 # ============================================================
-# SCRIPTS DATA
+# SCRIPTS DATA — FAST LOCAL CACHE + SEARCH INDEX
 # ============================================================
 
-def load_scripts_data():
+_SCRIPT_DATA_CACHE = []
+_SCRIPT_DATA_MTIME_NS = None
+_SCRIPT_SEARCH_INDEX = []
+_SCRIPT_QUERY_CACHE = {}
+_SCRIPT_QUERY_CACHE_TTL = 90
+_SCRIPT_DATA_PATH = "scripts.json"
+
+
+def _normalize_local_search_text(text):
+    text = str(text or "").lower().strip()
+
+    for char in "ًٌٍَُِّْـ":
+        text = text.replace(char, "")
+
+    replacements = {
+        "أ": "ا",
+        "إ": "ا",
+        "آ": "ا",
+        "ٱ": "ا",
+        "ى": "ي",
+        "ؤ": "و",
+        "ئ": "ي",
+        "ة": "ه",
+    }
+
+    for old, new in replacements.items():
+        text = text.replace(old, new)
+
+    text = re.sub(r"[^a-z0-9\u0600-\u06FF]+", " ", text)
+    text = " ".join(text.split())
+
+    words = []
+    for word in text.split():
+        if len(word) > 4 and word.startswith("ال"):
+            words.append(word[2:])
+        else:
+            words.append(word)
+
+    return " ".join(words)
+
+
+def _compact_local_search_text(text):
+    normalized = _normalize_local_search_text(text)
+    normalized = re.sub(r"(.)\1{1,}", r"\1", normalized)
+    return normalized.replace(" ", "")
+
+
+def _script_search_fields(script):
+    candidates = [
+        script.get("map", ""),
+        script.get("title", ""),
+        script.get("name", ""),
+        script.get("game", ""),
+        script.get("category", ""),
+    ]
+
+    for field in ("aliases", "alt_names", "tags", "keywords"):
+        value = script.get(field)
+        if isinstance(value, str):
+            candidates.append(value)
+        elif isinstance(value, (list, tuple, set)):
+            candidates.extend(
+                item for item in value if isinstance(item, str)
+            )
+
+    return [str(item) for item in candidates if item]
+
+
+def _build_search_index(data):
+    index = []
+    for script in data:
+        if not isinstance(script, dict):
+            continue
+
+        fields = _script_search_fields(script)
+        normalized_fields = [
+            _normalize_local_search_text(field)
+            for field in fields
+            if field
+        ]
+        normalized_fields = [item for item in normalized_fields if item]
+
+        compact_fields = [
+            _compact_local_search_text(item)
+            for item in normalized_fields
+        ]
+
+        first_chars = set()
+        tokens = set()
+        for field in normalized_fields:
+            for token in field.split():
+                if token:
+                    tokens.add(token)
+                    first_chars.add(token[0])
+
+        index.append({
+            "script": script,
+            "fields": normalized_fields,
+            "compact": compact_fields,
+            "tokens": tokens,
+            "first_chars": first_chars,
+        })
+
+    return index
+
+
+def load_scripts_data(force=False):
+    global _SCRIPT_DATA_CACHE
+    global _SCRIPT_DATA_MTIME_NS
+    global _SCRIPT_SEARCH_INDEX
+
     try:
-        with open('scripts.json', 'r', encoding='utf-8') as f:
-            data = json.load(f)
-            return data if isinstance(data, list) else []
+        stat = os.stat(_SCRIPT_DATA_PATH)
+        mtime_ns = stat.st_mtime_ns
     except FileNotFoundError:
         print("ERROR: scripts.json file not found!")
-        return []
-    except json.JSONDecodeError:
-        print("ERROR: Invalid JSON format in scripts.json!")
+        _SCRIPT_DATA_CACHE = []
+        _SCRIPT_SEARCH_INDEX = []
+        _SCRIPT_DATA_MTIME_NS = None
         return []
     except Exception as e:
+        print(f"ERROR reading scripts.json metadata: {e}")
+        return _SCRIPT_DATA_CACHE
+
+    if (
+        not force
+        and _SCRIPT_DATA_MTIME_NS == mtime_ns
+    ):
+        return _SCRIPT_DATA_CACHE
+
+    try:
+        with open(_SCRIPT_DATA_PATH, "r", encoding="utf-8") as f:
+            data = json.load(f)
+
+        if not isinstance(data, list):
+            print("ERROR: scripts.json must contain a list!")
+            data = []
+
+        _SCRIPT_DATA_CACHE = data
+        _SCRIPT_SEARCH_INDEX = _build_search_index(data)
+        _SCRIPT_DATA_MTIME_NS = mtime_ns
+        _SCRIPT_QUERY_CACHE.clear()
+
+        print(
+            f"✅ Fime Library search index ready: "
+            f"{len(_SCRIPT_DATA_CACHE)} scripts"
+        )
+
+        return _SCRIPT_DATA_CACHE
+
+    except json.JSONDecodeError:
+        print("ERROR: Invalid JSON format in scripts.json!")
+        return _SCRIPT_DATA_CACHE
+    except Exception as e:
         print(f"ERROR loading scripts.json: {e}")
-        return []
+        return _SCRIPT_DATA_CACHE
 
 
 # ============================================================
@@ -286,8 +435,13 @@ class FimeLibrary(commands.Cog):
         self.auto_search_channels = {}
         self.auto_search_settings = {}
 
+        self.auto_search_cooldowns = {}
+        self.auto_search_tasks = set()
+        self.auto_search_result_cache = {}
+
         self.load_auto_search_channels()
         self.load_auto_search_settings()
+        load_scripts_data(force=True)
 
     # ========================================================
     # AUTO SEARCH CONFIG
@@ -337,198 +491,270 @@ class FimeLibrary(commands.Cog):
             print(f"ERROR saving auto search settings: {e}")
 
     # ========================================================
-    # NORMALIZE SEARCH TEXT
+    # FAST LOCAL SEARCH ENGINE
     # ========================================================
 
     def normalize_search_text(self, text):
-        text = str(text or "").lower().strip()
-
-        arabic_diacritics = "ًٌٍَُِّْـ"
-        for char in arabic_diacritics:
-            text = text.replace(char, "")
-
-        replacements = {
-            "أ": "ا",
-            "إ": "ا",
-            "آ": "ا",
-            "ٱ": "ا",
-            "ى": "ي",
-            "ؤ": "و",
-            "ئ": "ي",
-            "ة": "ه"
-        }
-
-        for old, new in replacements.items():
-            text = text.replace(old, new)
-
-        # نخلي اختلاف المسافات والرموز ما يفسد البحث.
-        text = re.sub(r"[^a-z0-9\u0600-\u06FF]+", " ", text)
-        text = " ".join(text.split())
-
-        # نشيل "ال" التعريف من الكلمات الطويلة حتى يتطابق
-        # "الدورز" مع "دورز" وغيرها من صيغ الكتابة.
-        words = []
-        for word in text.split():
-            if len(word) > 4 and word.startswith("ال"):
-                words.append(word[2:])
-            else:
-                words.append(word)
-        text = " ".join(words)
-
-        return text
-
-    # ========================================================
-    # NATURAL FUZZY MATCHING
-    # ========================================================
+        return _normalize_local_search_text(text)
 
     def similarity_score(self, query, candidate):
-        query = self.normalize_search_text(query)
-        candidate = self.normalize_search_text(candidate)
+        query = _normalize_local_search_text(query)
+        candidate = _normalize_local_search_text(candidate)
 
         if not query or not candidate:
             return 0.0
         if query == candidate:
             return 1.0
 
-        # البحث الطبيعي: بداية الاسم أو وجود كلمة البحث داخله يعتبر تطابقًا قويًا.
         if candidate.startswith(query) or query.startswith(candidate):
             return 0.96
         if query in candidate:
             return 0.93
 
-        direct = difflib.SequenceMatcher(None, query, candidate).ratio()
-        query_words = [w for w in query.split() if w]
-        candidate_words = [w for w in candidate.split() if w]
+        if fuzz is not None:
+            return fuzz.WRatio(query, candidate) / 100.0
 
-        if not query_words or not candidate_words:
-            return direct
-
-        word_scores = []
-        for qword in query_words:
-            best = 0.0
-            for cword in candidate_words:
-                if qword == cword:
-                    best = 1.0
-                    break
-                if len(qword) >= 3 and (cword.startswith(qword) or qword.startswith(cword)):
-                    best = max(best, 0.94)
-                best = max(best, difflib.SequenceMatcher(None, qword, cword).ratio())
-            word_scores.append(best)
-
-        word_score = sum(word_scores) / len(word_scores)
-        overlap = len(set(query_words) & set(candidate_words)) / max(len(set(query_words) | set(candidate_words)), 1)
-
-        return (direct * 0.35) + (word_score * 0.50) + (overlap * 0.15)
+        return difflib.SequenceMatcher(
+            None,
+            query,
+            candidate,
+        ).ratio()
 
     def get_script_search_candidates(self, script):
-        """كل الحقول اللي ممكن يبحث فيها العضو: اسم الماب والعنوان
-        بالإضافة لأي حقول ثانوية موجودة في بيانات السكربت (aliases،
-        tags، keywords...) إن وجدت، بدون ما نكسر السكربتات اللي ماعندها
-        هالحقول."""
-
-        candidates = [
-            script.get("map", ""),
-            script.get("title", ""),
-            script.get("name", ""),
-            script.get("game", ""),
-            script.get("category", ""),
-        ]
-
-        extra_fields = ("aliases", "alt_names", "tags", "keywords")
-
-        for field in extra_fields:
-            value = script.get(field)
-
-            if isinstance(value, str):
-                candidates.append(value)
-            elif isinstance(value, (list, tuple, set)):
-                for item in value:
-                    if isinstance(item, str):
-                        candidates.append(item)
-
-        return [c for c in candidates if c]
+        return _script_search_fields(script)
 
     def find_matching_scripts(self, script_data, query):
-        normalized_query = self.normalize_search_text(query)
+        normalized_query = _normalize_local_search_text(query)
+        compact_query = _compact_local_search_text(query)
+
         if not normalized_query:
             return []
 
+        # نستخدم الفهرس الجاهز، ونرجع للبيانات العادية فقط إذا لم تكن متزامنة.
+        load_scripts_data()
+        index = _SCRIPT_SEARCH_INDEX
+
+        if not index or len(index) != len(script_data):
+            index = _build_search_index(script_data)
+
+        query_words = set(normalized_query.split())
+        query_first = normalized_query[:1]
+
+        candidate_entries = []
+        seen_ids = set()
+
+        # تضييق سريع للأسماء التي تشترك في حرف/كلمة قبل الفحص الدقيق.
+        for entry in index:
+            if query_first and entry["first_chars"] and query_first not in entry["first_chars"]:
+                continue
+
+            if query_words and entry["tokens"] & query_words:
+                candidate_entries.append(entry)
+                seen_ids.add(id(entry["script"]))
+
+        # إذا لم نجد مرشحين كفاية، استخدم كل الفهرس للأخطاء الإملائية.
+        if len(candidate_entries) < min(12, len(index)):
+            for entry in index:
+                if id(entry["script"]) not in seen_ids:
+                    candidate_entries.append(entry)
+
         exact = []
         scored = []
-        query_words = normalized_query.split()
 
-        for script in script_data:
-            candidates = self.get_script_search_candidates(script)
-            normalized_candidates = [self.normalize_search_text(c) for c in candidates if c]
+        for entry in candidate_entries:
+            script = entry["script"]
+            fields = entry["fields"]
+            compact_fields = entry["compact"]
 
-            if any(normalized_query == candidate for candidate in normalized_candidates):
+            if normalized_query in fields:
                 exact.append(script)
                 continue
 
-            best_score = max(
-                (self.similarity_score(normalized_query, candidate) for candidate in candidates),
-                default=0.0
-            )
+            best_score = 0.0
 
-            # كلمات طويلة = سماح أكبر بالأخطاء الإملائية، والكلمات القصيرة تحتاج تطابقًا أقوى.
+            for field in fields:
+                if field == normalized_query:
+                    best_score = 1.0
+                    break
+
+                if field.startswith(normalized_query) or normalized_query.startswith(field):
+                    best_score = max(best_score, 0.96)
+                    continue
+
+                if normalized_query in field:
+                    best_score = max(best_score, 0.93)
+                    continue
+
+                if fuzz is not None:
+                    score = fuzz.WRatio(normalized_query, field) / 100.0
+                else:
+                    score = difflib.SequenceMatcher(
+                        None,
+                        normalized_query,
+                        field,
+                    ).ratio()
+
+                best_score = max(best_score, score)
+
+            # compact match يفيد في أخطاء المسافات وتكرار الأحرف.
+            for compact_field in compact_fields:
+                if not compact_field:
+                    continue
+                if compact_query in compact_field or compact_field in compact_query:
+                    best_score = max(best_score, 0.91)
+
             if len(normalized_query) <= 2:
-                minimum_score = 0.86
+                minimum_score = 0.88
             elif len(normalized_query) <= 4:
-                minimum_score = 0.68
+                minimum_score = 0.70
             elif len(query_words) > 1:
                 minimum_score = 0.50
             else:
-                minimum_score = 0.46
+                minimum_score = 0.45
 
             if best_score >= minimum_score:
                 scored.append((best_score, script))
 
-        if exact:
-            # التطابق الكامل أولًا، ثم بقية النتائج المطابقة إذا وجدت.
-            return exact + [script for _, script in sorted(scored, key=lambda item: item[0], reverse=True)]
-
+        exact_ids = {id(script) for script in exact}
         scored.sort(key=lambda item: item[0], reverse=True)
-        return [script for _, script in scored]
+
+        result = list(exact)
+        result.extend(
+            script for _, script in scored
+            if id(script) not in exact_ids
+        )
+
+        return result
 
     def script_matches_query(self, script, query):
         return bool(self.find_matching_scripts([script], query))
 
+
     # ========================================================
-    # SEND AUTO SEARCH RESULT
+    # FAST AUTO SEARCH
     # ========================================================
 
-    async def send_auto_search_result(self, channel, query, requester_id=None):
-        script_data = load_scripts_data()
+    def _auto_search_cache_key(self, guild_id, query):
+        return f"{guild_id}:{_compact_local_search_text(query)}"
 
-        if not script_data:
-            await channel.send("❌ ما فيه سكربتات متاحة حاليًا.")
-            return
+    def _get_cached_auto_result(self, guild_id, query):
+        key = self._auto_search_cache_key(guild_id, query)
+        item = self.auto_search_result_cache.get(key)
+        if not item:
+            return None
+        if time.monotonic() - item["timestamp"] > _SCRIPT_QUERY_CACHE_TTL:
+            self.auto_search_result_cache.pop(key, None)
+            return None
+        return list(item["scripts"])
 
-        matching_scripts = self.find_matching_scripts(script_data, query)
+    def _set_cached_auto_result(self, guild_id, query, scripts):
+        key = self._auto_search_cache_key(guild_id, query)
+        self.auto_search_result_cache[key] = {
+            "timestamp": time.monotonic(),
+            "scripts": list(scripts),
+        }
 
-        guild_id = str(channel.guild.id) if channel.guild else ""
-        settings = self.auto_search_settings.get(guild_id, {})
-        no_key_system = bool(settings.get("no_key_system", False)) if isinstance(settings, dict) else False
-
-        if no_key_system:
-            matching_scripts = [
-                script for script in matching_scripts
-                if bool(script.get("is_keyless", False))
+        if len(self.auto_search_result_cache) > 200:
+            now = time.monotonic()
+            expired = [
+                cache_key
+                for cache_key, item in self.auto_search_result_cache.items()
+                if now - item.get("timestamp", 0) > _SCRIPT_QUERY_CACHE_TTL
             ]
+            for cache_key in expired:
+                self.auto_search_result_cache.pop(cache_key, None)
 
-        if not matching_scripts:
-            if no_key_system:
-                await channel.send(f"❌ ما لقيت سكربت مناسب لـ **{query}** بدون مفتاح.")
+    def _bot4_search_room_owns_channel(self, guild_id, channel_id):
+        """يمنع ردين تلقائيين من bot4 وFime Library في نفس الروم."""
+        try:
+            with open("bot4_search_rooms.json", "r", encoding="utf-8") as f:
+                data = json.load(f)
+            return str(data.get(str(guild_id))) == str(channel_id)
+        except Exception:
+            return False
+
+    async def send_auto_search_result(self, channel, query, requester_id=None, status_message=None):
+        guild_id = str(channel.guild.id) if channel.guild else ""
+        started = time.perf_counter()
+
+        try:
+            load_scripts_data()
+
+            settings = self.auto_search_settings.get(guild_id, {})
+            no_key_system = bool(settings.get("no_key_system", False)) if isinstance(settings, dict) else False
+
+            matching_scripts = self._get_cached_auto_result(guild_id, query)
+
+            if matching_scripts is None:
+                matching_scripts = self.find_matching_scripts(
+                    _SCRIPT_DATA_CACHE,
+                    query,
+                )
+
+                if no_key_system:
+                    matching_scripts = [
+                        script for script in matching_scripts
+                        if bool(script.get("is_keyless", False))
+                    ]
+
+                matching_scripts = matching_scripts[:25]
+                self._set_cached_auto_result(
+                    guild_id,
+                    query,
+                    matching_scripts,
+                )
+
+            if not matching_scripts:
+                content = (
+                    f"❌ ما لقيت سكربت مناسب لـ **{query}**."
+                    if not no_key_system
+                    else f"❌ ما لقيت سكربت مناسب لـ **{query}** بدون مفتاح."
+                )
+                if status_message:
+                    await status_message.edit(content=content, embed=None, view=None)
+                else:
+                    await channel.send(content)
+                return
+
+            view = ScriptBrowserView(
+                matching_scripts,
+                requester_id or channel.guild.id,
+                query,
+            )
+
+            content, embed, view = await view.render(initial=True)
+
+            elapsed = time.perf_counter() - started
+            content += f"\n⚡ البحث المحلي اكتمل خلال **{elapsed:.3f}s**"
+
+            if status_message:
+                message = await status_message.edit(
+                    content=content,
+                    embed=embed,
+                    view=view,
+                )
+                view.message = status_message
             else:
-                await channel.send(f"❌ ما لقيت سكربت مناسب لـ **{query}**")
-            return
+                message = await channel.send(
+                    content=content,
+                    embed=embed,
+                    view=view,
+                )
+                view.message = message
 
-        # حد النتائج حتى لا تتحول رسالة البحث إلى عدد ضخم من النتائج.
-        matching_scripts = matching_scripts[:25]
-        view = ScriptBrowserView(matching_scripts, requester_id, query)
-        content, embed, view = await view.render(initial=True)
-        message = await channel.send(content=content, embed=embed, view=view)
-        view.message = message
+        except Exception as e:
+            print(f"Auto search error: {e}")
+            try:
+                if status_message:
+                    await status_message.edit(
+                        content="❌ حدث خطأ أثناء البحث. جرب مرة ثانية.",
+                        embed=None,
+                        view=None,
+                    )
+                else:
+                    await channel.send("❌ حدث خطأ أثناء البحث. جرب مرة ثانية.")
+            except Exception:
+                pass
 
     # ========================================================
     # AUTO SEARCH MESSAGE LISTENER
@@ -551,26 +777,44 @@ class FimeLibrary(commands.Cog):
         if message.channel.id != target_auto_search_channel:
             return
 
+        # لو bot4 محدد نفس الروم، هو صاحب البحث الخارجي ولا نرسل نتيجة ثانية.
+        if self._bot4_search_room_owns_channel(guild_id, message.channel.id):
+            return
+
         query = message.content.strip()
-
-        if not query:
+        if not query or query.startswith(("/", "!")) or len(query) > 100:
             return
 
-        if query.startswith(("/", "!")):
+        cooldown_key = f"{guild_id}:{message.author.id}"
+        now = time.monotonic()
+        last = self.auto_search_cooldowns.get(cooldown_key, 0)
+
+        if now - last < 2.5:
             return
 
-        if len(query) > 100:
-            return
+        self.auto_search_cooldowns[cooldown_key] = now
 
+        # رد فوري ثم البحث بالخلفية.
         try:
-            async with message.channel.typing():
-                await self.send_auto_search_result(
+            status_message = await message.channel.send(
+                f"⏳ **جاري معالجة طلبك...**\n🎮 الماب: **{query}**"
+            )
+
+            task = asyncio.create_task(
+                self.send_auto_search_result(
                     message.channel,
                     query,
-                    message.author.id
+                    message.author.id,
+                    status_message,
                 )
+            )
+
+            self.auto_search_tasks.add(task)
+            task.add_done_callback(self.auto_search_tasks.discard)
+
         except Exception as e:
-            print(f"Auto search error: {e}")
+            print(f"Auto search start error: {e}")
+
 
     # ========================================================
     # SET AUTO SEARCH
@@ -985,6 +1229,13 @@ class FimeLibrary(commands.Cog):
             self.post_random_script.cancel()
 
         self.active_loops.clear()
+        self.auto_search_cooldowns.clear()
+        self.auto_search_result_cache.clear()
+
+        for task in list(self.auto_search_tasks):
+            task.cancel()
+
+        self.auto_search_tasks.clear()
         print("⛔ Fime Library system unloaded.")
 
 
