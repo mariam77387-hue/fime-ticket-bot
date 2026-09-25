@@ -6,6 +6,8 @@ from discord import ui
 import json
 import os
 import asyncio
+import difflib
+import re
 
 
 # ============================================================
@@ -16,12 +18,15 @@ def load_scripts_data():
     try:
         with open('scripts.json', 'r', encoding='utf-8') as f:
             data = json.load(f)
-            return data
+            return data if isinstance(data, list) else []
     except FileNotFoundError:
         print("ERROR: scripts.json file not found!")
         return []
     except json.JSONDecodeError:
         print("ERROR: Invalid JSON format in scripts.json!")
+        return []
+    except Exception as e:
+        print(f"ERROR loading scripts.json: {e}")
         return []
 
 
@@ -35,76 +40,48 @@ class ScriptCopyView(ui.View):
         self.script_to_copy = script_to_copy
         self.script_title = script_title
 
-    @ui.button(label="📋 نسخ السكربت", style=discord.ButtonStyle.green)
-    async def copy_full_button(
-        self,
-        interaction: discord.Interaction,
-        button: ui.Button
-    ):
+    @ui.button(label="ð ÙØ³Ø® Ø§ÙØ³ÙØ±Ø¨Øª", style=discord.ButtonStyle.green)
+    async def copy_full_button(self, interaction: discord.Interaction, button: ui.Button):
         try:
             await interaction.response.defer(ephemeral=True)
-
             await interaction.followup.send(
-                f"✅ **تم نسخ السكربت بنجاح**\n\n```lua\n{self.script_to_copy}\n```",
+                f"â **ØªÙ ÙØ³Ø® Ø§ÙØ³ÙØ±Ø¨Øª Ø¨ÙØ¬Ø§Ø­**\n\n```lua\n{self.script_to_copy}\n```",
                 ephemeral=True
             )
-
         except Exception as e:
             try:
-                await interaction.followup.send(
-                    f"❌ حدث خطأ: {str(e)}",
-                    ephemeral=True
-                )
-            except:
+                await interaction.followup.send(f"â Ø­Ø¯Ø« Ø®Ø·Ø£: {str(e)}", ephemeral=True)
+            except Exception:
                 pass
 
-    @ui.button(label="🔗 نسخ رابط", style=discord.ButtonStyle.blurple)
-    async def copy_loadstring_button(
-        self,
-        interaction: discord.Interaction,
-        button: ui.Button
-    ):
+    @ui.button(label="ð ÙØ³Ø® Ø±Ø§Ø¨Ø·", style=discord.ButtonStyle.blurple)
+    async def copy_loadstring_button(self, interaction: discord.Interaction, button: ui.Button):
         try:
             await interaction.response.defer(ephemeral=True)
-
             await interaction.followup.send(
-                f"✅ **رابط التحميل:**\n\n```\n{self.script_to_copy}\n```",
+                f"â **Ø±Ø§Ø¨Ø· Ø§ÙØªØ­ÙÙÙ:**\n\n```\n{self.script_to_copy}\n```",
                 ephemeral=True
             )
-
         except Exception as e:
             try:
-                await interaction.followup.send(
-                    f"❌ خطأ: {str(e)}",
-                    ephemeral=True
-                )
-            except:
+                await interaction.followup.send(f"â Ø®Ø·Ø£: {str(e)}", ephemeral=True)
+            except Exception:
                 pass
 
-    @ui.button(label="💾 حفظ", style=discord.ButtonStyle.grey)
-    async def save_button(
-        self,
-        interaction: discord.Interaction,
-        button: ui.Button
-    ):
+    @ui.button(label="ð¾ Ø­ÙØ¸", style=discord.ButtonStyle.grey)
+    async def save_button(self, interaction: discord.Interaction, button: ui.Button):
         try:
             await interaction.response.defer(ephemeral=True)
-
             title = self.script_title or "Script"
-
             await interaction.followup.send(
-                f"✅ **تم حفظ السكربت: {title}**\n\n"
+                f"â **ØªÙ Ø­ÙØ¸ Ø§ÙØ³ÙØ±Ø¨Øª: {title}**\n\n"
                 f"```lua\n{self.script_to_copy[:500]}...\n```",
                 ephemeral=True
             )
-
         except Exception as e:
             try:
-                await interaction.followup.send(
-                    f"❌ خطأ: {str(e)}",
-                    ephemeral=True
-                )
-            except:
+                await interaction.followup.send(f"â Ø®Ø·Ø£: {str(e)}", ephemeral=True)
+            except Exception:
                 pass
 
 
@@ -113,30 +90,30 @@ class ScriptCopyView(ui.View):
 # ============================================================
 
 async def create_script_embed(data):
+    is_safe = bool(data.get('is_safe', False))
+    is_keyless = bool(data.get('is_keyless', False))
+    script_code = str(data.get('script_code', ''))
+    image_url = str(data.get('image_url', '') or '')
 
     description = (
-        f"**الماب** 📌 {data['map']}\n"
-        f"**مـوثوقية** "
-        f"{'✅ موثوقة' if data['is_safe'] else '❌ غير موثوقة'}\n"
-        f"**مشـاهدات** 👀 {data['views']}\n"
-        f"**يحتاج مفتاح** 🔑 "
-        f"{'❌ لا' if data['is_keyless'] else '✅ نعم'}\n\n"
-        f"**مصـحح** "
-        f"{'✅ مصحح' if data['is_safe'] else '❌ غير مصحح'}\n"
-        f"**السكربت (معاينة)** ⚙️\n"
-        f"```lua\n{data['script_code'][:70]}...\n```\n"
-        f"by {data['author']}"
+        f"**Ø§ÙÙØ§Ø¨** ð {data.get('map', 'ØºÙØ± ÙØ¹Ø±ÙÙ')}\n"
+        f"**ÙÙÙØ«ÙÙÙØ©** {'â ÙÙØ«ÙÙØ©' if is_safe else 'â ØºÙØ± ÙÙØ«ÙÙØ©'}\n"
+        f"**ÙØ´ÙØ§ÙØ¯Ø§Øª** ð {data.get('views', 0)}\n"
+        f"**ÙØ­ØªØ§Ø¬ ÙÙØªØ§Ø­** ð {'â ÙØ§' if is_keyless else 'â ÙØ¹Ù'}\n\n"
+        f"**ÙØµÙØ­Ø­** {'â ÙØµØ­Ø­' if is_safe else 'â ØºÙØ± ÙØµØ­Ø­'}\n"
+        f"**Ø§ÙØ³ÙØ±Ø¨Øª (ÙØ¹Ø§ÙÙØ©)** âï¸\n"
+        f"```lua\n{script_code[:70]}...\n```\n"
+        f"by {data.get('author', 'Fime')}"
     )
 
     embed = discord.Embed(
-        title=data['title'],
+        title=data.get('title', data.get('map', 'Fime Script')),
         description=description,
         color=discord.Color.green()
     )
 
-    embed.set_image(
-        url=data['image_url']
-    )
+    if image_url:
+        embed.set_image(url=image_url)
 
     return embed
 
@@ -148,246 +125,239 @@ async def create_script_embed(data):
 class FimeLibrary(commands.Cog):
 
     def __init__(self, bot):
-
         self.bot = bot
-
-        # ====================================================
-        # AUTO POST LOOPS
-        # ====================================================
-
         self.active_loops = {}
 
-        target_channel_env = os.getenv(
-            'TARGET_CHANNEL_ID',
-            '0'
-        )
-
+        target_channel_env = os.getenv('TARGET_CHANNEL_ID', '0')
         try:
-            self.TARGET_CHANNEL_ID = int(
-                target_channel_env
-            )
+            self.TARGET_CHANNEL_ID = int(target_channel_env)
         except ValueError:
             self.TARGET_CHANNEL_ID = 0
 
-        # ====================================================
-        # AUTO SEARCH
-        # ====================================================
-
-        self.AUTO_SEARCH_CHANNELS_FILE = (
-            "auto_search_channels.json"
-        )
+        self.AUTO_SEARCH_CHANNELS_FILE = "auto_search_channels.json"
+        self.AUTO_SEARCH_SETTINGS_FILE = "auto_search_settings.json"
 
         self.auto_search_channels = {}
+        self.auto_search_settings = {}
 
         self.load_auto_search_channels()
+        self.load_auto_search_settings()
 
     # ========================================================
-    # LOAD AUTO SEARCH CHANNELS
+    # AUTO SEARCH CONFIG
     # ========================================================
 
     def load_auto_search_channels(self):
-
         try:
-
-            with open(
-                self.AUTO_SEARCH_CHANNELS_FILE,
-                "r",
-                encoding="utf-8"
-            ) as f:
-
+            with open(self.AUTO_SEARCH_CHANNELS_FILE, "r", encoding="utf-8") as f:
                 data = json.load(f)
 
-                if isinstance(data, dict):
-
-                    self.auto_search_channels = {
-                        str(guild_id): int(channel_id)
-                        for guild_id, channel_id in data.items()
-                    }
-
-                else:
-
-                    self.auto_search_channels = {}
+            if isinstance(data, dict):
+                self.auto_search_channels = {
+                    str(guild_id): int(channel_id)
+                    for guild_id, channel_id in data.items()
+                }
+            else:
+                self.auto_search_channels = {}
 
         except FileNotFoundError:
-
             self.auto_search_channels = {}
-
-        except (
-            json.JSONDecodeError,
-            ValueError,
-            TypeError
-        ):
-
+        except (json.JSONDecodeError, ValueError, TypeError):
             self.auto_search_channels = {}
-
-    # ========================================================
-    # SAVE AUTO SEARCH CHANNELS
-    # ========================================================
 
     def save_auto_search_channels(self):
-
         try:
-
-            with open(
-                self.AUTO_SEARCH_CHANNELS_FILE,
-                "w",
-                encoding="utf-8"
-            ) as f:
-
-                json.dump(
-                    self.auto_search_channels,
-                    f,
-                    ensure_ascii=False,
-                    indent=4
-                )
-
+            with open(self.AUTO_SEARCH_CHANNELS_FILE, "w", encoding="utf-8") as f:
+                json.dump(self.auto_search_channels, f, ensure_ascii=False, indent=4)
         except Exception as e:
+            print(f"ERROR saving auto search channels: {e}")
 
-            print(
-                f"ERROR saving auto search channels: {e}"
-            )
+    def load_auto_search_settings(self):
+        try:
+            with open(self.AUTO_SEARCH_SETTINGS_FILE, "r", encoding="utf-8") as f:
+                data = json.load(f)
+
+            self.auto_search_settings = data if isinstance(data, dict) else {}
+        except FileNotFoundError:
+            self.auto_search_settings = {}
+        except (json.JSONDecodeError, ValueError, TypeError):
+            self.auto_search_settings = {}
+
+    def save_auto_search_settings(self):
+        try:
+            with open(self.AUTO_SEARCH_SETTINGS_FILE, "w", encoding="utf-8") as f:
+                json.dump(self.auto_search_settings, f, ensure_ascii=False, indent=4)
+        except Exception as e:
+            print(f"ERROR saving auto search settings: {e}")
 
     # ========================================================
     # NORMALIZE SEARCH TEXT
     # ========================================================
 
     def normalize_search_text(self, text):
+        text = str(text or "").lower().strip()
 
-        text = str(text).lower().strip()
-
-        arabic_diacritics = (
-            "ًٌٍَُِّْـ"
-        )
-
+        arabic_diacritics = "ÙÙÙÙÙÙÙÙÙ"
         for char in arabic_diacritics:
-
-            text = text.replace(
-                char,
-                ""
-            )
+            text = text.replace(char, "")
 
         replacements = {
-
-            "أ": "ا",
-            "إ": "ا",
-            "آ": "ا",
-            "ٱ": "ا",
-            "ى": "ي",
-            "ؤ": "و",
-            "ئ": "ي"
-
+            "Ø£": "Ø§",
+            "Ø¥": "Ø§",
+            "Ø¢": "Ø§",
+            "Ù±": "Ø§",
+            "Ù": "Ù",
+            "Ø¤": "Ù",
+            "Ø¦": "Ù",
+            "Ø©": "Ù"
         }
 
         for old, new in replacements.items():
+            text = text.replace(old, new)
 
-            text = text.replace(
-                old,
-                new
-            )
-
-        text = " ".join(
-            text.split()
-        )
-
+        # ÙØ®ÙÙ Ø§Ø®ØªÙØ§Ù Ø§ÙÙØ³Ø§ÙØ§Øª ÙØ§ÙØ±ÙÙØ² ÙØ§ ÙÙØ³Ø¯ Ø§ÙØ¨Ø­Ø«.
+        text = re.sub(r"[^a-z0-9\u0600-\u06FF]+", " ", text)
+        text = " ".join(text.split())
         return text
 
     # ========================================================
-    # MATCH SCRIPT
+    # FUZZY MATCHING
     # ========================================================
 
-    def script_matches_query(
-        self,
-        script,
-        query
-    ):
+    def similarity_score(self, query, candidate):
+        query = self.normalize_search_text(query)
+        candidate = self.normalize_search_text(candidate)
 
-        query = self.normalize_search_text(
-            query
-        )
+        if not query or not candidate:
+            return 0.0
 
-        if not query:
-            return False
+        if query == candidate:
+            return 1.0
 
-        map_name = self.normalize_search_text(
-            script.get(
-                "map",
-                ""
+        if query in candidate or candidate in query:
+            shorter = min(len(query), len(candidate))
+            longer = max(len(query), len(candidate))
+            return 0.88 + (shorter / max(longer, 1)) * 0.12
+
+        direct = difflib.SequenceMatcher(None, query, candidate).ratio()
+
+        query_words = set(query.split())
+        candidate_words = set(candidate.split())
+
+        if query_words and candidate_words:
+            overlap = len(query_words & candidate_words) / len(query_words | candidate_words)
+        else:
+            overlap = 0.0
+
+        partial = 0.0
+        for word in query_words:
+            if len(word) < 3:
+                continue
+            for candidate_word in candidate_words:
+                if len(candidate_word) < 3:
+                    continue
+                partial = max(
+                    partial,
+                    difflib.SequenceMatcher(None, word, candidate_word).ratio()
+                )
+
+        return (direct * 0.50) + (overlap * 0.25) + (partial * 0.25)
+
+    def get_script_search_candidates(self, script):
+        return [
+            script.get("map", ""),
+            script.get("title", "")
+        ]
+
+    def find_matching_scripts(self, script_data, query):
+        normalized_query = self.normalize_search_text(query)
+        if not normalized_query:
+            return []
+
+        exact = []
+        scored = []
+
+        for script in script_data:
+            candidates = self.get_script_search_candidates(script)
+            best_score = max(
+                (self.similarity_score(normalized_query, candidate) for candidate in candidates),
+                default=0.0
             )
-        )
 
-        title = self.normalize_search_text(
-            script.get(
-                "title",
-                ""
-            )
-        )
+            normalized_candidates = [
+                self.normalize_search_text(candidate)
+                for candidate in candidates
+            ]
 
-        return (
-            query in map_name
-            or
-            query in title
-        )
+            if any(
+                normalized_query in candidate
+                for candidate in normalized_candidates
+                if candidate
+            ):
+                exact.append(script)
+                continue
+
+            if best_score >= 0.62:
+                scored.append((best_score, script))
+
+        if exact:
+            return exact
+
+        scored.sort(key=lambda item: item[0], reverse=True)
+        return [script for _, script in scored]
+
+    def script_matches_query(self, script, query):
+        return bool(self.find_matching_scripts([script], query))
 
     # ========================================================
     # SEND AUTO SEARCH RESULT
     # ========================================================
 
-    async def send_auto_search_result(
-        self,
-        channel,
-        query
-    ):
-
+    async def send_auto_search_result(self, channel, query):
         script_data = load_scripts_data()
 
         if not script_data:
-
-            await channel.send(
-                "❌ ما فيه سكربتات متاحة حاليًا."
-            )
-
+            await channel.send("â ÙØ§ ÙÙÙ Ø³ÙØ±Ø¨ØªØ§Øª ÙØªØ§Ø­Ø© Ø­Ø§ÙÙÙØ§.")
             return
 
-        matching_scripts = [
+        matching_scripts = self.find_matching_scripts(script_data, query)
 
-            script
-            for script in script_data
+        guild_id = str(channel.guild.id) if channel.guild else ""
+        settings = self.auto_search_settings.get(guild_id, {})
+        no_key_system = bool(settings.get("no_key_system", False)) if isinstance(settings, dict) else False
 
-            if self.script_matches_query(
-                script,
-                query
-            )
-
-        ]
+        if no_key_system:
+            matching_scripts = [
+                script for script in matching_scripts
+                if bool(script.get("is_keyless", False))
+            ]
 
         if not matching_scripts:
-
-            await channel.send(
-                f"❌ ما لقيت سكربت للماب: **{query}**"
-            )
-
+            if no_key_system:
+                await channel.send(
+                    f"â ÙØ§ ÙÙÙØª Ø³ÙØ±Ø¨Øª ÙÙØ§Ø³Ø¨ ÙÙ **{query}** Ø¨Ø¯ÙÙ ÙÙØªØ§Ø­."
+                )
+            else:
+                await channel.send(
+                    f"â ÙØ§ ÙÙÙØª Ø³ÙØ±Ø¨Øª ÙÙØ§Ø³Ø¨ ÙÙ **{query}**"
+                )
             return
 
-        chosen_script = random.choice(
-            matching_scripts
-        )
-
-        script_embed = await create_script_embed(
-            chosen_script
-        )
+        chosen_script = matching_scripts[0]
+        script_embed = await create_script_embed(chosen_script)
 
         view = ScriptCopyView(
-            chosen_script['script_code'],
-            chosen_script.get(
-                'title',
-                'Script'
-            )
+            chosen_script.get('script_code', ''),
+            chosen_script.get('title', 'Script')
         )
+
+        matched_name = chosen_script.get("map") or chosen_script.get("title", query)
+        prefix = "ð" if self.normalize_search_text(query) == self.normalize_search_text(matched_name) else "ð§ "
 
         await channel.send(
             content=(
-                f"🔎 لقيت **{len(matching_scripts)}** "
-                f"نتيجة لـ **{query}**"
+                f"{prefix} ÙÙÙØª **{matched_name}** ÙÙ Ø¨Ø­Ø«Ù: **{query}**\n"
+                f"ð Ø¹Ø¯Ø¯ Ø§ÙÙØªØ§Ø¦Ø¬ Ø§ÙÙØ·Ø§Ø¨ÙØ©: **{len(matching_scripts)}**"
             ),
             embed=script_embed,
             view=view
@@ -398,26 +368,15 @@ class FimeLibrary(commands.Cog):
     # ========================================================
 
     @commands.Cog.listener()
-    async def on_message(
-        self,
-        message: discord.Message
-    ):
-
+    async def on_message(self, message: discord.Message):
         if message.author.bot:
             return
 
         if not message.guild:
             return
 
-        guild_id = str(
-            message.guild.id
-        )
-
-        target_auto_search_channel = (
-            self.auto_search_channels.get(
-                guild_id
-            )
-        )
+        guild_id = str(message.guild.id)
+        target_auto_search_channel = self.auto_search_channels.get(guild_id)
 
         if not target_auto_search_channel:
             return
@@ -430,29 +389,20 @@ class FimeLibrary(commands.Cog):
         if not query:
             return
 
-        if query.startswith(
-            (
-                "/",
-                "!"
-            )
-        ):
+        if query.startswith(("/", "!")):
             return
 
         if len(query) > 100:
             return
 
         try:
-
-            await self.send_auto_search_result(
-                message.channel,
-                query
-            )
-
+            async with message.channel.typing():
+                await self.send_auto_search_result(
+                    message.channel,
+                    query
+                )
         except Exception as e:
-
-            print(
-                f"Auto search error: {e}"
-            )
+            print(f"Auto search error: {e}")
 
     # ========================================================
     # SET AUTO SEARCH
@@ -460,38 +410,35 @@ class FimeLibrary(commands.Cog):
 
     @app_commands.command(
         name="set_auto_search",
-        description="تحديد روم البحث التلقائي"
+        description="ØªØ­Ø¯ÙØ¯ Ø±ÙÙ Ø§ÙØ¨Ø­Ø« Ø§ÙØªÙÙØ§Ø¦Ù"
     )
     @app_commands.describe(
-        channel="الروم الذي سيتم فيه البحث التلقائي"
+        channel="Ø§ÙØ±ÙÙ Ø§ÙØ°Ù Ø³ÙØªÙ ÙÙÙ Ø§ÙØ¨Ø­Ø« Ø§ÙØªÙÙØ§Ø¦Ù",
+        no_key_system="ÙÙ ØªØ±ÙØ¯ Ø³ÙØ±Ø¨ØªØ§Øª Ø¨Ø¯ÙÙ ÙÙØªØ§Ø­ ÙÙØ·Ø"
     )
-    @app_commands.checks.has_permissions(
-        administrator=True
-    )
+    @app_commands.checks.has_permissions(administrator=True)
     async def set_auto_search(
         self,
         interaction: discord.Interaction,
-        channel: discord.TextChannel
+        channel: discord.TextChannel,
+        no_key_system: bool = False
     ):
+        guild_id = str(interaction.guild.id)
 
-        guild_id = str(
-            interaction.guild.id
-        )
-
-        self.auto_search_channels[
-            guild_id
-        ] = channel.id
+        self.auto_search_channels[guild_id] = channel.id
+        self.auto_search_settings[guild_id] = {
+            "no_key_system": bool(no_key_system)
+        }
 
         self.save_auto_search_channels()
+        self.save_auto_search_settings()
+
+        key_text = "Ø¨Ø¯ÙÙ ÙÙØªØ§Ø­ ÙÙØ· ð" if no_key_system else "ÙÙ Ø§ÙØ³ÙØ±Ø¨ØªØ§Øª ð"
 
         await interaction.response.send_message(
-
-            f"✅ تم تحديد روم البحث التلقائي إلى "
-            f"{channel.mention}\n\n"
-
-            f"من الآن أي عضو يكتب اسم الماب داخل الروم، "
-            f"البوت يبحث عنه تلقائيًا.",
-
+            f"â ØªÙ ØªØ­Ø¯ÙØ¯ Ø±ÙÙ Ø§ÙØ¨Ø­Ø« Ø§ÙØªÙÙØ§Ø¦Ù Ø¥ÙÙ {channel.mention}\n"
+            f"ð Ø§ÙÙØ¶Ø¹: **{key_text}**\n\n"
+            f"Ø§ÙØ¢Ù Ø§ÙØ¹Ø¶Ù ÙÙØªØ¨ Ø§Ø³Ù Ø§ÙÙØ§Ø¨Ø Ø­ØªÙ ÙÙ Ø§ÙØ§Ø³Ù ÙÙ ÙØ·Ø§Ø¨Ù 100ÙªØ ÙÙÙÙÙ ÙØ­Ø§ÙÙ ÙØ¬ÙØ¨ Ø£ÙØ±Ø¨ ÙØªÙØ¬Ø© ÙÙ `scripts.json`.",
             ephemeral=True
         )
 
@@ -501,50 +448,69 @@ class FimeLibrary(commands.Cog):
 
     @app_commands.command(
         name="auto_search_room",
-        description="معرفة روم البحث التلقائي الحالي"
+        description="ÙØ¹Ø±ÙØ© Ø±ÙÙ Ø§ÙØ¨Ø­Ø« Ø§ÙØªÙÙØ§Ø¦Ù Ø§ÙØ­Ø§ÙÙ"
     )
-    async def auto_search_room(
-        self,
-        interaction: discord.Interaction
-    ):
-
-        guild_id = str(
-            interaction.guild.id
-        )
-
-        channel_id = (
-            self.auto_search_channels.get(
-                guild_id
-            )
-        )
+    async def auto_search_room(self, interaction: discord.Interaction):
+        guild_id = str(interaction.guild.id)
+        channel_id = self.auto_search_channels.get(guild_id)
 
         if not channel_id:
-
             return await interaction.response.send_message(
-
-                "❌ لم يتم تحديد روم للبحث التلقائي.",
-
+                "â ÙÙ ÙØªÙ ØªØ­Ø¯ÙØ¯ Ø±ÙÙ ÙÙØ¨Ø­Ø« Ø§ÙØªÙÙØ§Ø¦Ù.",
                 ephemeral=True
             )
 
-        channel = interaction.guild.get_channel(
-            channel_id
-        )
-
+        channel = interaction.guild.get_channel(channel_id)
         if not channel:
-
             return await interaction.response.send_message(
-
-                "⚠️ روم البحث المحدد لم يعد موجودًا.",
-
+                "â ï¸ Ø±ÙÙ Ø§ÙØ¨Ø­Ø« Ø§ÙÙØ­Ø¯Ø¯ ÙÙ ÙØ¹Ø¯ ÙÙØ¬ÙØ¯ÙØ§.",
                 ephemeral=True
             )
+
+        settings = self.auto_search_settings.get(guild_id, {})
+        no_key_system = bool(settings.get("no_key_system", False)) if isinstance(settings, dict) else False
+        key_text = "Ø¨Ø¯ÙÙ ÙÙØªØ§Ø­ ÙÙØ· ð" if no_key_system else "ÙÙ Ø§ÙØ³ÙØ±Ø¨ØªØ§Øª ð"
 
         await interaction.response.send_message(
+            f"ð Ø±ÙÙ Ø§ÙØ¨Ø­Ø« Ø§ÙØªÙÙØ§Ø¦Ù Ø§ÙØ­Ø§ÙÙ: {channel.mention}\n"
+            f"ð ÙØ¶Ø¹ Ø§ÙÙÙØªØ§Ø­: **{key_text}**",
+            ephemeral=True
+        )
 
-            f"🔎 روم البحث التلقائي الحالي: "
-            f"{channel.mention}",
+    # ========================================================
+    # CHANGE KEY MODE
+    # ========================================================
 
+    @app_commands.command(
+        name="set_auto_search_key",
+        description="ØªØºÙÙØ± ÙØ¶Ø¹ Ø§ÙÙÙØªØ§Ø­ ÙÙØ¨Ø­Ø« Ø§ÙØªÙÙØ§Ø¦Ù"
+    )
+    @app_commands.describe(
+        no_key_system="True = Ø¨Ø¯ÙÙ ÙÙØªØ§Ø­ ÙÙØ· | False = ÙÙ Ø§ÙØ³ÙØ±Ø¨ØªØ§Øª"
+    )
+    @app_commands.checks.has_permissions(administrator=True)
+    async def set_auto_search_key(
+        self,
+        interaction: discord.Interaction,
+        no_key_system: bool
+    ):
+        guild_id = str(interaction.guild.id)
+
+        if guild_id not in self.auto_search_channels:
+            return await interaction.response.send_message(
+                "â Ø­Ø¯Ø¯ Ø±ÙÙ Ø§ÙØ¨Ø­Ø« Ø£ÙÙÙØ§ Ø¨Ø§Ø³ØªØ®Ø¯Ø§Ù /set_auto_search.",
+                ephemeral=True
+            )
+
+        self.auto_search_settings[guild_id] = {
+            "no_key_system": bool(no_key_system)
+        }
+        self.save_auto_search_settings()
+
+        key_text = "Ø¨Ø¯ÙÙ ÙÙØªØ§Ø­ ÙÙØ· ð" if no_key_system else "ÙÙ Ø§ÙØ³ÙØ±Ø¨ØªØ§Øª ð"
+
+        await interaction.response.send_message(
+            f"â ØªÙ ØªØºÙÙØ± ÙØ¶Ø¹ Ø§ÙØ¨Ø­Ø« Ø§ÙØªÙÙØ§Ø¦Ù Ø¥ÙÙ: **{key_text}**",
             ephemeral=True
         )
 
@@ -554,39 +520,26 @@ class FimeLibrary(commands.Cog):
 
     @app_commands.command(
         name="disable_auto_search",
-        description="إيقاف البحث التلقائي"
+        description="Ø¥ÙÙØ§Ù Ø§ÙØ¨Ø­Ø« Ø§ÙØªÙÙØ§Ø¦Ù"
     )
-    @app_commands.checks.has_permissions(
-        administrator=True
-    )
-    async def disable_auto_search(
-        self,
-        interaction: discord.Interaction
-    ):
-
-        guild_id = str(
-            interaction.guild.id
-        )
+    @app_commands.checks.has_permissions(administrator=True)
+    async def disable_auto_search(self, interaction: discord.Interaction):
+        guild_id = str(interaction.guild.id)
 
         if guild_id not in self.auto_search_channels:
-
             return await interaction.response.send_message(
-
-                "❌ البحث التلقائي غير مفعل.",
-
+                "â Ø§ÙØ¨Ø­Ø« Ø§ÙØªÙÙØ§Ø¦Ù ØºÙØ± ÙÙØ¹Ù.",
                 ephemeral=True
             )
 
-        del self.auto_search_channels[
-            guild_id
-        ]
+        del self.auto_search_channels[guild_id]
+        self.auto_search_settings.pop(guild_id, None)
 
         self.save_auto_search_channels()
+        self.save_auto_search_settings()
 
         await interaction.response.send_message(
-
-            "⛔ تم إيقاف البحث التلقائي.",
-
+            "â ØªÙ Ø¥ÙÙØ§Ù Ø§ÙØ¨Ø­Ø« Ø§ÙØªÙÙØ§Ø¦Ù.",
             ephemeral=True
         )
 
@@ -596,35 +549,22 @@ class FimeLibrary(commands.Cog):
 
     @app_commands.command(
         name="fime_script",
-        description="احصل على سكربت عشوائي"
+        description="Ø§Ø­ØµÙ Ø¹ÙÙ Ø³ÙØ±Ø¨Øª Ø¹Ø´ÙØ§Ø¦Ù"
     )
-    async def slash_random_script(
-        self,
-        interaction: discord.Interaction
-    ):
-
+    async def slash_random_script(self, interaction: discord.Interaction):
         script_data = load_scripts_data()
 
         if not script_data:
-
             return await interaction.response.send_message(
-                "لا توجد سكربتات متاحة حاليًا."
+                "ÙØ§ ØªÙØ¬Ø¯ Ø³ÙØ±Ø¨ØªØ§Øª ÙØªØ§Ø­Ø© Ø­Ø§ÙÙÙØ§."
             )
 
-        chosen_script = random.choice(
-            script_data
-        )
-
-        script_embed = await create_script_embed(
-            chosen_script
-        )
+        chosen_script = random.choice(script_data)
+        script_embed = await create_script_embed(chosen_script)
 
         view = ScriptCopyView(
-            chosen_script['script_code'],
-            chosen_script.get(
-                'title',
-                'Script'
-            )
+            chosen_script.get('script_code', ''),
+            chosen_script.get('title', 'Script')
         )
 
         await interaction.response.send_message(
@@ -638,69 +578,39 @@ class FimeLibrary(commands.Cog):
 
     @app_commands.command(
         name="fime_search",
-        description="ابحث عن سكربت باسم الماب أو اللعبة"
+        description="Ø§Ø¨Ø­Ø« Ø¹Ù Ø³ÙØ±Ø¨Øª Ø¨Ø§Ø³Ù Ø§ÙÙØ§Ø¨ Ø£Ù Ø§ÙÙØ¹Ø¨Ø©"
     )
     async def search_scripts(
         self,
         interaction: discord.Interaction,
         query: str
     ):
-
         script_data = load_scripts_data()
 
         if not script_data:
-
             return await interaction.response.send_message(
-
-                "لا توجد سكربتات متاحة حاليًا.",
-
+                "ÙØ§ ØªÙØ¬Ø¯ Ø³ÙØ±Ø¨ØªØ§Øª ÙØªØ§Ø­Ø© Ø­Ø§ÙÙÙØ§.",
                 ephemeral=True
             )
 
-        matching_scripts = [
-
-            script
-
-            for script in script_data
-
-            if self.script_matches_query(
-                script,
-                query
-            )
-
-        ]
+        matching_scripts = self.find_matching_scripts(script_data, query)
 
         if not matching_scripts:
-
             return await interaction.response.send_message(
-
-                f"❌ لم يتم العثور على سكربتات "
-                f"تتطابق مع: **{query}**",
-
+                f"â ÙÙ ÙØªÙ Ø§ÙØ¹Ø«ÙØ± Ø¹ÙÙ Ø³ÙØ±Ø¨ØªØ§Øª ÙØ±ÙØ¨Ø© ÙÙ: **{query}**",
                 ephemeral=True
             )
 
-        chosen_script = random.choice(
-            matching_scripts
-        )
-
-        script_embed = await create_script_embed(
-            chosen_script
-        )
+        chosen_script = matching_scripts[0]
+        script_embed = await create_script_embed(chosen_script)
 
         view = ScriptCopyView(
-            chosen_script['script_code'],
-            chosen_script.get(
-                'title',
-                'Script'
-            )
+            chosen_script.get('script_code', ''),
+            chosen_script.get('title', 'Script')
         )
 
         await interaction.response.send_message(
-
-            f"✅ عثرت على **{len(matching_scripts)}** "
-            f"سكربت يتطابق مع '{query}'\n",
-
+            f"ð§  Ø¹Ø«Ø±Øª Ø¹ÙÙ **{len(matching_scripts)}** ÙØªÙØ¬Ø© ÙØ±ÙØ¨Ø© ÙÙ **{query}**\n",
             embed=script_embed,
             view=view
         )
@@ -711,29 +621,19 @@ class FimeLibrary(commands.Cog):
 
     @app_commands.command(
         name="start_posting",
-        description="ابدأ النشر التلقائي للسكربتات كل 10 دقائق"
+        description="Ø§Ø¨Ø¯Ø£ Ø§ÙÙØ´Ø± Ø§ÙØªÙÙØ§Ø¦Ù ÙÙØ³ÙØ±Ø¨ØªØ§Øª ÙÙ 10 Ø¯ÙØ§Ø¦Ù"
     )
-    async def start_posting(
-        self,
-        interaction: discord.Interaction
-    ):
-
+    async def start_posting(self, interaction: discord.Interaction):
         if self.post_random_script.is_running():
-
             return await interaction.response.send_message(
-
-                "النشر التلقائي يعمل بالفعل! ✅",
-
+                "Ø§ÙÙØ´Ø± Ø§ÙØªÙÙØ§Ø¦Ù ÙØ¹ÙÙ Ø¨Ø§ÙÙØ¹Ù! â",
                 ephemeral=True
             )
 
         self.post_random_script.start()
 
         await interaction.response.send_message(
-
-            "تم بدء النشر التلقائي! ✅\n"
-            "سيتم نشر سكربت كل 10 دقائق 🎉",
-
+            "ØªÙ Ø¨Ø¯Ø¡ Ø§ÙÙØ´Ø± Ø§ÙØªÙÙØ§Ø¦Ù! â\nØ³ÙØªÙ ÙØ´Ø± Ø³ÙØ±Ø¨Øª ÙÙ 10 Ø¯ÙØ§Ø¦Ù ð",
             ephemeral=True
         )
 
@@ -743,28 +643,19 @@ class FimeLibrary(commands.Cog):
 
     @app_commands.command(
         name="stop_posting",
-        description="أوقف النشر التلقائي"
+        description="Ø£ÙÙÙ Ø§ÙÙØ´Ø± Ø§ÙØªÙÙØ§Ø¦Ù"
     )
-    async def stop_posting(
-        self,
-        interaction: discord.Interaction
-    ):
-
+    async def stop_posting(self, interaction: discord.Interaction):
         if not self.post_random_script.is_running():
-
             return await interaction.response.send_message(
-
-                "النشر التلقائي متوقف بالفعل! ❌",
-
+                "Ø§ÙÙØ´Ø± Ø§ÙØªÙÙØ§Ø¦Ù ÙØªÙÙÙ Ø¨Ø§ÙÙØ¹Ù! â",
                 ephemeral=True
             )
 
         self.post_random_script.stop()
 
         await interaction.response.send_message(
-
-            "تم إيقاف النشر التلقائي! ⛔",
-
+            "ØªÙ Ø¥ÙÙØ§Ù Ø§ÙÙØ´Ø± Ø§ÙØªÙÙØ§Ø¦Ù! â",
             ephemeral=True
         )
 
@@ -772,69 +663,36 @@ class FimeLibrary(commands.Cog):
     # AUTO POST 5 MIN LOOP
     # ========================================================
 
-    async def auto_post_5min_loop(
-        self,
-        channel_id
-    ):
-
+    async def auto_post_5min_loop(self, channel_id):
         await self.bot.wait_until_ready()
 
         while True:
-
             try:
-
                 if channel_id not in self.active_loops:
                     break
 
                 script_data = load_scripts_data()
-
                 if not script_data:
-
                     await asyncio.sleep(300)
-
                     continue
 
-                channel = self.bot.get_channel(
-                    channel_id
-                )
-
-                if (
-                    not channel
-                    or
-                    not hasattr(channel, 'send')
-                ):
-
+                channel = self.bot.get_channel(channel_id)
+                if not channel or not hasattr(channel, 'send'):
                     break
 
-                chosen_script = random.choice(
-                    script_data
-                )
-
-                script_embed = await create_script_embed(
-                    chosen_script
-                )
+                chosen_script = random.choice(script_data)
+                script_embed = await create_script_embed(chosen_script)
 
                 view = ScriptCopyView(
-                    chosen_script['script_code'],
-                    chosen_script.get(
-                        'title',
-                        'Script'
-                    )
+                    chosen_script.get('script_code', ''),
+                    chosen_script.get('title', 'Script')
                 )
 
-                await channel.send(
-                    embed=script_embed,
-                    view=view
-                )
-
+                await channel.send(embed=script_embed, view=view)
                 await asyncio.sleep(300)
 
             except Exception as e:
-
-                print(
-                    f"Auto post error: {e}"
-                )
-
+                print(f"Auto post error: {e}")
                 await asyncio.sleep(300)
 
     # ========================================================
@@ -843,74 +701,45 @@ class FimeLibrary(commands.Cog):
 
     @app_commands.command(
         name="auto_post_5min",
-        description="نشر سكربت عشوائي كل 5 دقائق في قناة محددة"
+        description="ÙØ´Ø± Ø³ÙØ±Ø¨Øª Ø¹Ø´ÙØ§Ø¦Ù ÙÙ 5 Ø¯ÙØ§Ø¦Ù ÙÙ ÙÙØ§Ø© ÙØ­Ø¯Ø¯Ø©"
     )
     async def auto_post_5min(
         self,
         interaction: discord.Interaction,
         channel: discord.TextChannel
     ):
-
         channel_id = channel.id
 
         if channel_id in self.active_loops:
-
             return await interaction.response.send_message(
-
-                f"النشر التلقائي يعمل بالفعل "
-                f"في قناة {channel.mention}! ✅",
-
+                f"Ø§ÙÙØ´Ø± Ø§ÙØªÙÙØ§Ø¦Ù ÙØ¹ÙÙ Ø¨Ø§ÙÙØ¹Ù ÙÙ ÙÙØ§Ø© {channel.mention}! â",
                 ephemeral=True
             )
 
-        self.active_loops[
-            channel_id
-        ] = True
+        self.active_loops[channel_id] = True
 
         try:
-
             script_data = load_scripts_data()
-
             if script_data:
-
-                chosen_script = random.choice(
-                    script_data
-                )
-
-                script_embed = await create_script_embed(
-                    chosen_script
-                )
+                chosen_script = random.choice(script_data)
+                script_embed = await create_script_embed(chosen_script)
 
                 view = ScriptCopyView(
-                    chosen_script['script_code'],
-                    chosen_script.get(
-                        'title',
-                        'Script'
-                    )
+                    chosen_script.get('script_code', ''),
+                    chosen_script.get('title', 'Script')
                 )
 
-                await channel.send(
-                    embed=script_embed,
-                    view=view
-                )
+                await channel.send(embed=script_embed, view=view)
 
         except Exception as e:
-
-            print(
-                f"Auto post initial error: {e}"
-            )
+            print(f"Auto post initial error: {e}")
 
         asyncio.create_task(
-            self.auto_post_5min_loop(
-                channel_id
-            )
+            self.auto_post_5min_loop(channel_id)
         )
 
         await interaction.response.send_message(
-
-            f"تم بدء النشر التلقائي كل 5 دقائق "
-            f"في {channel.mention}! 🎉",
-
+            f"ØªÙ Ø¨Ø¯Ø¡ Ø§ÙÙØ´Ø± Ø§ÙØªÙÙØ§Ø¦Ù ÙÙ 5 Ø¯ÙØ§Ø¦Ù ÙÙ {channel.mention}! ð",
             ephemeral=True
         )
 
@@ -920,35 +749,25 @@ class FimeLibrary(commands.Cog):
 
     @app_commands.command(
         name="stop_auto_5min",
-        description="أوقف النشر التلقائي للسكربتات كل 5 دقائق"
+        description="Ø£ÙÙÙ Ø§ÙÙØ´Ø± Ø§ÙØªÙÙØ§Ø¦Ù ÙÙØ³ÙØ±Ø¨ØªØ§Øª ÙÙ 5 Ø¯ÙØ§Ø¦Ù"
     )
     async def stop_auto_5min(
         self,
         interaction: discord.Interaction,
         channel: discord.TextChannel
     ):
-
         channel_id = channel.id
 
         if channel_id not in self.active_loops:
-
             return await interaction.response.send_message(
-
-                f"النشر التلقائي غير مفعل "
-                f"في {channel.mention}! ❌",
-
+                f"Ø§ÙÙØ´Ø± Ø§ÙØªÙÙØ§Ø¦Ù ØºÙØ± ÙÙØ¹Ù ÙÙ {channel.mention}! â",
                 ephemeral=True
             )
 
-        del self.active_loops[
-            channel_id
-        ]
+        del self.active_loops[channel_id]
 
         await interaction.response.send_message(
-
-            f"تم إيقاف النشر التلقائي "
-            f"في {channel.mention}! ⛔",
-
+            f"ØªÙ Ø¥ÙÙØ§Ù Ø§ÙÙØ´Ø± Ø§ÙØªÙÙØ§Ø¦Ù ÙÙ {channel.mention}! â",
             ephemeral=True
         )
 
@@ -958,87 +777,47 @@ class FimeLibrary(commands.Cog):
 
     @tasks.loop(minutes=10)
     async def post_random_script(self):
-
         await self.bot.wait_until_ready()
 
         script_data = load_scripts_data()
-
-        if (
-            not script_data
-            or
-            self.TARGET_CHANNEL_ID == 0
-        ):
-
+        if not script_data or self.TARGET_CHANNEL_ID == 0:
             return
 
-        channel = self.bot.get_channel(
-            self.TARGET_CHANNEL_ID
-        )
-
-        if (
-            channel
-            and
-            hasattr(channel, 'send')
-        ):
-
+        channel = self.bot.get_channel(self.TARGET_CHANNEL_ID)
+        if channel and hasattr(channel, 'send'):
             try:
-
-                chosen_script = random.choice(
-                    script_data
-                )
-
-                script_embed = await create_script_embed(
-                    chosen_script
-                )
+                chosen_script = random.choice(script_data)
+                script_embed = await create_script_embed(chosen_script)
 
                 view = ScriptCopyView(
-                    chosen_script['script_code'],
-                    chosen_script.get(
-                        'title',
-                        'Script'
-                    )
+                    chosen_script.get('script_code', ''),
+                    chosen_script.get('title', 'Script')
                 )
 
-                await channel.send(
-                    embed=script_embed,
-                    view=view
-                )
-
+                await channel.send(embed=script_embed, view=view)
             except Exception as e:
-
-                print(
-                    f"Random post error: {e}"
-                )
+                print(f"Random post error: {e}")
 
     # ========================================================
     # START EXTENSION TASK
     # ========================================================
 
     async def cog_load(self):
-
         if not self.post_random_script.is_running():
-
             self.post_random_script.start()
 
-        print(
-            "✅ Fime Library system loaded."
-        )
+        print("â Fime Library system loaded.")
 
     # ========================================================
     # UNLOAD EXTENSION
     # ========================================================
 
     async def cog_unload(self):
-
         if self.post_random_script.is_running():
-
             self.post_random_script.cancel()
 
         self.active_loops.clear()
-
-        print(
-            "⛔ Fime Library system unloaded."
-        )
+        print("â Fime Library system unloaded.")
 
 
 # ============================================================
@@ -1046,11 +825,5 @@ class FimeLibrary(commands.Cog):
 # ============================================================
 
 async def setup(bot):
-
-    await bot.add_cog(
-        FimeLibrary(bot)
-    )
-
-    print(
-        "✅ تم تحميل fime_libary.py بنجاح داخل البوت الرئيسي."
-    )
+    await bot.add_cog(FimeLibrary(bot))
+    print("â ØªÙ ØªØ­ÙÙÙ fime_library.py Ø¨ÙØ¬Ø§Ø­ Ø¯Ø§Ø®Ù Ø§ÙØ¨ÙØª Ø§ÙØ±Ø¦ÙØ³Ù.")
