@@ -1,3 +1,4 @@
+# Fime Library Search Engine — Improved Arabic/English Fuzzy Search v2.1
 import discord
 from discord.ext import commands, tasks
 from discord import app_commands
@@ -40,47 +41,47 @@ class ScriptCopyView(ui.View):
         self.script_to_copy = script_to_copy
         self.script_title = script_title
 
-    @ui.button(label="ð ÙØ³Ø® Ø§ÙØ³ÙØ±Ø¨Øª", style=discord.ButtonStyle.green)
+    @ui.button(label="📋 نسخ السكربت", style=discord.ButtonStyle.green)
     async def copy_full_button(self, interaction: discord.Interaction, button: ui.Button):
         try:
             await interaction.response.defer(ephemeral=True)
             await interaction.followup.send(
-                f"â **ØªÙ ÙØ³Ø® Ø§ÙØ³ÙØ±Ø¨Øª Ø¨ÙØ¬Ø§Ø­**\n\n```lua\n{self.script_to_copy}\n```",
+                f"✅ **تم نسخ السكربت بنجاح**\n\n```lua\n{self.script_to_copy}\n```",
                 ephemeral=True
             )
         except Exception as e:
             try:
-                await interaction.followup.send(f"â Ø­Ø¯Ø« Ø®Ø·Ø£: {str(e)}", ephemeral=True)
+                await interaction.followup.send(f"❌ حدث خطأ: {str(e)}", ephemeral=True)
             except Exception:
                 pass
 
-    @ui.button(label="ð ÙØ³Ø® Ø±Ø§Ø¨Ø·", style=discord.ButtonStyle.blurple)
+    @ui.button(label="🔗 نسخ رابط", style=discord.ButtonStyle.blurple)
     async def copy_loadstring_button(self, interaction: discord.Interaction, button: ui.Button):
         try:
             await interaction.response.defer(ephemeral=True)
             await interaction.followup.send(
-                f"â **Ø±Ø§Ø¨Ø· Ø§ÙØªØ­ÙÙÙ:**\n\n```\n{self.script_to_copy}\n```",
+                f"✅ **رابط التحميل:**\n\n```\n{self.script_to_copy}\n```",
                 ephemeral=True
             )
         except Exception as e:
             try:
-                await interaction.followup.send(f"â Ø®Ø·Ø£: {str(e)}", ephemeral=True)
+                await interaction.followup.send(f"❌ خطأ: {str(e)}", ephemeral=True)
             except Exception:
                 pass
 
-    @ui.button(label="ð¾ Ø­ÙØ¸", style=discord.ButtonStyle.grey)
+    @ui.button(label="💾 حفظ", style=discord.ButtonStyle.grey)
     async def save_button(self, interaction: discord.Interaction, button: ui.Button):
         try:
             await interaction.response.defer(ephemeral=True)
             title = self.script_title or "Script"
             await interaction.followup.send(
-                f"â **ØªÙ Ø­ÙØ¸ Ø§ÙØ³ÙØ±Ø¨Øª: {title}**\n\n"
+                f"✅ **تم حفظ السكربت: {title}**\n\n"
                 f"```lua\n{self.script_to_copy[:500]}...\n```",
                 ephemeral=True
             )
         except Exception as e:
             try:
-                await interaction.followup.send(f"â Ø®Ø·Ø£: {str(e)}", ephemeral=True)
+                await interaction.followup.send(f"❌ خطأ: {str(e)}", ephemeral=True)
             except Exception:
                 pass
 
@@ -96,12 +97,12 @@ async def create_script_embed(data):
     image_url = str(data.get('image_url', '') or '')
 
     description = (
-        f"**Ø§ÙÙØ§Ø¨** ð {data.get('map', 'ØºÙØ± ÙØ¹Ø±ÙÙ')}\n"
-        f"**ÙÙÙØ«ÙÙÙØ©** {'â ÙÙØ«ÙÙØ©' if is_safe else 'â ØºÙØ± ÙÙØ«ÙÙØ©'}\n"
-        f"**ÙØ´ÙØ§ÙØ¯Ø§Øª** ð {data.get('views', 0)}\n"
-        f"**ÙØ­ØªØ§Ø¬ ÙÙØªØ§Ø­** ð {'â ÙØ§' if is_keyless else 'â ÙØ¹Ù'}\n\n"
-        f"**ÙØµÙØ­Ø­** {'â ÙØµØ­Ø­' if is_safe else 'â ØºÙØ± ÙØµØ­Ø­'}\n"
-        f"**Ø§ÙØ³ÙØ±Ø¨Øª (ÙØ¹Ø§ÙÙØ©)** âï¸\n"
+        f"**الماب** 📌 {data.get('map', 'غير معروف')}\n"
+        f"**مـوثوقية** {'✅ موثوقة' if is_safe else '❌ غير موثوقة'}\n"
+        f"**مشـاهدات** 👀 {data.get('views', 0)}\n"
+        f"**يحتاج مفتاح** 🔑 {'❌ لا' if is_keyless else '✅ نعم'}\n\n"
+        f"**مصـحح** {'✅ مصحح' if is_safe else '❌ غير مصحح'}\n"
+        f"**السكربت (معاينة)** ⚙️\n"
         f"```lua\n{script_code[:70]}...\n```\n"
         f"by {data.get('author', 'Fime')}"
     )
@@ -197,25 +198,25 @@ class FimeLibrary(commands.Cog):
     def normalize_search_text(self, text):
         text = str(text or "").lower().strip()
 
-        arabic_diacritics = "ÙÙÙÙÙÙÙÙÙ"
+        arabic_diacritics = "ًٌٍَُِّْـ"
         for char in arabic_diacritics:
             text = text.replace(char, "")
 
         replacements = {
-            "Ø£": "Ø§",
-            "Ø¥": "Ø§",
-            "Ø¢": "Ø§",
-            "Ù±": "Ø§",
-            "Ù": "Ù",
-            "Ø¤": "Ù",
-            "Ø¦": "Ù",
-            "Ø©": "Ù"
+            "أ": "ا",
+            "إ": "ا",
+            "آ": "ا",
+            "ٱ": "ا",
+            "ى": "ي",
+            "ؤ": "و",
+            "ئ": "ي",
+            "ة": "ه"
         }
 
         for old, new in replacements.items():
             text = text.replace(old, new)
 
-        # ÙØ®ÙÙ Ø§Ø®ØªÙØ§Ù Ø§ÙÙØ³Ø§ÙØ§Øª ÙØ§ÙØ±ÙÙØ² ÙØ§ ÙÙØ³Ø¯ Ø§ÙØ¨Ø­Ø«.
+        # نخلي اختلاف المسافات والرموز ما يفسد البحث.
         text = re.sub(r"[^a-z0-9\u0600-\u06FF]+", " ", text)
         text = " ".join(text.split())
         return text
@@ -261,7 +262,7 @@ class FimeLibrary(commands.Cog):
                     difflib.SequenceMatcher(None, word, candidate_word).ratio()
                 )
 
-        return (direct * 0.50) + (overlap * 0.25) + (partial * 0.25)
+        return (direct * 0.45) + (overlap * 0.30) + (partial * 0.25)
 
     def get_script_search_candidates(self, script):
         return [
@@ -297,7 +298,12 @@ class FimeLibrary(commands.Cog):
                 exact.append(script)
                 continue
 
-            if best_score >= 0.62:
+            query_word_count = len(normalized_query.split())
+            minimum_score = 0.62
+            if len(normalized_query) <= 3 or (query_word_count == 1 and len(normalized_query) <= 4):
+                minimum_score = 0.72
+
+            if best_score >= minimum_score:
                 scored.append((best_score, script))
 
         if exact:
@@ -317,7 +323,7 @@ class FimeLibrary(commands.Cog):
         script_data = load_scripts_data()
 
         if not script_data:
-            await channel.send("â ÙØ§ ÙÙÙ Ø³ÙØ±Ø¨ØªØ§Øª ÙØªØ§Ø­Ø© Ø­Ø§ÙÙÙØ§.")
+            await channel.send("❌ ما فيه سكربتات متاحة حاليًا.")
             return
 
         matching_scripts = self.find_matching_scripts(script_data, query)
@@ -335,11 +341,11 @@ class FimeLibrary(commands.Cog):
         if not matching_scripts:
             if no_key_system:
                 await channel.send(
-                    f"â ÙØ§ ÙÙÙØª Ø³ÙØ±Ø¨Øª ÙÙØ§Ø³Ø¨ ÙÙ **{query}** Ø¨Ø¯ÙÙ ÙÙØªØ§Ø­."
+                    f"❌ ما لقيت سكربت مناسب لـ **{query}** بدون مفتاح."
                 )
             else:
                 await channel.send(
-                    f"â ÙØ§ ÙÙÙØª Ø³ÙØ±Ø¨Øª ÙÙØ§Ø³Ø¨ ÙÙ **{query}**"
+                    f"❌ ما لقيت سكربت مناسب لـ **{query}**"
                 )
             return
 
@@ -352,12 +358,12 @@ class FimeLibrary(commands.Cog):
         )
 
         matched_name = chosen_script.get("map") or chosen_script.get("title", query)
-        prefix = "ð" if self.normalize_search_text(query) == self.normalize_search_text(matched_name) else "ð§ "
+        prefix = "🔎" if self.normalize_search_text(query) == self.normalize_search_text(matched_name) else "🧠"
 
         await channel.send(
             content=(
-                f"{prefix} ÙÙÙØª **{matched_name}** ÙÙ Ø¨Ø­Ø«Ù: **{query}**\n"
-                f"ð Ø¹Ø¯Ø¯ Ø§ÙÙØªØ§Ø¦Ø¬ Ø§ÙÙØ·Ø§Ø¨ÙØ©: **{len(matching_scripts)}**"
+                f"{prefix} لقيت **{matched_name}** من بحثك: **{query}**\n"
+                f"📚 عدد النتائج المطابقة: **{len(matching_scripts)}**"
             ),
             embed=script_embed,
             view=view
@@ -410,11 +416,11 @@ class FimeLibrary(commands.Cog):
 
     @app_commands.command(
         name="set_auto_search",
-        description="ØªØ­Ø¯ÙØ¯ Ø±ÙÙ Ø§ÙØ¨Ø­Ø« Ø§ÙØªÙÙØ§Ø¦Ù"
+        description="تحديد روم البحث التلقائي"
     )
     @app_commands.describe(
-        channel="Ø§ÙØ±ÙÙ Ø§ÙØ°Ù Ø³ÙØªÙ ÙÙÙ Ø§ÙØ¨Ø­Ø« Ø§ÙØªÙÙØ§Ø¦Ù",
-        no_key_system="ÙÙ ØªØ±ÙØ¯ Ø³ÙØ±Ø¨ØªØ§Øª Ø¨Ø¯ÙÙ ÙÙØªØ§Ø­ ÙÙØ·Ø"
+        channel="الروم الذي سيتم فيه البحث التلقائي",
+        no_key_system="هل تريد سكربتات بدون مفتاح فقط؟"
     )
     @app_commands.checks.has_permissions(administrator=True)
     async def set_auto_search(
@@ -433,12 +439,12 @@ class FimeLibrary(commands.Cog):
         self.save_auto_search_channels()
         self.save_auto_search_settings()
 
-        key_text = "Ø¨Ø¯ÙÙ ÙÙØªØ§Ø­ ÙÙØ· ð" if no_key_system else "ÙÙ Ø§ÙØ³ÙØ±Ø¨ØªØ§Øª ð"
+        key_text = "بدون مفتاح فقط 🔓" if no_key_system else "كل السكربتات 🔑"
 
         await interaction.response.send_message(
-            f"â ØªÙ ØªØ­Ø¯ÙØ¯ Ø±ÙÙ Ø§ÙØ¨Ø­Ø« Ø§ÙØªÙÙØ§Ø¦Ù Ø¥ÙÙ {channel.mention}\n"
-            f"ð Ø§ÙÙØ¶Ø¹: **{key_text}**\n\n"
-            f"Ø§ÙØ¢Ù Ø§ÙØ¹Ø¶Ù ÙÙØªØ¨ Ø§Ø³Ù Ø§ÙÙØ§Ø¨Ø Ø­ØªÙ ÙÙ Ø§ÙØ§Ø³Ù ÙÙ ÙØ·Ø§Ø¨Ù 100ÙªØ ÙÙÙÙÙ ÙØ­Ø§ÙÙ ÙØ¬ÙØ¨ Ø£ÙØ±Ø¨ ÙØªÙØ¬Ø© ÙÙ `scripts.json`.",
+            f"✅ تم تحديد روم البحث التلقائي إلى {channel.mention}\n"
+            f"🔎 الوضع: **{key_text}**\n\n"
+            f"الآن العضو يكتب اسم الماب، حتى لو الاسم مو مطابق 100٪، وفيمي يحاول يجيب أقرب نتيجة من `scripts.json`.",
             ephemeral=True
         )
 
@@ -448,7 +454,7 @@ class FimeLibrary(commands.Cog):
 
     @app_commands.command(
         name="auto_search_room",
-        description="ÙØ¹Ø±ÙØ© Ø±ÙÙ Ø§ÙØ¨Ø­Ø« Ø§ÙØªÙÙØ§Ø¦Ù Ø§ÙØ­Ø§ÙÙ"
+        description="معرفة روم البحث التلقائي الحالي"
     )
     async def auto_search_room(self, interaction: discord.Interaction):
         guild_id = str(interaction.guild.id)
@@ -456,24 +462,24 @@ class FimeLibrary(commands.Cog):
 
         if not channel_id:
             return await interaction.response.send_message(
-                "â ÙÙ ÙØªÙ ØªØ­Ø¯ÙØ¯ Ø±ÙÙ ÙÙØ¨Ø­Ø« Ø§ÙØªÙÙØ§Ø¦Ù.",
+                "❌ لم يتم تحديد روم للبحث التلقائي.",
                 ephemeral=True
             )
 
         channel = interaction.guild.get_channel(channel_id)
         if not channel:
             return await interaction.response.send_message(
-                "â ï¸ Ø±ÙÙ Ø§ÙØ¨Ø­Ø« Ø§ÙÙØ­Ø¯Ø¯ ÙÙ ÙØ¹Ø¯ ÙÙØ¬ÙØ¯ÙØ§.",
+                "⚠️ روم البحث المحدد لم يعد موجودًا.",
                 ephemeral=True
             )
 
         settings = self.auto_search_settings.get(guild_id, {})
         no_key_system = bool(settings.get("no_key_system", False)) if isinstance(settings, dict) else False
-        key_text = "Ø¨Ø¯ÙÙ ÙÙØªØ§Ø­ ÙÙØ· ð" if no_key_system else "ÙÙ Ø§ÙØ³ÙØ±Ø¨ØªØ§Øª ð"
+        key_text = "بدون مفتاح فقط 🔓" if no_key_system else "كل السكربتات 🔑"
 
         await interaction.response.send_message(
-            f"ð Ø±ÙÙ Ø§ÙØ¨Ø­Ø« Ø§ÙØªÙÙØ§Ø¦Ù Ø§ÙØ­Ø§ÙÙ: {channel.mention}\n"
-            f"ð ÙØ¶Ø¹ Ø§ÙÙÙØªØ§Ø­: **{key_text}**",
+            f"🔎 روم البحث التلقائي الحالي: {channel.mention}\n"
+            f"🔑 وضع المفتاح: **{key_text}**",
             ephemeral=True
         )
 
@@ -483,10 +489,10 @@ class FimeLibrary(commands.Cog):
 
     @app_commands.command(
         name="set_auto_search_key",
-        description="ØªØºÙÙØ± ÙØ¶Ø¹ Ø§ÙÙÙØªØ§Ø­ ÙÙØ¨Ø­Ø« Ø§ÙØªÙÙØ§Ø¦Ù"
+        description="تغيير وضع المفتاح للبحث التلقائي"
     )
     @app_commands.describe(
-        no_key_system="True = Ø¨Ø¯ÙÙ ÙÙØªØ§Ø­ ÙÙØ· | False = ÙÙ Ø§ÙØ³ÙØ±Ø¨ØªØ§Øª"
+        no_key_system="True = بدون مفتاح فقط | False = كل السكربتات"
     )
     @app_commands.checks.has_permissions(administrator=True)
     async def set_auto_search_key(
@@ -498,7 +504,7 @@ class FimeLibrary(commands.Cog):
 
         if guild_id not in self.auto_search_channels:
             return await interaction.response.send_message(
-                "â Ø­Ø¯Ø¯ Ø±ÙÙ Ø§ÙØ¨Ø­Ø« Ø£ÙÙÙØ§ Ø¨Ø§Ø³ØªØ®Ø¯Ø§Ù /set_auto_search.",
+                "❌ حدد روم البحث أولًا باستخدام /set_auto_search.",
                 ephemeral=True
             )
 
@@ -507,10 +513,10 @@ class FimeLibrary(commands.Cog):
         }
         self.save_auto_search_settings()
 
-        key_text = "Ø¨Ø¯ÙÙ ÙÙØªØ§Ø­ ÙÙØ· ð" if no_key_system else "ÙÙ Ø§ÙØ³ÙØ±Ø¨ØªØ§Øª ð"
+        key_text = "بدون مفتاح فقط 🔓" if no_key_system else "كل السكربتات 🔑"
 
         await interaction.response.send_message(
-            f"â ØªÙ ØªØºÙÙØ± ÙØ¶Ø¹ Ø§ÙØ¨Ø­Ø« Ø§ÙØªÙÙØ§Ø¦Ù Ø¥ÙÙ: **{key_text}**",
+            f"✅ تم تغيير وضع البحث التلقائي إلى: **{key_text}**",
             ephemeral=True
         )
 
@@ -520,7 +526,7 @@ class FimeLibrary(commands.Cog):
 
     @app_commands.command(
         name="disable_auto_search",
-        description="Ø¥ÙÙØ§Ù Ø§ÙØ¨Ø­Ø« Ø§ÙØªÙÙØ§Ø¦Ù"
+        description="إيقاف البحث التلقائي"
     )
     @app_commands.checks.has_permissions(administrator=True)
     async def disable_auto_search(self, interaction: discord.Interaction):
@@ -528,7 +534,7 @@ class FimeLibrary(commands.Cog):
 
         if guild_id not in self.auto_search_channels:
             return await interaction.response.send_message(
-                "â Ø§ÙØ¨Ø­Ø« Ø§ÙØªÙÙØ§Ø¦Ù ØºÙØ± ÙÙØ¹Ù.",
+                "❌ البحث التلقائي غير مفعل.",
                 ephemeral=True
             )
 
@@ -539,7 +545,7 @@ class FimeLibrary(commands.Cog):
         self.save_auto_search_settings()
 
         await interaction.response.send_message(
-            "â ØªÙ Ø¥ÙÙØ§Ù Ø§ÙØ¨Ø­Ø« Ø§ÙØªÙÙØ§Ø¦Ù.",
+            "⛔ تم إيقاف البحث التلقائي.",
             ephemeral=True
         )
 
@@ -549,14 +555,14 @@ class FimeLibrary(commands.Cog):
 
     @app_commands.command(
         name="fime_script",
-        description="Ø§Ø­ØµÙ Ø¹ÙÙ Ø³ÙØ±Ø¨Øª Ø¹Ø´ÙØ§Ø¦Ù"
+        description="احصل على سكربت عشوائي"
     )
     async def slash_random_script(self, interaction: discord.Interaction):
         script_data = load_scripts_data()
 
         if not script_data:
             return await interaction.response.send_message(
-                "ÙØ§ ØªÙØ¬Ø¯ Ø³ÙØ±Ø¨ØªØ§Øª ÙØªØ§Ø­Ø© Ø­Ø§ÙÙÙØ§."
+                "لا توجد سكربتات متاحة حاليًا."
             )
 
         chosen_script = random.choice(script_data)
@@ -578,7 +584,7 @@ class FimeLibrary(commands.Cog):
 
     @app_commands.command(
         name="fime_search",
-        description="Ø§Ø¨Ø­Ø« Ø¹Ù Ø³ÙØ±Ø¨Øª Ø¨Ø§Ø³Ù Ø§ÙÙØ§Ø¨ Ø£Ù Ø§ÙÙØ¹Ø¨Ø©"
+        description="ابحث عن سكربت باسم الماب أو اللعبة"
     )
     async def search_scripts(
         self,
@@ -589,7 +595,7 @@ class FimeLibrary(commands.Cog):
 
         if not script_data:
             return await interaction.response.send_message(
-                "ÙØ§ ØªÙØ¬Ø¯ Ø³ÙØ±Ø¨ØªØ§Øª ÙØªØ§Ø­Ø© Ø­Ø§ÙÙÙØ§.",
+                "لا توجد سكربتات متاحة حاليًا.",
                 ephemeral=True
             )
 
@@ -597,7 +603,7 @@ class FimeLibrary(commands.Cog):
 
         if not matching_scripts:
             return await interaction.response.send_message(
-                f"â ÙÙ ÙØªÙ Ø§ÙØ¹Ø«ÙØ± Ø¹ÙÙ Ø³ÙØ±Ø¨ØªØ§Øª ÙØ±ÙØ¨Ø© ÙÙ: **{query}**",
+                f"❌ لم يتم العثور على سكربتات قريبة من: **{query}**",
                 ephemeral=True
             )
 
@@ -610,7 +616,7 @@ class FimeLibrary(commands.Cog):
         )
 
         await interaction.response.send_message(
-            f"ð§  Ø¹Ø«Ø±Øª Ø¹ÙÙ **{len(matching_scripts)}** ÙØªÙØ¬Ø© ÙØ±ÙØ¨Ø© ÙÙ **{query}**\n",
+            f"🧠 عثرت على **{len(matching_scripts)}** نتيجة قريبة من **{query}**\n",
             embed=script_embed,
             view=view
         )
@@ -621,19 +627,19 @@ class FimeLibrary(commands.Cog):
 
     @app_commands.command(
         name="start_posting",
-        description="Ø§Ø¨Ø¯Ø£ Ø§ÙÙØ´Ø± Ø§ÙØªÙÙØ§Ø¦Ù ÙÙØ³ÙØ±Ø¨ØªØ§Øª ÙÙ 10 Ø¯ÙØ§Ø¦Ù"
+        description="ابدأ النشر التلقائي للسكربتات كل 10 دقائق"
     )
     async def start_posting(self, interaction: discord.Interaction):
         if self.post_random_script.is_running():
             return await interaction.response.send_message(
-                "Ø§ÙÙØ´Ø± Ø§ÙØªÙÙØ§Ø¦Ù ÙØ¹ÙÙ Ø¨Ø§ÙÙØ¹Ù! â",
+                "النشر التلقائي يعمل بالفعل! ✅",
                 ephemeral=True
             )
 
         self.post_random_script.start()
 
         await interaction.response.send_message(
-            "ØªÙ Ø¨Ø¯Ø¡ Ø§ÙÙØ´Ø± Ø§ÙØªÙÙØ§Ø¦Ù! â\nØ³ÙØªÙ ÙØ´Ø± Ø³ÙØ±Ø¨Øª ÙÙ 10 Ø¯ÙØ§Ø¦Ù ð",
+            "تم بدء النشر التلقائي! ✅\nسيتم نشر سكربت كل 10 دقائق 🎉",
             ephemeral=True
         )
 
@@ -643,19 +649,19 @@ class FimeLibrary(commands.Cog):
 
     @app_commands.command(
         name="stop_posting",
-        description="Ø£ÙÙÙ Ø§ÙÙØ´Ø± Ø§ÙØªÙÙØ§Ø¦Ù"
+        description="أوقف النشر التلقائي"
     )
     async def stop_posting(self, interaction: discord.Interaction):
         if not self.post_random_script.is_running():
             return await interaction.response.send_message(
-                "Ø§ÙÙØ´Ø± Ø§ÙØªÙÙØ§Ø¦Ù ÙØªÙÙÙ Ø¨Ø§ÙÙØ¹Ù! â",
+                "النشر التلقائي متوقف بالفعل! ❌",
                 ephemeral=True
             )
 
         self.post_random_script.stop()
 
         await interaction.response.send_message(
-            "ØªÙ Ø¥ÙÙØ§Ù Ø§ÙÙØ´Ø± Ø§ÙØªÙÙØ§Ø¦Ù! â",
+            "تم إيقاف النشر التلقائي! ⛔",
             ephemeral=True
         )
 
@@ -701,7 +707,7 @@ class FimeLibrary(commands.Cog):
 
     @app_commands.command(
         name="auto_post_5min",
-        description="ÙØ´Ø± Ø³ÙØ±Ø¨Øª Ø¹Ø´ÙØ§Ø¦Ù ÙÙ 5 Ø¯ÙØ§Ø¦Ù ÙÙ ÙÙØ§Ø© ÙØ­Ø¯Ø¯Ø©"
+        description="نشر سكربت عشوائي كل 5 دقائق في قناة محددة"
     )
     async def auto_post_5min(
         self,
@@ -712,7 +718,7 @@ class FimeLibrary(commands.Cog):
 
         if channel_id in self.active_loops:
             return await interaction.response.send_message(
-                f"Ø§ÙÙØ´Ø± Ø§ÙØªÙÙØ§Ø¦Ù ÙØ¹ÙÙ Ø¨Ø§ÙÙØ¹Ù ÙÙ ÙÙØ§Ø© {channel.mention}! â",
+                f"النشر التلقائي يعمل بالفعل في قناة {channel.mention}! ✅",
                 ephemeral=True
             )
 
@@ -739,7 +745,7 @@ class FimeLibrary(commands.Cog):
         )
 
         await interaction.response.send_message(
-            f"ØªÙ Ø¨Ø¯Ø¡ Ø§ÙÙØ´Ø± Ø§ÙØªÙÙØ§Ø¦Ù ÙÙ 5 Ø¯ÙØ§Ø¦Ù ÙÙ {channel.mention}! ð",
+            f"تم بدء النشر التلقائي كل 5 دقائق في {channel.mention}! 🎉",
             ephemeral=True
         )
 
@@ -749,7 +755,7 @@ class FimeLibrary(commands.Cog):
 
     @app_commands.command(
         name="stop_auto_5min",
-        description="Ø£ÙÙÙ Ø§ÙÙØ´Ø± Ø§ÙØªÙÙØ§Ø¦Ù ÙÙØ³ÙØ±Ø¨ØªØ§Øª ÙÙ 5 Ø¯ÙØ§Ø¦Ù"
+        description="أوقف النشر التلقائي للسكربتات كل 5 دقائق"
     )
     async def stop_auto_5min(
         self,
@@ -760,14 +766,14 @@ class FimeLibrary(commands.Cog):
 
         if channel_id not in self.active_loops:
             return await interaction.response.send_message(
-                f"Ø§ÙÙØ´Ø± Ø§ÙØªÙÙØ§Ø¦Ù ØºÙØ± ÙÙØ¹Ù ÙÙ {channel.mention}! â",
+                f"النشر التلقائي غير مفعل في {channel.mention}! ❌",
                 ephemeral=True
             )
 
         del self.active_loops[channel_id]
 
         await interaction.response.send_message(
-            f"ØªÙ Ø¥ÙÙØ§Ù Ø§ÙÙØ´Ø± Ø§ÙØªÙÙØ§Ø¦Ù ÙÙ {channel.mention}! â",
+            f"تم إيقاف النشر التلقائي في {channel.mention}! ⛔",
             ephemeral=True
         )
 
@@ -806,7 +812,7 @@ class FimeLibrary(commands.Cog):
         if not self.post_random_script.is_running():
             self.post_random_script.start()
 
-        print("â Fime Library system loaded.")
+        print("✅ Fime Library system loaded.")
 
     # ========================================================
     # UNLOAD EXTENSION
@@ -817,7 +823,7 @@ class FimeLibrary(commands.Cog):
             self.post_random_script.cancel()
 
         self.active_loops.clear()
-        print("â Fime Library system unloaded.")
+        print("⛔ Fime Library system unloaded.")
 
 
 # ============================================================
@@ -826,4 +832,4 @@ class FimeLibrary(commands.Cog):
 
 async def setup(bot):
     await bot.add_cog(FimeLibrary(bot))
-    print("â ØªÙ ØªØ­ÙÙÙ fime_library.py Ø¨ÙØ¬Ø§Ø­ Ø¯Ø§Ø®Ù Ø§ÙØ¨ÙØª Ø§ÙØ±Ø¦ÙØ³Ù.")
+    print("✅ تم تحميل fime_library.py بنجاح داخل البوت الرئيسي.")
