@@ -378,6 +378,16 @@ def normalize_game_name(text):
         text
     ).strip()
 
+    # نشيل "ال" التعريف من بداية الكلمات الطويلة حتى يتطابق
+    # "الدورز" مع "دورز" وما شابه.
+    stripped_words = []
+    for word in text.split():
+        if len(word) > 4 and word.startswith("ال"):
+            stripped_words.append(word[2:])
+        else:
+            stripped_words.append(word)
+    text = " ".join(stripped_words)
+
     return text
 
 
@@ -492,7 +502,7 @@ def resolve_game_query(query):
                     best_score = score
                     best_game = game_name
 
-        if best_game and best_score >= 0.60:
+        if best_game and best_score >= 0.55:
             return best_game
 
     # البحث العادي إذا لم تكن اللعبة من القائمة
@@ -534,129 +544,106 @@ class AutoSearchKeyView(discord.ui.View):
         self.used = True
         self.disable_all_items()
 
-        await interaction.response.edit_message(
-            content=(
-                "🔎 جاري البحث عن نسخة "
-                f"**{'بدون مفتاح' if no_key else 'بمفتاح'}**..."
-            ),
-            view=self
-        )
+        # نرد على الـ interaction فورًا (قبل أي طلب شبكة) حتى لا تنتهي
+        # صلاحية التفاعل (Discord يعطي 3 ثوانٍ فقط للرد الأول).
+        try:
+            await interaction.response.edit_message(
+                content=(
+                    "🔎 جاري البحث عن نسخة "
+                    f"**{'بدون مفتاح' if no_key else 'بمفتاح'}**..."
+                ),
+                view=self
+            )
+        except discord.errors.InteractionResponded:
+            await interaction.edit_original_response(
+                content=(
+                    "🔎 جاري البحث عن نسخة "
+                    f"**{'بدون مفتاح' if no_key else 'بمفتاح'}**..."
+                ),
+                view=self
+            )
+        except Exception as e:
+            print(f"❌ Key button ack error: {e}")
+            return
 
-        async with interaction.channel.typing():
-            try:
-                # ScriptBlox يستخدم 0 = بدون مفتاح و 1 = بمفتاح.
-                scripts, total_pages, error = fetch_scripts(
+        # نفذ طلبات الشبكة في executor منفصل حتى لا نجمّد حلقة الأحداث
+        # (أثناء هذا الوقت باقي أوامر البوت تبقى تعمل بشكل طبيعي).
+        loop = asyncio.get_running_loop()
+
+        async def fetch_page(page):
+            return await loop.run_in_executor(
+                None,
+                lambda: fetch_scripts(
                     "scriptblox",
                     self.resolved_query,
                     "free",
-                    1,
+                    page,
+                    # ScriptBlox يستخدم 0 = بدون مفتاح و 1 = بمفتاح.
+                    # نمرر القيمة صراحة حتى لا يبقى الفلتر مفتوحًا.
                     key=0 if no_key else 1
                 )
-            except Exception as e:
-                print(f"❌ Key mode search error: {e}")
-                scripts, total_pages, error = None, None, str(e)
+            )
 
-        if error or not scripts:
+        collected = []
+        seen = set()
+        last_error = None
+
+        try:
+            for page in (1, 2):
+                scripts, _, error = await fetch_page(page)
+
+                if error and not collected:
+                    last_error = error
+                    break
+
+                if not scripts:
+                    break
+
+                for script in scripts:
+                    script_key = (
+                        script.get("_id")
+                        or script.get("slug")
+                        or script.get("title")
+                    )
+                    if script_key in seen:
+                        continue
+                    seen.add(script_key)
+                    collected.append(script)
+
+                    if len(collected) >= 20:
+                        break
+
+                if len(collected) >= 20:
+                    break
+
+        except Exception as e:
+            print(f"❌ Key mode search error: {e}")
+            last_error = str(e)
+
+        if not collected:
 
             await interaction.edit_original_response(
                 content=(
                     f"❌ ما لقيت نسخة **{'بدون مفتاح' if no_key else 'بمفتاح'}** "
                     f"لـ **{self.query}**."
                 ),
+                embed=None,
                 view=None
             )
             return
 
-        script = scripts[0]
-
-        display_total = (
-            total_pages
-            if total_pages is not None
-            else "Unknown"
+        result_view = AutoSearchResultBrowseView(
+            self.requester_id,
+            collected,
+            self.query,
+            no_key
         )
 
-        embed = create_embed(
-            script,
-            1,
-            display_total,
-            "scriptblox"
-        )
-
-        post_url = (
-            f"https://scriptblox.com/script/"
-            f"{script.get('slug','')}"
-        )
-
-        raw_url = (
-            f"https://rawscripts.net/raw/"
-            f"{script.get('slug','')}"
-        )
-
-        download_url = (
-            f"https://scriptblox.com/download/"
-            f"{script.get('_id','')}"
-        )
-
-        result_view = discord.ui.View(timeout=60)
-
-        result_view.add_item(
-            discord.ui.Button(
-                label="View",
-                url=post_url,
-                style=discord.ButtonStyle.link,
-                row=1
-            )
-        )
-
-        result_view.add_item(
-            discord.ui.Button(
-                label="Raw",
-                url=raw_url,
-                style=discord.ButtonStyle.link,
-                row=1
-            )
-        )
-
-        result_view.add_item(
-            discord.ui.Button(
-                label="Download",
-                url=download_url,
-                style=discord.ButtonStyle.link,
-                row=1
-            )
-        )
-
-        copy_button = discord.ui.Button(
-            label="Copy",
-            style=discord.ButtonStyle.primary,
-            row=1
-        )
-
-        async def auto_copy_callback(btn_interaction):
-
-            if btn_interaction.user.id != self.requester_id:
-                await btn_interaction.response.send_message(
-                    "⚠️ زر النسخ هذا للشخص اللي طلب البحث فقط.",
-                    ephemeral=True
-                )
-                return
-
-            content = script.get(
-                "script",
-                ""
-            )
-
-            await btn_interaction.response.send_message(
-                f"```\n{content}\n```",
-                ephemeral=True
-            )
-
-        copy_button.callback = auto_copy_callback
-        result_view.add_item(copy_button)
+        embed = result_view.build_embed()
 
         await interaction.edit_original_response(
             content=(
-                f"✅ لقيت لك **{script.get('title', self.query)}**\n"
+                f"✅ لقيت **{len(collected)}** نتيجة لـ **{self.query}**\n"
                 f"🔐 النوع: **{'بدون مفتاح' if no_key else 'بمفتاح'}**"
             ),
             embed=embed,
@@ -683,6 +670,136 @@ class AutoSearchKeyView(discord.ui.View):
 
     async def on_timeout(self):
         self.disable_all_items()
+
+
+class AutoSearchResultBrowseView(discord.ui.View):
+    """تصفح نتائج البحث التلقائي (بدون مفتاح / بمفتاح) بأزرار السابق/التالي."""
+
+    def __init__(self, requester_id, scripts, query, no_key):
+        super().__init__(timeout=180)
+        self.requester_id = requester_id
+        self.scripts = scripts
+        self.query = query
+        self.no_key = no_key
+        self.index = 0
+        self.refresh_buttons()
+
+    async def interaction_check(self, interaction: discord.Interaction):
+        if interaction.user.id != self.requester_id:
+            await interaction.response.send_message(
+                "⚠️ أزرار النتائج للشخص اللي طلب البحث فقط.",
+                ephemeral=True
+            )
+            return False
+        return True
+
+    def refresh_buttons(self):
+        self.clear_items()
+
+        previous = discord.ui.Button(
+            label="◀️",
+            style=discord.ButtonStyle.primary,
+            disabled=self.index <= 0,
+            row=0
+        )
+        previous.callback = self.previous_callback
+        self.add_item(previous)
+
+        position = discord.ui.Button(
+            label=f"{self.index + 1}/{len(self.scripts)}",
+            style=discord.ButtonStyle.secondary,
+            disabled=True,
+            row=0
+        )
+        self.add_item(position)
+
+        nxt = discord.ui.Button(
+            label="▶️",
+            style=discord.ButtonStyle.primary,
+            disabled=self.index >= len(self.scripts) - 1,
+            row=0
+        )
+        nxt.callback = self.next_callback
+        self.add_item(nxt)
+
+        script = self.scripts[self.index]
+
+        post_url = f"https://scriptblox.com/script/{script.get('slug','')}"
+        raw_url = f"https://rawscripts.net/raw/{script.get('slug','')}"
+        download_url = f"https://scriptblox.com/download/{script.get('_id','')}"
+
+        self.add_item(discord.ui.Button(
+            label="View", url=post_url, style=discord.ButtonStyle.link, row=1
+        ))
+        self.add_item(discord.ui.Button(
+            label="Raw", url=raw_url, style=discord.ButtonStyle.link, row=1
+        ))
+        self.add_item(discord.ui.Button(
+            label="Download", url=download_url, style=discord.ButtonStyle.link, row=1
+        ))
+
+        copy_button = discord.ui.Button(
+            label="Copy",
+            style=discord.ButtonStyle.success,
+            row=1
+        )
+        copy_button.callback = self.copy_callback
+        self.add_item(copy_button)
+
+    def build_embed(self):
+        script = self.scripts[self.index]
+        return create_embed(
+            script,
+            self.index + 1,
+            len(self.scripts),
+            "scriptblox"
+        )
+
+    async def previous_callback(self, interaction: discord.Interaction):
+        if self.index <= 0:
+            return await interaction.response.defer()
+        self.index -= 1
+        self.refresh_buttons()
+        await interaction.response.edit_message(embed=self.build_embed(), view=self)
+
+    async def next_callback(self, interaction: discord.Interaction):
+        if self.index >= len(self.scripts) - 1:
+            return await interaction.response.defer()
+        self.index += 1
+        self.refresh_buttons()
+        await interaction.response.edit_message(embed=self.build_embed(), view=self)
+
+    async def copy_callback(self, interaction: discord.Interaction):
+        script = self.scripts[self.index]
+        content = str(script.get("script", "") or "").strip()
+
+        if not content:
+            await interaction.response.send_message(
+                "❌ ما فيه كود لهذا السكربت.",
+                ephemeral=True
+            )
+            return
+
+        if len(content) <= 1990:
+            await interaction.response.send_message(
+                content,
+                ephemeral=True,
+                allowed_mentions=discord.AllowedMentions.none()
+            )
+        else:
+            import io
+            file = discord.File(
+                io.BytesIO(content.encode("utf-8")),
+                filename="script.lua"
+            )
+            await interaction.response.send_message(
+                "📜 الكود طويل، هذا ملف السكربت:",
+                file=file,
+                ephemeral=True
+            )
+
+    async def on_timeout(self):
+        self.clear_items()
 
 
 async def automatic_game_search(
