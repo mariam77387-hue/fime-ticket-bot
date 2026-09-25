@@ -4,7 +4,7 @@
 # ============================================================
 
 # Last Updated: 2026-09-25
-# Version: 2.8
+# Version: 3.0
 
 import discord
 from discord.ext import commands
@@ -24,23 +24,177 @@ import urllib.parse
 load_dotenv()
 TOKEN = os.getenv("BOT_TOKEN")
 FALLBACK_IMAGE = "https://c.tenor.com/jnINmQlMNbsAAAAC/tenor.gif"
+
 intents = discord.Intents.default()
 intents.message_content = True
-
 
 # ============================================================
 # AUTO SEARCH SETTINGS
 # ============================================================
 
 SEARCH_ROOMS_FILE = "bot4_search_rooms.json"
+
+# وقت الانتظار بين بحثين لنفس العضو
 AUTO_SEARCH_COOLDOWN = 8
+
+# مدة حفظ نتائج البحث في الذاكرة
+AUTO_SEARCH_CACHE_TTL = 45
+
+# الحد الأقصى للنتائج التي نحتفظ بها للبحث التلقائي
+AUTO_SEARCH_MAX_RESULTS = 30
+
+# مهلة طلب API
+AUTO_SEARCH_REQUEST_TIMEOUT = 12
 
 _search_cooldowns = {}
 
+# ============================================================
+# AUTO SEARCH CACHE
+# ============================================================
+
+_auto_search_cache = {}
+
+_auto_search_inflight = {}
+
+_auto_search_cache_lock = asyncio.Lock()
+
+
+def _auto_cache_key(
+    query,
+    key_mode
+):
+
+    normalized = compact_game_name(
+        query
+    )
+
+    return (
+        f"{normalized}|{key_mode}"
+    )
+
+
+async def get_auto_cache(
+    query,
+    key_mode
+):
+
+    cache_key = _auto_cache_key(
+        query,
+        key_mode
+    )
+
+    async with _auto_search_cache_lock:
+
+        item = _auto_search_cache.get(
+            cache_key
+        )
+
+        if not item:
+            return None
+
+        timestamp = item.get(
+            "timestamp",
+            0
+        )
+
+        now = datetime.now(
+            timezone.utc
+        ).timestamp()
+
+        if (
+            now - timestamp
+            > AUTO_SEARCH_CACHE_TTL
+        ):
+
+            _auto_search_cache.pop(
+                cache_key,
+                None
+            )
+
+            return None
+
+        return list(
+            item.get(
+                "scripts",
+                []
+            )
+        )
+
+
+async def set_auto_cache(
+    query,
+    key_mode,
+    scripts
+):
+
+    cache_key = _auto_cache_key(
+        query,
+        key_mode
+    )
+
+    async with _auto_search_cache_lock:
+
+        _auto_search_cache[
+            cache_key
+        ] = {
+            "timestamp": (
+                datetime.now(
+                    timezone.utc
+                ).timestamp()
+            ),
+            "scripts": list(
+                scripts
+            )
+        }
+
+        # تنظيف الكاش القديم
+        if len(
+            _auto_search_cache
+        ) > 150:
+
+            now = datetime.now(
+                timezone.utc
+            ).timestamp()
+
+            old_keys = []
+
+            for key, item in (
+                _auto_search_cache.items()
+            ):
+
+                if (
+                    now
+                    - item.get(
+                        "timestamp",
+                        0
+                    )
+                    > AUTO_SEARCH_CACHE_TTL
+                ):
+
+                    old_keys.append(
+                        key
+                    )
+
+            for key in old_keys:
+
+                _auto_search_cache.pop(
+                    key,
+                    None
+                )
+
+
+# ============================================================
+# SEARCH ROOMS
+# ============================================================
 
 def load_search_rooms():
+
     try:
-        if not os.path.exists(SEARCH_ROOMS_FILE):
+
+        if not os.path.exists(
+            SEARCH_ROOMS_FILE
+        ):
+
             return {}
 
         with open(
@@ -48,21 +202,37 @@ def load_search_rooms():
             "r",
             encoding="utf-8"
         ) as f:
-            data = json.load(f)
 
-        return data if isinstance(data, dict) else {}
+            data = json.load(
+                f
+            )
+
+        return (
+            data
+            if isinstance(
+                data,
+                dict
+            )
+            else {}
+        )
 
     except Exception:
+
         return {}
 
 
-def save_search_rooms(data):
+def save_search_rooms(
+    data
+):
+
     try:
+
         with open(
             SEARCH_ROOMS_FILE,
             "w",
             encoding="utf-8"
         ) as f:
+
             json.dump(
                 data,
                 f,
@@ -71,6 +241,7 @@ def save_search_rooms(data):
             )
 
     except Exception as e:
+
         print(
             f"❌ Failed to save search rooms: {e}"
         )
@@ -326,21 +497,23 @@ GAME_ALIASES = {
 # SMART GAME NAME NORMALIZATION
 # ============================================================
 
-def normalize_game_name(text):
+def normalize_game_name(
+    text
+):
 
     if not text:
         return ""
 
-    text = str(text).lower().strip()
+    text = str(
+        text
+    ).lower().strip()
 
-    # حذف التشكيل
     text = re.sub(
         r"[\u064B-\u065F\u0670]",
         "",
         text
     )
 
-    # توحيد الحروف العربية
     text = (
         text
         .replace("أ", "ا")
@@ -354,7 +527,6 @@ def normalize_game_name(text):
         .replace("ـ", "")
     )
 
-    # إزالة الرموز وتحويلها لمسافات
     text = re.sub(
         r"[^a-z0-9\u0600-\u06FF]+",
         " ",
@@ -367,17 +539,21 @@ def normalize_game_name(text):
         text
     ).strip()
 
-    # إزالة "ال" من بداية بعض الكلمات العربية
     stripped_words = []
 
     for word in text.split():
 
-        if len(word) > 4 and word.startswith("ال"):
+        if (
+            len(word) > 4
+            and word.startswith("ال")
+        ):
+
             stripped_words.append(
                 word[2:]
             )
 
         else:
+
             stripped_words.append(
                 word
             )
@@ -387,25 +563,14 @@ def normalize_game_name(text):
     )
 
 
-def compact_game_name(text):
-    """
-    نسخة مضغوطة للمطابقة الذكية.
-
-    أمثلة:
-    grow a garden -> growagarden
-    growagarden -> growagarden
-    doorssss -> doors
-    بلوك فروتس -> بلوكفروتس
-    """
+def compact_game_name(
+    text
+):
 
     normalized = normalize_game_name(
         text
     )
 
-    # تقليل تكرار الحروف.
-    # إذا كتب المستخدم:
-    # doooors / بلووووك
-    # يصبح أقرب للاسم الأصلي.
     normalized = re.sub(
         r"(.)\1{1,}",
         r"\1",
@@ -431,6 +596,7 @@ for game_name, aliases in GAME_ALIASES.items():
         )
 
         if normalized:
+
             normalized_aliases.append(
                 normalized
             )
@@ -443,7 +609,6 @@ for game_name, aliases in GAME_ALIASES.items():
         normalized_game
     )
 
-    # إزالة التكرارات مع الحفاظ على القائمة
     NORMALIZED_GAME_ALIASES[
         normalized_game
     ] = list(
@@ -453,13 +618,101 @@ for game_name, aliases in GAME_ALIASES.items():
     )
 
 
-def resolve_game_query(query):
+def get_close_game_suggestions(
+    query,
+    limit=3
+):
+
+    compact_query = compact_game_name(
+        query
+    )
+
+    if len(
+        compact_query
+    ) < 3:
+
+        return []
+
+    matches = []
+
+    for game_name, aliases in (
+        NORMALIZED_GAME_ALIASES.items()
+    ):
+
+        best_score = 0.0
+
+        for alias in aliases:
+
+            compact_alias = compact_game_name(
+                alias
+            )
+
+            if len(
+                compact_alias
+            ) < 3:
+
+                continue
+
+            score = difflib.SequenceMatcher(
+                None,
+                compact_query,
+                compact_alias
+            ).ratio()
+
+            if (
+                compact_query[:3]
+                == compact_alias[:3]
+            ):
+
+                score += 0.08
+
+            best_score = max(
+                best_score,
+                score
+            )
+
+        if best_score >= 0.48:
+
+            matches.append(
+                (
+                    best_score,
+                    game_name
+                )
+            )
+
+    matches.sort(
+        reverse=True
+    )
+
+    output = []
+
+    for _, game_name in matches:
+
+        if game_name not in output:
+
+            output.append(
+                game_name
+            )
+
+        if len(
+            output
+        ) >= limit:
+
+            break
+
+    return output
+
+
+def resolve_game_query(
+    query
+):
 
     normalized_query = normalize_game_name(
         query
     )
 
     if not normalized_query:
+
         return query
 
     compact_query = compact_game_name(
@@ -470,16 +723,21 @@ def resolve_game_query(query):
     # 1. تطابق مباشر
     # ========================================================
 
-    for game_name, aliases in NORMALIZED_GAME_ALIASES.items():
+    for game_name, aliases in (
+        NORMALIZED_GAME_ALIASES.items()
+    ):
 
         if normalized_query in aliases:
+
             return game_name
 
     # ========================================================
     # 2. تطابق بدون مسافات
     # ========================================================
 
-    for game_name, aliases in NORMALIZED_GAME_ALIASES.items():
+    for game_name, aliases in (
+        NORMALIZED_GAME_ALIASES.items()
+    ):
 
         for alias in aliases:
 
@@ -487,18 +745,25 @@ def resolve_game_query(query):
                 alias
             )
 
-            if compact_query == compact_alias:
+            if (
+                compact_query
+                == compact_alias
+            ):
+
                 return game_name
 
     # ========================================================
     # 3. احتواء الاسم
     # ========================================================
 
-    for game_name, aliases in NORMALIZED_GAME_ALIASES.items():
+    for game_name, aliases in (
+        NORMALIZED_GAME_ALIASES.items()
+    ):
 
         for alias in aliases:
 
             if len(alias) < 4:
+
                 continue
 
             compact_alias = compact_game_name(
@@ -511,18 +776,23 @@ def resolve_game_query(query):
                 or compact_alias in compact_query
                 or compact_query in compact_alias
             ):
+
                 return game_name
 
     # ========================================================
     # 4. البحث الذكي بالأخطاء الإملائية
     # ========================================================
 
-    if len(compact_query) >= 3:
+    if len(
+        compact_query
+    ) >= 3:
 
         best_match = None
         best_score = 0.0
 
-        for game_name, aliases in NORMALIZED_GAME_ALIASES.items():
+        for game_name, aliases in (
+            NORMALIZED_GAME_ALIASES.items()
+        ):
 
             for alias in aliases:
 
@@ -530,7 +800,10 @@ def resolve_game_query(query):
                     alias
                 )
 
-                if len(compact_alias) < 3:
+                if len(
+                    compact_alias
+                ) < 3:
+
                     continue
 
                 score = difflib.SequenceMatcher(
@@ -539,22 +812,22 @@ def resolve_game_query(query):
                     compact_alias
                 ).ratio()
 
-                # تشابه البداية يعطي دفعة بسيطة
                 if (
                     len(compact_query) >= 4
                     and len(compact_alias) >= 4
                     and compact_query[:3]
                     == compact_alias[:3]
                 ):
+
                     score += 0.08
 
-                # إذا كان طول الاسم متقاربًا
                 length_difference = abs(
                     len(compact_query)
                     - len(compact_alias)
                 )
 
                 if length_difference <= 2:
+
                     score += 0.03
 
                 if score > best_score:
@@ -562,18 +835,27 @@ def resolve_game_query(query):
                     best_score = score
                     best_match = game_name
 
-        # الأسماء القصيرة تحتاج دقة أعلى
-        if len(compact_query) <= 4:
+        if len(
+            compact_query
+        ) <= 4:
+
             threshold = 0.82
-        elif len(compact_query) <= 6:
+
+        elif len(
+            compact_query
+        ) <= 6:
+
             threshold = 0.68
+
         else:
+
             threshold = 0.58
 
         if (
             best_match
             and best_score >= threshold
         ):
+
             return best_match
 
     # ========================================================
@@ -589,7 +871,9 @@ def resolve_game_query(query):
         best_game = None
         best_score = 0.0
 
-        for game_name, aliases in NORMALIZED_GAME_ALIASES.items():
+        for game_name, aliases in (
+            NORMALIZED_GAME_ALIASES.items()
+        ):
 
             for alias in aliases:
 
@@ -598,6 +882,7 @@ def resolve_game_query(query):
                 )
 
                 if not alias_words:
+
                     continue
 
                 overlap = (
@@ -649,27 +934,15 @@ def resolve_game_query(query):
             best_game
             and best_score >= 0.55
         ):
-            return best_game
 
-    # ========================================================
-    # إذا ما عرف اللعبة، نستخدم بحث المستخدم نفسه.
-    # ========================================================
+            return best_game
 
     return query
 
 
-def get_game_search_queries(query):
-    """
-    يرجع صيغ البحث التي سيجربها البوت.
-
-    الأول:
-    الاسم المصحح/المعروف.
-
-    الثاني:
-    الاسم الأصلي الذي كتبه العضو.
-
-    الحد الأقصى محاولتان حتى لا يتم إغراق API.
-    """
+def get_game_search_queries(
+    query
+):
 
     resolved = resolve_game_query(
         query
@@ -677,9 +950,12 @@ def get_game_search_queries(query):
 
     queries = []
 
-    def add_query(value):
+    def add_query(
+        value
+    ):
 
         if not value:
+
             return
 
         normalized = normalize_game_name(
@@ -687,32 +963,497 @@ def get_game_search_queries(query):
         )
 
         if not normalized:
+
             return
 
         for existing in queries:
 
             if (
-                normalize_game_name(existing)
+                normalize_game_name(
+                    existing
+                )
                 == normalized
             ):
+
                 return
 
         queries.append(
             value
         )
 
-    add_query(resolved)
-    add_query(query)
+    add_query(
+        resolved
+    )
 
-    return queries[:2]
+    add_query(
+        query
+    )
+
+    # ========================================================
+    # إضافة صيغ بحث إضافية عند الحاجة
+    # ========================================================
+
+    if len(
+        queries
+    ) < 3:
+
+        suggestions = (
+            get_close_game_suggestions(
+                query,
+                limit=3
+            )
+        )
+
+        for suggestion in suggestions:
+
+            add_query(
+                suggestion
+            )
+
+            if len(
+                queries
+            ) >= 3:
+
+                break
+
+    return queries[:3]
+
+
+# ============================================================
+# AUTO SEARCH API WORKER
+# ============================================================
+
+async def fetch_auto_search_mode(
+    search_query,
+    key_mode
+):
+
+    """
+    key_mode:
+        no_key
+        with_key
+    """
+
+    cache = await get_auto_cache(
+        search_query,
+        key_mode
+    )
+
+    if cache is not None:
+
+        return (
+            cache,
+            False,
+            True
+        )
+
+    cache_key = _auto_cache_key(
+        search_query,
+        key_mode
+    )
+
+    # ========================================================
+    # منع تكرار نفس الطلب إذا مستخدمان بحثوا بنفس اللحظة
+    # ========================================================
+
+    existing_task = (
+        _auto_search_inflight.get(
+            cache_key
+        )
+    )
+
+    if existing_task:
+
+        try:
+
+            result = await existing_task
+
+            return (
+                list(result),
+                False,
+                True
+            )
+
+        except Exception:
+
+            pass
+
+    async def worker():
+
+        collected = []
+        seen = set()
+
+        had_network_error = False
+
+        search_queries = [
+            search_query
+        ]
+
+        # نستخدم صيغ إضافية فقط عند الحاجة
+        extra_queries = (
+            get_game_search_queries(
+                search_query
+            )
+        )
+
+        for item in extra_queries:
+
+            if normalize_game_name(
+                item
+            ) not in [
+                normalize_game_name(
+                    existing
+                )
+                for existing in search_queries
+            ]:
+
+                search_queries.append(
+                    item
+                )
+
+        # ====================================================
+        # نبحث في أول صيغتين بالتوازي
+        # ====================================================
+
+        async def search_one_query(
+            current_query
+        ):
+
+            local_results = []
+            local_error = False
+
+            async def fetch_page(
+                page
+            ):
+
+                return await asyncio.to_thread(
+                    fetch_scripts,
+                    "scriptblox",
+                    current_query,
+                    "free",
+                    page,
+                    key=(
+                        0
+                        if key_mode == "no_key"
+                        else 1
+                    )
+                )
+
+            tasks = [
+                asyncio.create_task(
+                    fetch_page(
+                        1
+                    )
+                ),
+                asyncio.create_task(
+                    fetch_page(
+                        2
+                    )
+                )
+            ]
+
+            results = await asyncio.gather(
+                *tasks,
+                return_exceptions=True
+            )
+
+            for result in results:
+
+                if isinstance(
+                    result,
+                    Exception
+                ):
+
+                    local_error = True
+                    continue
+
+                scripts, _, error = result
+
+                if error:
+
+                    error_text = str(
+                        error
+                    ).lower()
+
+                    if (
+                        "something went wrong"
+                        in error_text
+                        or "unexpected response"
+                        in error_text
+                        or "timeout"
+                        in error_text
+                        or "connection"
+                        in error_text
+                        or "http"
+                        in error_text
+                    ):
+
+                        local_error = True
+
+                    continue
+
+                if not scripts:
+
+                    continue
+
+                local_results.extend(
+                    scripts
+                )
+
+            return (
+                local_results,
+                local_error
+            )
+
+        query_tasks = []
+
+        for current_query in (
+            search_queries[:2]
+        ):
+
+            query_tasks.append(
+                asyncio.create_task(
+                    search_one_query(
+                        current_query
+                    )
+                )
+            )
+
+        query_results = await asyncio.gather(
+            *query_tasks,
+            return_exceptions=True
+        )
+
+        for result in query_results:
+
+            if isinstance(
+                result,
+                Exception
+            ):
+
+                had_network_error = True
+                continue
+
+            scripts, network_error = result
+
+            if network_error:
+
+                had_network_error = True
+
+            for script in scripts:
+
+                script_key = (
+                    script.get("_id")
+                    or script.get("slug")
+                    or script.get("title")
+                )
+
+                if not script_key:
+
+                    script_key = (
+                        str(
+                            script
+                        )
+                    )
+
+                if script_key in seen:
+
+                    continue
+
+                seen.add(
+                    script_key
+                )
+
+                collected.append(
+                    script
+                )
+
+                if len(
+                    collected
+                ) >= AUTO_SEARCH_MAX_RESULTS:
+
+                    break
+
+            if len(
+                collected
+            ) >= AUTO_SEARCH_MAX_RESULTS:
+
+                break
+
+        # ====================================================
+        # ترتيب النتائج
+        # ====================================================
+
+        def result_score(
+            script
+        ):
+
+            score = 0.0
+
+            title = normalize_game_name(
+                script.get(
+                    "title",
+                    ""
+                )
+            )
+
+            game = script.get(
+                "game",
+                {}
+            )
+
+            if isinstance(
+                game,
+                dict
+            ):
+
+                game_name = normalize_game_name(
+                    game.get(
+                        "name",
+                        ""
+                    )
+                )
+
+            else:
+
+                game_name = ""
+
+            target = normalize_game_name(
+                search_query
+            )
+
+            if target:
+
+                if title == target:
+
+                    score += 100
+
+                elif game_name == target:
+
+                    score += 95
+
+                elif target in title:
+
+                    score += 70
+
+                elif target in game_name:
+
+                    score += 65
+
+                else:
+
+                    title_score = (
+                        difflib.SequenceMatcher(
+                            None,
+                            compact_game_name(
+                                target
+                            ),
+                            compact_game_name(
+                                title
+                            )
+                        ).ratio()
+                    )
+
+                    game_score = (
+                        difflib.SequenceMatcher(
+                            None,
+                            compact_game_name(
+                                target
+                            ),
+                            compact_game_name(
+                                game_name
+                            )
+                        ).ratio()
+                    )
+
+                    score += max(
+                        title_score,
+                        game_score
+                    ) * 40
+
+            try:
+
+                score += min(
+                    float(
+                        script.get(
+                            "views",
+                            0
+                        ) or 0
+                    ) / 10000,
+                    15
+                )
+
+            except Exception:
+
+                pass
+
+            if script.get(
+                "verified",
+                False
+            ):
+
+                score += 5
+
+            return score
+
+        collected.sort(
+            key=result_score,
+            reverse=True
+        )
+
+        await set_auto_cache(
+            search_query,
+            key_mode,
+            collected
+        )
+
+        return (
+            collected,
+            had_network_error
+        )
+
+    task = asyncio.create_task(
+        worker()
+    )
+
+    _auto_search_inflight[
+        cache_key
+    ] = task
+
+    try:
+
+        scripts, network_error = (
+            await task
+        )
+
+        return (
+            scripts,
+            network_error,
+            False
+        )
+
+    finally:
+
+        if (
+            _auto_search_inflight.get(
+                cache_key
+            )
+            is task
+        ):
+
+            _auto_search_inflight.pop(
+                cache_key,
+                None
+            )
 
 
 # ============================================================
 # AUTO SEARCH KEY SELECT
 # ============================================================
 
-class AutoSearchKeySelect(discord.ui.Select):
-    """قائمة اختيار نوع السكربت للبحث التلقائي."""
+class AutoSearchKeySelect(
+    discord.ui.Select
+):
 
     def __init__(
         self,
@@ -726,24 +1467,41 @@ class AutoSearchKeySelect(discord.ui.Select):
         self.resolved_query = resolved_query
 
         options = [
+
             discord.SelectOption(
                 label="بدون مفتاح",
                 value="no_key",
-                description="سكربتات لا تحتاج مفتاح تفعيل",
+                description=(
+                    "سكربتات لا تحتاج مفتاح تفعيل"
+                ),
                 emoji="🔓"
             ),
+
             discord.SelectOption(
                 label="بمفتاح",
                 value="with_key",
-                description="سكربتات تحتاج مفتاح تفعيل",
+                description=(
+                    "سكربتات تحتاج مفتاح تفعيل"
+                ),
                 emoji="🔑"
             ),
+
+            discord.SelectOption(
+                label="جميعهم",
+                value="all",
+                description=(
+                    "البحث عن السكربتات بدون مفتاح وبمفتاح"
+                ),
+                emoji="🌐"
+            )
         ]
 
         super().__init__(
-            placeholder="🔐 اختر نوع السكربت اللي تبيه...",
+            placeholder=(
+                "🔐 اختر نوع السكربت..."
+            ),
             min_values=1,
-            max_values=1,
+            max_values=2,
             options=options,
             row=0
         )
@@ -753,32 +1511,68 @@ class AutoSearchKeySelect(discord.ui.Select):
         interaction: discord.Interaction
     ):
 
-        no_key = (
-            self.values[0]
-            == "no_key"
-        )
-
-        label = (
-            "بدون مفتاح"
-            if no_key
-            else "بمفتاح"
+        selected = list(
+            self.values
         )
 
         # ====================================================
-        # تغيير الرسالة فور الضغط.
-        # لا ننتظر API.
+        # جميعهم = النوعين
         # ====================================================
+
+        if "all" in selected:
+
+            selected_modes = [
+                "no_key",
+                "with_key"
+            ]
+
+        else:
+
+            selected_modes = [
+                value
+                for value in selected
+                if value in [
+                    "no_key",
+                    "with_key"
+                ]
+            ]
+
+        if not selected_modes:
+
+            selected_modes = [
+                "no_key",
+                "with_key"
+            ]
+
+        labels = []
+
+        if "no_key" in selected_modes:
+
+            labels.append(
+                "🔓 بدون مفتاح"
+            )
+
+        if "with_key" in selected_modes:
+
+            labels.append(
+                "🔑 بمفتاح"
+            )
+
+        label = " + ".join(
+            labels
+        )
 
         self.disabled = True
+
         self.placeholder = (
-            f"🔐 تم الاختيار: {label}"
+            f"🔐 {label}"
         )
 
         searching_content = (
             f"⏳ **جاري البحث الآن...**\n"
             f"🎮 الماب: **{self.query}**\n"
             f"🔐 النوع: **{label}**\n\n"
-            f"جاري البحث عن أفضل النتائج..."
+            f"جاري البحث بشكل متزامن عن أفضل النتائج..."
         )
 
         try:
@@ -815,90 +1609,169 @@ class AutoSearchKeySelect(discord.ui.Select):
                 return
 
         # ====================================================
-        # الطلبات الخارجية خارج Event Loop.
+        # تشغيل النوعين بشكل متزامن
         # ====================================================
 
-        async def fetch_page(
-            search_query,
-            page
-        ):
-
-            return await asyncio.to_thread(
-                fetch_scripts,
-                "scriptblox",
-                search_query,
-                "free",
-                page,
-                key=(
-                    0
-                    if no_key
-                    else 1
+        tasks = [
+            asyncio.create_task(
+                fetch_auto_search_mode(
+                    self.resolved_query,
+                    mode
                 )
             )
+            for mode in selected_modes
+        ]
+
+        results = await asyncio.gather(
+            *tasks,
+            return_exceptions=True
+        )
 
         collected = []
         seen = set()
-
-        # نفرق بين:
-        # - API لم يجد نتائج
-        # - API نفسه فيه مشكلة
         had_network_error = False
-        had_successful_request = False
+        had_successful_result = False
 
-        search_queries = get_game_search_queries(
-            self.query
-        )
+        for result in results:
 
-        try:
+            if isinstance(
+                result,
+                Exception
+            ):
 
-            # ==================================================
-            # نجرب الاسم المصحح ثم الأصلي إذا لزم.
-            # ==================================================
+                print(
+                    f"❌ Auto search task error: {result}"
+                )
 
-            for search_query in search_queries:
+                had_network_error = True
+                continue
 
-                current_results = []
+            scripts, network_error, _ = result
 
-                for page in (
-                    1,
-                    2
+            if network_error:
+
+                had_network_error = True
+
+            if scripts:
+
+                had_successful_result = True
+
+            for script in scripts:
+
+                script_key = (
+                    script.get("_id")
+                    or script.get("slug")
+                    or script.get("title")
+                )
+
+                if not script_key:
+
+                    script_key = str(
+                        script
+                    )
+
+                if script_key in seen:
+
+                    continue
+
+                seen.add(
+                    script_key
+                )
+
+                # نحفظ نوع المفتاح داخل النتيجة
+                if (
+                    "no_key" in selected_modes
+                    and "with_key" in selected_modes
                 ):
 
-                    scripts, _, error = (
-                        await fetch_page(
-                            search_query,
-                            page
+                    script["_fime_key_source"] = (
+                        "بمفتاح"
+                        if script.get(
+                            "key",
+                            False
+                        )
+                        else "بدون مفتاح"
+                    )
+
+                elif "no_key" in selected_modes:
+
+                    script["_fime_key_source"] = (
+                        "بدون مفتاح"
+                    )
+
+                else:
+
+                    script["_fime_key_source"] = (
+                        "بمفتاح"
+                    )
+
+                collected.append(
+                    script
+                )
+
+        # ====================================================
+        # إذا لم نجد نتيجة، محاولة بحث أوسع
+        # ====================================================
+
+        if not collected:
+
+            fallback_queries = (
+                get_game_search_queries(
+                    self.query
+                )
+            )
+
+            fallback_tasks = []
+
+            for fallback_query in fallback_queries:
+
+                if normalize_game_name(
+                    fallback_query
+                ) == normalize_game_name(
+                    self.resolved_query
+                ):
+
+                    continue
+
+                for mode in selected_modes:
+
+                    fallback_tasks.append(
+                        asyncio.create_task(
+                            fetch_auto_search_mode(
+                                fallback_query,
+                                mode
+                            )
                         )
                     )
 
-                    if error:
+            if fallback_tasks:
 
-                        # "Couldn't find..." معناها لا توجد نتائج،
-                        # وليست مشكلة اتصال.
-                        error_text = str(
-                            error
-                        ).lower()
+                fallback_results = (
+                    await asyncio.gather(
+                        *fallback_tasks,
+                        return_exceptions=True
+                    )
+                )
 
-                        if (
-                            "something went wrong"
-                            in error_text
-                            or "unexpected response"
-                            in error_text
-                            or "timeout"
-                            in error_text
-                            or "connection"
-                            in error_text
-                            or "http"
-                            in error_text
-                        ):
-                            had_network_error = True
+                for result in fallback_results:
 
+                    if isinstance(
+                        result,
+                        Exception
+                    ):
+
+                        had_network_error = True
                         continue
 
-                    had_successful_request = True
+                    scripts, network_error, _ = result
 
-                    if not scripts:
-                        break
+                    if network_error:
+
+                        had_network_error = True
+
+                    if scripts:
+
+                        had_successful_result = True
 
                     for script in scripts:
 
@@ -910,52 +1783,52 @@ class AutoSearchKeySelect(discord.ui.Select):
 
                         if not script_key:
 
-                            script_key = (
-                                f"{search_query}:"
-                                f"{page}:"
-                                f"{len(collected)}"
+                            script_key = str(
+                                script
                             )
 
                         if script_key in seen:
+
                             continue
 
                         seen.add(
                             script_key
                         )
 
+                        if (
+                            "no_key"
+                            in selected_modes
+                            and
+                            "with_key"
+                            in selected_modes
+                        ):
+
+                            script[
+                                "_fime_key_source"
+                            ] = (
+                                "بمفتاح"
+                                if script.get(
+                                    "key",
+                                    False
+                                )
+                                else "بدون مفتاح"
+                            )
+
+                        elif "no_key" in selected_modes:
+
+                            script[
+                                "_fime_key_source"
+                            ] = "بدون مفتاح"
+
+                        else:
+
+                            script[
+                                "_fime_key_source"
+                            ] = "بمفتاح"
+
                         collected.append(
                             script
                         )
-
-                        current_results.append(
-                            script
-                        )
-
-                        if len(collected) >= 20:
-                            break
-
-                    if len(collected) >= 20:
-                        break
-
-                    if not scripts:
-                        break
-
-                # إذا وجدنا نتائج،
-                # لا نحتاج تجربة الصيغة الثانية.
-                if current_results:
-                    break
-
-        except Exception as e:
-
-            import traceback
-
-            print(
-                f"❌ Key mode search error: {e}"
-            )
-
-            traceback.print_exc()
-
-            had_network_error = True
 
         # ====================================================
         # عرض النتيجة
@@ -965,9 +1838,16 @@ class AutoSearchKeySelect(discord.ui.Select):
 
             if not collected:
 
+                suggestions = (
+                    get_close_game_suggestions(
+                        self.query,
+                        limit=3
+                    )
+                )
+
                 if (
                     had_network_error
-                    and not had_successful_request
+                    and not had_successful_result
                 ):
 
                     await interaction.edit_original_response(
@@ -981,12 +1861,24 @@ class AutoSearchKeySelect(discord.ui.Select):
 
                 else:
 
+                    suggestion_text = ""
+
+                    if suggestions:
+
+                        suggestion_text = (
+                            "\n\n💡 **هل تقصد:** "
+                            + " • ".join(
+                                f"`{item}`"
+                                for item in suggestions
+                            )
+                        )
+
                     await interaction.edit_original_response(
                         content=(
-                            f"❌ **ما لقيت أي سكربت {label}** "
-                            f"للماب **{self.query}**.\n\n"
-                            "💡 جرّب كتابة اسم الماب بشكل مختلف "
-                            "أو استخدم الاسم الإنجليزي."
+                            f"❌ **ما لقيت أي سكربت** "
+                            f"للماب **{self.query}**.\n"
+                            f"🔐 البحث: **{label}**"
+                            f"{suggestion_text}"
                         ),
                         embed=None,
                         view=None
@@ -999,7 +1891,7 @@ class AutoSearchKeySelect(discord.ui.Select):
                     self.requester_id,
                     collected,
                     self.query,
-                    no_key
+                    selected_modes
                 )
             )
 
@@ -1042,7 +1934,9 @@ class AutoSearchKeySelect(discord.ui.Select):
 # AUTO SEARCH KEY VIEW
 # ============================================================
 
-class AutoSearchKeyView(discord.ui.View):
+class AutoSearchKeyView(
+    discord.ui.View
+):
 
     def __init__(
         self,
@@ -1089,6 +1983,7 @@ class AutoSearchKeyView(discord.ui.View):
     ):
 
         for item in self.children:
+
             item.disabled = True
 
 
@@ -1099,14 +1994,13 @@ class AutoSearchKeyView(discord.ui.View):
 class AutoSearchResultBrowseView(
     discord.ui.View
 ):
-    """تصفح نتائج البحث التلقائي."""
 
     def __init__(
         self,
         requester_id,
         scripts,
         query,
-        no_key
+        selected_modes
     ):
 
         super().__init__(
@@ -1116,7 +2010,7 @@ class AutoSearchResultBrowseView(
         self.requester_id = requester_id
         self.scripts = scripts
         self.query = query
-        self.no_key = no_key
+        self.selected_modes = selected_modes
         self.index = 0
 
         self.refresh_buttons()
@@ -1276,6 +2170,7 @@ class AutoSearchResultBrowseView(
     ):
 
         if self.index <= 0:
+
             return await interaction.response.defer()
 
         self.index -= 1
@@ -1296,6 +2191,7 @@ class AutoSearchResultBrowseView(
             self.index
             >= len(self.scripts) - 1
         ):
+
             return await interaction.response.defer()
 
         self.index += 1
@@ -1333,12 +2229,16 @@ class AutoSearchResultBrowseView(
 
             return
 
-        if len(content) <= 1990:
+        if len(
+            content
+        ) <= 1990:
 
             await interaction.response.send_message(
                 content,
                 ephemeral=True,
-                allowed_mentions=discord.AllowedMentions.none()
+                allowed_mentions=(
+                    discord.AllowedMentions.none()
+                )
             )
 
         else:
@@ -1390,12 +2290,16 @@ async def automatic_game_search(
 
     recognized_text = ""
 
-    normalized_original = normalize_game_name(
-        query
+    normalized_original = (
+        normalize_game_name(
+            query
+        )
     )
 
-    normalized_resolved = normalize_game_name(
-        resolved_query
+    normalized_resolved = (
+        normalize_game_name(
+            resolved_query
+        )
     )
 
     if (
@@ -1444,6 +2348,7 @@ class MyBot(
     async def setup_hook(
         self
     ):
+
         pass
 
 
@@ -1485,9 +2390,11 @@ async def automatic_search_listener(
 ):
 
     if message.author.bot:
+
         return
 
     if not message.guild:
+
         return
 
     guild_id = str(
@@ -1501,26 +2408,31 @@ async def automatic_search_listener(
     )
 
     if not configured_channel:
+
         return
 
     if (
         str(message.channel.id)
         != str(configured_channel)
     ):
+
         return
 
     query = message.content.strip()
 
     if not query:
+
         return
 
     if len(query) > 80:
+
         return
 
     if (
         query.startswith("!")
         or query.startswith("/")
     ):
+
         return
 
     cooldown_key = (
@@ -1543,6 +2455,7 @@ async def automatic_search_listener(
         now - last_search
         < AUTO_SEARCH_COOLDOWN
     ):
+
         return
 
     _search_cooldowns[
@@ -1615,11 +2528,6 @@ def fetch_scripts(
                 "key"
             ) is not None:
 
-                # مهم جدًا:
-                # key=0 = بدون مفتاح
-                # key=1 = بمفتاح
-                #
-                # لا يتم عكس القيم.
                 params["key"] = (
                     1
                     if filters["key"] == 1
@@ -1693,7 +2601,7 @@ def fetch_scripts(
 
             r = requests.get(
                 url,
-                timeout=15
+                timeout=AUTO_SEARCH_REQUEST_TIMEOUT
             )
 
             r.raise_for_status()
@@ -1722,14 +2630,12 @@ def fetch_scripts(
                     None
                 )
 
-            else:
-
-                return (
-                    None,
-                    None,
-                    f"Couldn't find any scripts "
-                    f"matching '{query}'"
-                )
+            return (
+                None,
+                None,
+                f"Couldn't find any scripts "
+                f"matching '{query}'"
+            )
 
         elif api == "rscripts":
 
@@ -1807,7 +2713,7 @@ def fetch_scripts(
 
             r = requests.get(
                 url,
-                timeout=15
+                timeout=AUTO_SEARCH_REQUEST_TIMEOUT
             )
 
             r.raise_for_status()
@@ -1824,14 +2730,12 @@ def fetch_scripts(
                     None
                 )
 
-            else:
-
-                return (
-                    None,
-                    None,
-                    f"Couldn't find any scripts "
-                    f"matching '{query}'"
-                )
+            return (
+                None,
+                None,
+                f"Couldn't find any scripts "
+                f"matching '{query}'"
+            )
 
     except requests.RequestException as e:
 
@@ -1866,6 +2770,7 @@ def fetch_scripts_from_api(
         if api == "scriptblox":
 
             if page and page > 1:
+
                 params["page"] = page
 
             query_string = (
@@ -1882,6 +2787,7 @@ def fetch_scripts_from_api(
             )
 
             if query_string:
+
                 url += (
                     f"?{query_string}"
                 )
@@ -1889,6 +2795,7 @@ def fetch_scripts_from_api(
         elif api == "rscripts":
 
             if page and page > 1:
+
                 params["page"] = page
 
             query_string = (
@@ -1905,6 +2812,7 @@ def fetch_scripts_from_api(
             )
 
             if query_string:
+
                 url += (
                     f"?{query_string}"
                 )
@@ -1937,7 +2845,9 @@ def fetch_scripts_from_api(
         )
 
 
-def fetch_trending(api):
+def fetch_trending(
+    api
+):
 
     try:
 
@@ -1999,6 +2909,7 @@ def fetch_trending(api):
                                 )
 
                         except:
+
                             continue
 
                 return (
@@ -2470,6 +3381,18 @@ def create_embed(
             value=patched_status,
             inline=True
         )
+
+        source_type = script.get(
+            "_fime_key_source"
+        )
+
+        if source_type:
+
+            embed.add_field(
+                name="🔐 البحث",
+                value=source_type,
+                inline=True
+            )
 
         embed.add_field(
             name="Links",
@@ -3116,20 +4039,11 @@ async def display_scripts_local(
 
                 value = (
                     f"**Game:** {game}\n"
-                )
-
-                value += (
                     f"**Verified:** "
                     f"{verified} | "
                     f"**Patched:** "
                     f"{patched}\n"
-                )
-
-                value += (
                     f"**Views:** 👁️ {views}\n"
-                )
-
-                value += (
                     f"[View]"
                     f"(https://scriptblox.com/"
                     f"script/{slug}) | "
@@ -3181,14 +4095,8 @@ async def display_scripts_local(
                 value = (
                     f"**Views:** 👁️ {views} | "
                     f"**Likes:** 👍 {likes}\n"
-                )
-
-                value += (
                     f"**Verified:** "
                     f"{verified}\n"
-                )
-
-                value += (
                     f"[View]"
                     f"(https://rscripts.net/"
                     f"script/{slug})"
@@ -3429,7 +4337,7 @@ async def send_help(
 
     embed.set_footer(
         text=(
-            "Made by AdvanceFalling Team | v2.7"
+            "Made by AdvanceFalling Team | v3.0"
         )
     )
 
@@ -3626,7 +4534,9 @@ async def slash_set_search_room(
         interaction.guild.id
     )
 
-    search_rooms[guild_id] = str(
+    search_rooms[
+        guild_id
+    ] = str(
         channel.id
     )
 
@@ -3636,7 +4546,7 @@ async def slash_set_search_room(
 
     await interaction.response.send_message(
         f"✅ تم تحديد {channel.mention} كروم البحث التلقائي.\n"
-        "🔎 العضو يكتب اسم الماب، وبعدها يختار بنفسه **بدون مفتاح** أو **بمفتاح**."
+        "🔎 العضو يكتب اسم الماب، وبعدها يختار **بدون مفتاح** أو **بمفتاح** أو **جميعهم**."
     )
 
 
@@ -3677,6 +4587,10 @@ async def slash_show_search_room(
         f"{channel.mention}"
     )
 
+
+# ============================================================
+# API SELECT
+# ============================================================
 
 class APISelect(
     discord.ui.Select
@@ -4751,7 +5665,9 @@ async def slash_rscripts_by_user(
 _extension_bot = bot
 
 
-async def setup(main_bot):
+async def setup(
+    main_bot
+):
 
     global bot
 
