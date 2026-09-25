@@ -4,7 +4,7 @@
 # ============================================================
 
 # Last Updated: 2026-09-25
-# Version: 3.0
+# Version: 4.0
 
 import discord
 from discord.ext import commands
@@ -20,6 +20,8 @@ from dateutil.relativedelta import relativedelta
 from dotenv import load_dotenv
 import validators
 import urllib.parse
+import time
+import aiohttp
 
 load_dotenv()
 TOKEN = os.getenv("BOT_TOKEN")
@@ -34,153 +36,63 @@ intents.message_content = True
 
 SEARCH_ROOMS_FILE = "bot4_search_rooms.json"
 
-# وقت الانتظار بين بحثين لنفس العضو
-AUTO_SEARCH_COOLDOWN = 8
+# يمنع السبام بدون ما يخلي النظام مزعج.
+AUTO_SEARCH_COOLDOWN = 3
 
-# مدة حفظ نتائج البحث في الذاكرة
-AUTO_SEARCH_CACHE_TTL = 45
+# كاش سريع للبحث المتكرر.
+AUTO_SEARCH_CACHE_TTL = 120
 
-# الحد الأقصى للنتائج التي نحتفظ بها للبحث التلقائي
+# الحد الأقصى المعروض في متصفح النتائج.
 AUTO_SEARCH_MAX_RESULTS = 30
 
-# مهلة طلب API
-AUTO_SEARCH_REQUEST_TIMEOUT = 12
+# مهلات مستقلة حتى لا يعلق طلب واحد كل البحث.
+AUTO_SEARCH_TOTAL_TIMEOUT = 7
+AUTO_SEARCH_CONNECT_TIMEOUT = 3
+AUTO_SEARCH_READ_TIMEOUT = 5
 
 _search_cooldowns = {}
-
-# ============================================================
-# AUTO SEARCH CACHE
-# ============================================================
-
 _auto_search_cache = {}
-
 _auto_search_inflight = {}
 
-_auto_search_cache_lock = asyncio.Lock()
+
+def _auto_cache_key(query, key_mode):
+    return f"{compact_game_name(query)}|{key_mode}"
 
 
-def _auto_cache_key(
-    query,
-    key_mode
-):
-
-    normalized = compact_game_name(
-        query
-    )
-
-    return (
-        f"{normalized}|{key_mode}"
-    )
+def _copy_cached_scripts(scripts):
+    # نعيد list جديدة حتى لا تتغير نسخة الكاش بسبب إضافة metadata.
+    return [dict(item) for item in (scripts or []) if isinstance(item, dict)]
 
 
-async def get_auto_cache(
-    query,
-    key_mode
-):
+async def get_auto_cache(query, key_mode):
+    cache_key = _auto_cache_key(query, key_mode)
+    item = _auto_search_cache.get(cache_key)
 
-    cache_key = _auto_cache_key(
-        query,
-        key_mode
-    )
+    if not item:
+        return None
 
-    async with _auto_search_cache_lock:
+    if time.monotonic() - item["timestamp"] > AUTO_SEARCH_CACHE_TTL:
+        _auto_search_cache.pop(cache_key, None)
+        return None
 
-        item = _auto_search_cache.get(
-            cache_key
-        )
-
-        if not item:
-            return None
-
-        timestamp = item.get(
-            "timestamp",
-            0
-        )
-
-        now = datetime.now(
-            timezone.utc
-        ).timestamp()
-
-        if (
-            now - timestamp
-            > AUTO_SEARCH_CACHE_TTL
-        ):
-
-            _auto_search_cache.pop(
-                cache_key,
-                None
-            )
-
-            return None
-
-        return list(
-            item.get(
-                "scripts",
-                []
-            )
-        )
+    return _copy_cached_scripts(item["scripts"])
 
 
-async def set_auto_cache(
-    query,
-    key_mode,
-    scripts
-):
+async def set_auto_cache(query, key_mode, scripts):
+    cache_key = _auto_cache_key(query, key_mode)
+    _auto_search_cache[cache_key] = {
+        "timestamp": time.monotonic(),
+        "scripts": _copy_cached_scripts(scripts),
+    }
 
-    cache_key = _auto_cache_key(
-        query,
-        key_mode
-    )
-
-    async with _auto_search_cache_lock:
-
-        _auto_search_cache[
-            cache_key
-        ] = {
-            "timestamp": (
-                datetime.now(
-                    timezone.utc
-                ).timestamp()
-            ),
-            "scripts": list(
-                scripts
-            )
-        }
-
-        # تنظيف الكاش القديم
-        if len(
-            _auto_search_cache
-        ) > 150:
-
-            now = datetime.now(
-                timezone.utc
-            ).timestamp()
-
-            old_keys = []
-
-            for key, item in (
-                _auto_search_cache.items()
-            ):
-
-                if (
-                    now
-                    - item.get(
-                        "timestamp",
-                        0
-                    )
-                    > AUTO_SEARCH_CACHE_TTL
-                ):
-
-                    old_keys.append(
-                        key
-                    )
-
-            for key in old_keys:
-
-                _auto_search_cache.pop(
-                    key,
-                    None
-                )
+    if len(_auto_search_cache) > 200:
+        now = time.monotonic()
+        expired = [
+            key for key, item in _auto_search_cache.items()
+            if now - item.get("timestamp", 0) > AUTO_SEARCH_CACHE_TTL
+        ]
+        for key in expired:
+            _auto_search_cache.pop(key, None)
 
 
 # ============================================================
@@ -1020,603 +932,388 @@ def get_game_search_queries(
 
 
 # ============================================================
-# AUTO SEARCH API WORKER
+# AUTO SEARCH API WORKER — FAST PATH
 # ============================================================
 
-async def fetch_auto_search_mode(
-    search_query,
-    key_mode
-):
+async def _scriptblox_search_async(session, query, key_mode):
+    """طلب بحث واحد سريع من ScriptBlox باستخدام aiohttp."""
 
-    """
-    key_mode:
-        no_key
-        with_key
-    """
+    key_value = 0 if key_mode == "no_key" else 1
 
-    cache = await get_auto_cache(
-        search_query,
-        key_mode
+    params = {
+        "q": query,
+        "page": 1,
+        "max": 20,
+        "mode": "free",
+        "key": key_value,
+        "sortBy": "accuracy",
+        "order": "desc",
+        "strict": "false",
+    }
+
+    headers = {
+        "User-Agent": "Team-Fime-Search/4.0",
+        "Accept": "application/json",
+    }
+
+    try:
+        async with session.get(
+            "https://scriptblox.com/api/script/search",
+            params=params,
+            headers=headers,
+        ) as response:
+
+            if response.status != 200:
+                return [], True
+
+            data = await response.json(content_type=None)
+            result = data.get("result", {}) if isinstance(data, dict) else {}
+            scripts = result.get("scripts", [])
+
+            if not isinstance(scripts, list):
+                return [], False
+
+            return [
+                script for script in scripts
+                if isinstance(script, dict)
+            ], False
+
+    except asyncio.TimeoutError:
+        return [], True
+    except aiohttp.ClientError:
+        return [], True
+    except Exception as e:
+        print(f"❌ Async ScriptBlox search error: {e}")
+        return [], True
+
+
+def _script_key(script):
+    return (
+        script.get("_id")
+        or script.get("slug")
+        or script.get("title")
+        or str(script)
     )
 
+
+def _score_auto_result(script, query):
+    target = normalize_game_name(query)
+    compact_target = compact_game_name(query)
+
+    title = normalize_game_name(script.get("title", ""))
+    game = script.get("game", {})
+    game_name = (
+        normalize_game_name(game.get("name", ""))
+        if isinstance(game, dict)
+        else ""
+    )
+
+    candidates = [title, game_name]
+    score = 0.0
+
+    for candidate in candidates:
+        if not candidate:
+            continue
+
+        compact_candidate = compact_game_name(candidate)
+
+        if candidate == target:
+            score = max(score, 100.0)
+            continue
+
+        if candidate.startswith(target) or target.startswith(candidate):
+            score = max(score, 92.0)
+            continue
+
+        if target in candidate or candidate in target:
+            score = max(score, 86.0)
+            continue
+
+        similarity = difflib.SequenceMatcher(
+            None,
+            compact_target,
+            compact_candidate,
+        ).ratio()
+
+        score = max(score, similarity * 75.0)
+
+    # دفعة خفيفة للموثوقية والشعبية، بدون كسر ترتيب الدقة.
+    if script.get("verified", False):
+        score += 3
+
+    try:
+        score += min(float(script.get("views", 0) or 0) / 10000, 8)
+    except Exception:
+        pass
+
+    return score
+
+
+async def fetch_auto_search_mode(search_query, key_mode):
+    """بحث سريع: طلب أساسي واحد، ثم fallback واحد فقط إذا احتجنا."""
+
+    cache = await get_auto_cache(search_query, key_mode)
     if cache is not None:
+        return cache, False, True
 
-        return (
-            cache,
-            False,
-            True
-        )
+    cache_key = _auto_cache_key(search_query, key_mode)
 
-    cache_key = _auto_cache_key(
-        search_query,
-        key_mode
-    )
-
-    # ========================================================
-    # منع تكرار نفس الطلب إذا مستخدمان بحثوا بنفس اللحظة
-    # ========================================================
-
-    existing_task = (
-        _auto_search_inflight.get(
-            cache_key
-        )
-    )
-
+    existing_task = _auto_search_inflight.get(cache_key)
     if existing_task:
-
         try:
-
-            result = await existing_task
-
-            return (
-                list(result),
-                False,
-                True
-            )
-
+            scripts, network_error = await existing_task
+            return _copy_cached_scripts(scripts), network_error, True
         except Exception:
-
             pass
 
     async def worker():
+        search_queries = get_game_search_queries(search_query)
+
+        # نبدأ بالصيغة التي يفهمها النظام كاسم اللعبة.
+        primary = search_queries[0] if search_queries else search_query
+        fallback = None
+
+        for item in search_queries[1:]:
+            if normalize_game_name(item) != normalize_game_name(primary):
+                fallback = item
+                break
+
+        timeout = aiohttp.ClientTimeout(
+            total=AUTO_SEARCH_TOTAL_TIMEOUT,
+            connect=AUTO_SEARCH_CONNECT_TIMEOUT,
+            sock_read=AUTO_SEARCH_READ_TIMEOUT,
+        )
 
         collected = []
         seen = set()
-
         had_network_error = False
 
-        search_queries = [
-            search_query
-        ]
-
-        # نستخدم صيغ إضافية فقط عند الحاجة
-        extra_queries = (
-            get_game_search_queries(
-                search_query
-            )
-        )
-
-        for item in extra_queries:
-
-            if normalize_game_name(
-                item
-            ) not in [
-                normalize_game_name(
-                    existing
-                )
-                for existing in search_queries
-            ]:
-
-                search_queries.append(
-                    item
-                )
-
-        # ====================================================
-        # نبحث في أول صيغتين بالتوازي
-        # ====================================================
-
-        async def search_one_query(
-            current_query
-        ):
-
-            local_results = []
-            local_error = False
-
-            async def fetch_page(
-                page
-            ):
-
-                return await asyncio.to_thread(
-                    fetch_scripts,
-                    "scriptblox",
-                    current_query,
-                    "free",
-                    page,
-                    key=(
-                        0
-                        if key_mode == "no_key"
-                        else 1
-                    )
-                )
-
-            tasks = [
-                asyncio.create_task(
-                    fetch_page(
-                        1
-                    )
-                ),
-                asyncio.create_task(
-                    fetch_page(
-                        2
-                    )
-                )
-            ]
-
-            results = await asyncio.gather(
-                *tasks,
-                return_exceptions=True
+        async with aiohttp.ClientSession(timeout=timeout) as session:
+            scripts, network_error = await _scriptblox_search_async(
+                session,
+                primary,
+                key_mode,
             )
 
-            for result in results:
-
-                if isinstance(
-                    result,
-                    Exception
-                ):
-
-                    local_error = True
-                    continue
-
-                scripts, _, error = result
-
-                if error:
-
-                    error_text = str(
-                        error
-                    ).lower()
-
-                    if (
-                        "something went wrong"
-                        in error_text
-                        or "unexpected response"
-                        in error_text
-                        or "timeout"
-                        in error_text
-                        or "connection"
-                        in error_text
-                        or "http"
-                        in error_text
-                    ):
-
-                        local_error = True
-
-                    continue
-
-                if not scripts:
-
-                    continue
-
-                local_results.extend(
-                    scripts
-                )
-
-            return (
-                local_results,
-                local_error
-            )
-
-        query_tasks = []
-
-        for current_query in (
-            search_queries[:2]
-        ):
-
-            query_tasks.append(
-                asyncio.create_task(
-                    search_one_query(
-                        current_query
-                    )
-                )
-            )
-
-        query_results = await asyncio.gather(
-            *query_tasks,
-            return_exceptions=True
-        )
-
-        for result in query_results:
-
-            if isinstance(
-                result,
-                Exception
-            ):
-
-                had_network_error = True
-                continue
-
-            scripts, network_error = result
-
-            if network_error:
-
-                had_network_error = True
+            had_network_error = network_error
 
             for script in scripts:
+                key = _script_key(script)
+                if key not in seen:
+                    seen.add(key)
+                    collected.append(script)
 
-                script_key = (
-                    script.get("_id")
-                    or script.get("slug")
-                    or script.get("title")
+            # نوسّع البحث فقط إذا لم نلقَ أي نتيجة.
+            if not collected and fallback:
+                fallback_scripts, fallback_error = await _scriptblox_search_async(
+                    session,
+                    fallback,
+                    key_mode,
                 )
 
-                if not script_key:
-
-                    script_key = (
-                        str(
-                            script
-                        )
-                    )
-
-                if script_key in seen:
-
-                    continue
-
-                seen.add(
-                    script_key
+                had_network_error = (
+                    had_network_error
+                    and fallback_error
                 )
 
-                collected.append(
-                    script
-                )
-
-                if len(
-                    collected
-                ) >= AUTO_SEARCH_MAX_RESULTS:
-
-                    break
-
-            if len(
-                collected
-            ) >= AUTO_SEARCH_MAX_RESULTS:
-
-                break
-
-        # ====================================================
-        # ترتيب النتائج
-        # ====================================================
-
-        def result_score(
-            script
-        ):
-
-            score = 0.0
-
-            title = normalize_game_name(
-                script.get(
-                    "title",
-                    ""
-                )
-            )
-
-            game = script.get(
-                "game",
-                {}
-            )
-
-            if isinstance(
-                game,
-                dict
-            ):
-
-                game_name = normalize_game_name(
-                    game.get(
-                        "name",
-                        ""
-                    )
-                )
-
-            else:
-
-                game_name = ""
-
-            target = normalize_game_name(
-                search_query
-            )
-
-            if target:
-
-                if title == target:
-
-                    score += 100
-
-                elif game_name == target:
-
-                    score += 95
-
-                elif target in title:
-
-                    score += 70
-
-                elif target in game_name:
-
-                    score += 65
-
-                else:
-
-                    title_score = (
-                        difflib.SequenceMatcher(
-                            None,
-                            compact_game_name(
-                                target
-                            ),
-                            compact_game_name(
-                                title
-                            )
-                        ).ratio()
-                    )
-
-                    game_score = (
-                        difflib.SequenceMatcher(
-                            None,
-                            compact_game_name(
-                                target
-                            ),
-                            compact_game_name(
-                                game_name
-                            )
-                        ).ratio()
-                    )
-
-                    score += max(
-                        title_score,
-                        game_score
-                    ) * 40
-
-            try:
-
-                score += min(
-                    float(
-                        script.get(
-                            "views",
-                            0
-                        ) or 0
-                    ) / 10000,
-                    15
-                )
-
-            except Exception:
-
-                pass
-
-            if script.get(
-                "verified",
-                False
-            ):
-
-                score += 5
-
-            return score
+                for script in fallback_scripts:
+                    key = _script_key(script)
+                    if key not in seen:
+                        seen.add(key)
+                        collected.append(script)
 
         collected.sort(
-            key=result_score,
-            reverse=True
+            key=lambda script: _score_auto_result(script, search_query),
+            reverse=True,
         )
+        collected = collected[:AUTO_SEARCH_MAX_RESULTS]
 
         await set_auto_cache(
             search_query,
             key_mode,
-            collected
-        )
-
-        return (
             collected,
-            had_network_error
         )
 
-    task = asyncio.create_task(
-        worker()
-    )
+        return collected, had_network_error
 
-    _auto_search_inflight[
-        cache_key
-    ] = task
+    task = asyncio.create_task(worker())
+    _auto_search_inflight[cache_key] = task
 
     try:
-
-        scripts, network_error = (
-            await task
-        )
-
-        return (
-            scripts,
-            network_error,
-            False
-        )
-
+        scripts, network_error = await task
+        return scripts, network_error, False
     finally:
-
-        if (
-            _auto_search_inflight.get(
-                cache_key
-            )
-            is task
-        ):
-
-            _auto_search_inflight.pop(
-                cache_key,
-                None
-            )
+        if _auto_search_inflight.get(cache_key) is task:
+            _auto_search_inflight.pop(cache_key, None)
 
 
 # ============================================================
 # AUTO SEARCH KEY SELECT
 # ============================================================
 
-class AutoSearchKeySelect(
-    discord.ui.Select
-):
+class AutoSearchKeySelect(discord.ui.Select):
+    """اختيار نوع المفتاح. أول ضغطة = ACK فوري ثم معالجة بالخلفية."""
 
-    def __init__(
-        self,
-        requester_id,
-        query,
-        resolved_query
-    ):
-
+    def __init__(self, requester_id, query, resolved_query):
         self.requester_id = requester_id
         self.query = query
         self.resolved_query = resolved_query
 
         options = [
-
             discord.SelectOption(
                 label="بدون مفتاح",
                 value="no_key",
-                description=(
-                    "سكربتات لا تحتاج مفتاح تفعيل"
-                ),
-                emoji="🔓"
+                description="سكربتات لا تحتاج مفتاح تفعيل",
+                emoji="🔓",
             ),
-
             discord.SelectOption(
                 label="بمفتاح",
                 value="with_key",
-                description=(
-                    "سكربتات تحتاج مفتاح تفعيل"
-                ),
-                emoji="🔑"
+                description="سكربتات تحتاج مفتاح تفعيل",
+                emoji="🔑",
             ),
-
             discord.SelectOption(
                 label="جميعهم",
                 value="all",
-                description=(
-                    "البحث عن السكربتات بدون مفتاح وبمفتاح"
-                ),
-                emoji="🌐"
-            )
+                description="يبحث بالنوعين معًا",
+                emoji="🌐",
+            ),
         ]
 
         super().__init__(
-            placeholder=(
-                "🔐 اختر نوع السكربت..."
-            ),
+            placeholder="🔐 اختر نوع السكربت...",
             min_values=1,
             max_values=2,
             options=options,
-            row=0
+            row=0,
         )
 
-    async def callback(
-        self,
-        interaction: discord.Interaction
-    ):
-
-        selected = list(
-            self.values
-        )
-
-        # ====================================================
-        # جميعهم = النوعين
-        # ====================================================
+    async def callback(self, interaction: discord.Interaction):
+        selected = list(self.values)
 
         if "all" in selected:
-
-            selected_modes = [
-                "no_key",
-                "with_key"
-            ]
-
+            selected_modes = ["no_key", "with_key"]
         else:
-
             selected_modes = [
-                value
-                for value in selected
-                if value in [
-                    "no_key",
-                    "with_key"
-                ]
+                value for value in selected
+                if value in ("no_key", "with_key")
             ]
 
         if not selected_modes:
-
-            selected_modes = [
-                "no_key",
-                "with_key"
-            ]
+            selected_modes = ["no_key", "with_key"]
 
         labels = []
-
         if "no_key" in selected_modes:
-
-            labels.append(
-                "🔓 بدون مفتاح"
-            )
-
+            labels.append("🔓 بدون مفتاح")
         if "with_key" in selected_modes:
+            labels.append("🔑 بمفتاح")
 
-            labels.append(
-                "🔑 بمفتاح"
-            )
+        label = " + ".join(labels)
 
-        label = " + ".join(
-            labels
-        )
-
-        self.disabled = True
-
-        self.placeholder = (
-            f"🔐 {label}"
-        )
-
-        searching_content = (
-            f"⏳ **جاري البحث الآن...**\n"
-            f"🎮 الماب: **{self.query}**\n"
-            f"🔐 النوع: **{label}**\n\n"
-            f"جاري البحث بشكل متزامن عن أفضل النتائج..."
-        )
+        # ====================================================
+        # أهم جزء: ACK خلال اللحظة الأولى.
+        # لا توجد أي API calls قبل defer.
+        # ====================================================
+        try:
+            await interaction.response.defer()
+        except Exception as e:
+            print(f"❌ Search interaction defer failed: {e}")
+            return
 
         try:
-
-            await interaction.response.edit_message(
-                content=searching_content,
+            await interaction.edit_original_response(
+                content=(
+                    "⏳ **جاري معالجة طلبك...**\n"
+                    f"🎮 الماب: **{self.query}**\n"
+                    f"🔐 النوع: **{label}**\n\n"
+                    "⚡ تم استلام الطلب، جاري جلب النتائج الآن..."
+                ),
                 embed=None,
-                view=self.view
+                view=None,
             )
-
         except Exception as e:
+            print(f"⚠️ Processing message edit failed: {e}")
 
-            print(
-                f"❌ Key select immediate edit error: {e}"
+        # ====================================================
+        # لا ننتظر البحث داخل callback.
+        # هذا يمنع Discord من اعتبار الزر عالقًا.
+        # ====================================================
+        task = asyncio.create_task(
+            process_auto_search_request(
+                interaction,
+                self.requester_id,
+                self.query,
+                self.resolved_query,
+                selected_modes,
+                label,
             )
+        )
 
+        # حفظ المرجع حتى لا يتجمع task بدون داعٍ.
+        try:
+            interaction.client.active_search_tasks.add(task)
+            task.add_done_callback(
+                lambda finished: interaction.client.active_search_tasks.discard(finished)
+            )
+        except Exception:
+            pass
+
+
+class AutoSearchKeyView(discord.ui.View):
+
+    def __init__(self, requester, query, resolved_query):
+        super().__init__(timeout=60)
+        self.requester_id = requester.id
+        self.message = None
+
+        self.add_item(
+            AutoSearchKeySelect(
+                requester.id,
+                query,
+                resolved_query,
+            )
+        )
+
+    async def interaction_check(self, interaction: discord.Interaction):
+        if interaction.user.id != self.requester_id:
+            await interaction.response.send_message(
+                "⚠️ هذي الخيارات للشخص اللي طلب البحث فقط.",
+                ephemeral=True,
+            )
+            return False
+        return True
+
+    async def on_timeout(self):
+        self.clear_items()
+        if self.message:
             try:
+                await self.message.edit(view=self)
+            except Exception:
+                pass
 
-                await interaction.response.defer()
 
-                await interaction.edit_original_response(
-                    content=searching_content,
-                    embed=None,
-                    view=self.view
-                )
+async def process_auto_search_request(
+    interaction,
+    requester_id,
+    query,
+    resolved_query,
+    selected_modes,
+    label,
+):
+    """كل البحث الحقيقي هنا بعد ما تم ACK للزر وأصبح مخفيًا."""
 
-            except Exception as fallback_error:
+    started = time.perf_counter()
+    collected = []
+    seen = set()
+    had_network_error = False
 
-                print(
-                    "❌ Key select fallback error: "
-                    f"{fallback_error}"
-                )
-
-                return
-
-        # ====================================================
-        # تشغيل النوعين بشكل متزامن
-        # ====================================================
-
+    try:
+        # النوعان معًا = طلبان فقط بالتوازي.
         tasks = [
             asyncio.create_task(
                 fetch_auto_search_mode(
-                    self.resolved_query,
-                    mode
+                    resolved_query,
+                    mode,
                 )
             )
             for mode in selected_modes
@@ -1624,367 +1321,150 @@ class AutoSearchKeySelect(
 
         results = await asyncio.gather(
             *tasks,
-            return_exceptions=True
+            return_exceptions=True,
         )
 
-        collected = []
-        seen = set()
-        had_network_error = False
-        had_successful_result = False
-
-        for result in results:
-
-            if isinstance(
-                result,
-                Exception
-            ):
-
-                print(
-                    f"❌ Auto search task error: {result}"
-                )
-
+        for mode, result in zip(selected_modes, results):
+            if isinstance(result, Exception):
+                print(f"❌ Auto search task error ({mode}): {result}")
                 had_network_error = True
                 continue
 
             scripts, network_error, _ = result
-
-            if network_error:
-
-                had_network_error = True
-
-            if scripts:
-
-                had_successful_result = True
+            had_network_error = had_network_error or network_error
 
             for script in scripts:
-
-                script_key = (
-                    script.get("_id")
-                    or script.get("slug")
-                    or script.get("title")
-                )
-
-                if not script_key:
-
-                    script_key = str(
-                        script
-                    )
-
-                if script_key in seen:
-
+                key = _script_key(script)
+                if key in seen:
                     continue
 
-                seen.add(
-                    script_key
+                seen.add(key)
+                item = dict(script)
+                item["_fime_key_source"] = (
+                    "بدون مفتاح" if mode == "no_key" else "بمفتاح"
                 )
-
-                # نحفظ نوع المفتاح داخل النتيجة
-                if (
-                    "no_key" in selected_modes
-                    and "with_key" in selected_modes
-                ):
-
-                    script["_fime_key_source"] = (
-                        "بمفتاح"
-                        if script.get(
-                            "key",
-                            False
-                        )
-                        else "بدون مفتاح"
-                    )
-
-                elif "no_key" in selected_modes:
-
-                    script["_fime_key_source"] = (
-                        "بدون مفتاح"
-                    )
-
-                else:
-
-                    script["_fime_key_source"] = (
-                        "بمفتاح"
-                    )
-
-                collected.append(
-                    script
-                )
+                collected.append(item)
 
         # ====================================================
-        # إذا لم نجد نتيجة، محاولة بحث أوسع
+        # لو الاسم المصحح ما رجع شيء، نستخدم الاسم الأصلي مرة واحدة.
         # ====================================================
-
-        if not collected:
-
-            fallback_queries = (
-                get_game_search_queries(
-                    self.query
+        if not collected and normalize_game_name(query) != normalize_game_name(resolved_query):
+            fallback_tasks = [
+                asyncio.create_task(
+                    fetch_auto_search_mode(
+                        query,
+                        mode,
+                    )
                 )
+                for mode in selected_modes
+            ]
+
+            fallback_results = await asyncio.gather(
+                *fallback_tasks,
+                return_exceptions=True,
             )
 
-            fallback_tasks = []
-
-            for fallback_query in fallback_queries:
-
-                if normalize_game_name(
-                    fallback_query
-                ) == normalize_game_name(
-                    self.resolved_query
-                ):
-
+            for mode, result in zip(selected_modes, fallback_results):
+                if isinstance(result, Exception):
+                    had_network_error = True
                     continue
 
-                for mode in selected_modes:
+                scripts, network_error, _ = result
+                had_network_error = had_network_error or network_error
 
-                    fallback_tasks.append(
-                        asyncio.create_task(
-                            fetch_auto_search_mode(
-                                fallback_query,
-                                mode
-                            )
-                        )
-                    )
-
-            if fallback_tasks:
-
-                fallback_results = (
-                    await asyncio.gather(
-                        *fallback_tasks,
-                        return_exceptions=True
-                    )
-                )
-
-                for result in fallback_results:
-
-                    if isinstance(
-                        result,
-                        Exception
-                    ):
-
-                        had_network_error = True
+                for script in scripts:
+                    key = _script_key(script)
+                    if key in seen:
                         continue
 
-                    scripts, network_error, _ = result
-
-                    if network_error:
-
-                        had_network_error = True
-
-                    if scripts:
-
-                        had_successful_result = True
-
-                    for script in scripts:
-
-                        script_key = (
-                            script.get("_id")
-                            or script.get("slug")
-                            or script.get("title")
-                        )
-
-                        if not script_key:
-
-                            script_key = str(
-                                script
-                            )
-
-                        if script_key in seen:
-
-                            continue
-
-                        seen.add(
-                            script_key
-                        )
-
-                        if (
-                            "no_key"
-                            in selected_modes
-                            and
-                            "with_key"
-                            in selected_modes
-                        ):
-
-                            script[
-                                "_fime_key_source"
-                            ] = (
-                                "بمفتاح"
-                                if script.get(
-                                    "key",
-                                    False
-                                )
-                                else "بدون مفتاح"
-                            )
-
-                        elif "no_key" in selected_modes:
-
-                            script[
-                                "_fime_key_source"
-                            ] = "بدون مفتاح"
-
-                        else:
-
-                            script[
-                                "_fime_key_source"
-                            ] = "بمفتاح"
-
-                        collected.append(
-                            script
-                        )
-
-        # ====================================================
-        # عرض النتيجة
-        # ====================================================
-
-        try:
-
-            if not collected:
-
-                suggestions = (
-                    get_close_game_suggestions(
-                        self.query,
-                        limit=3
+                    seen.add(key)
+                    item = dict(script)
+                    item["_fime_key_source"] = (
+                        "بدون مفتاح" if mode == "no_key" else "بمفتاح"
                     )
-                )
+                    collected.append(item)
 
-                if (
-                    had_network_error
-                    and not had_successful_result
-                ):
+        collected.sort(
+            key=lambda script: _score_auto_result(
+                script,
+                resolved_query or query,
+            ),
+            reverse=True,
+        )
+        collected = collected[:AUTO_SEARCH_MAX_RESULTS]
 
-                    await interaction.edit_original_response(
-                        content=(
-                            "⚠️ **تعذر الوصول لمصدر البحث حاليًا.**\n"
-                            "جرّب مرة ثانية بعد قليل."
-                        ),
-                        embed=None,
-                        view=None
-                    )
+        elapsed = time.perf_counter() - started
 
-                else:
-
-                    suggestion_text = ""
-
-                    if suggestions:
-
-                        suggestion_text = (
-                            "\n\n💡 **هل تقصد:** "
-                            + " • ".join(
-                                f"`{item}`"
-                                for item in suggestions
-                            )
-                        )
-
-                    await interaction.edit_original_response(
-                        content=(
-                            f"❌ **ما لقيت أي سكربت** "
-                            f"للماب **{self.query}**.\n"
-                            f"🔐 البحث: **{label}**"
-                            f"{suggestion_text}"
-                        ),
-                        embed=None,
-                        view=None
-                    )
-
-                return
-
-            result_view = (
-                AutoSearchResultBrowseView(
-                    self.requester_id,
-                    collected,
-                    self.query,
-                    selected_modes
-                )
+        if not collected:
+            suggestions = get_close_game_suggestions(
+                query,
+                limit=3,
             )
 
-            embed = (
-                result_view.build_embed()
-            )
+            if had_network_error:
+                content = (
+                    "⚠️ **تعذر الوصول لمصدر البحث حاليًا.**\n"
+                    "جرب البحث مرة ثانية بعد قليل."
+                )
+            else:
+                suggestion_text = ""
+                if suggestions:
+                    suggestion_text = (
+                        "\n\n💡 **اقتراحات قريبة:** "
+                        + " • ".join(
+                            f"`{item}`" for item in suggestions
+                        )
+                    )
+
+                content = (
+                    f"❌ **ما لقيت نتائج** للماب **{query}**.\n"
+                    f"🔐 البحث: **{label}**"
+                    f"{suggestion_text}"
+                )
 
             await interaction.edit_original_response(
+                content=content,
+                embed=None,
+                view=None,
+            )
+            return
+
+        result_view = AutoSearchResultBrowseView(
+            requester_id,
+            collected,
+            query,
+            selected_modes,
+        )
+
+        embed = result_view.build_embed()
+
+        elapsed_text = f"{elapsed:.1f}s"
+
+        await interaction.edit_original_response(
+            content=(
+                f"✅ **تم العثور على {len(collected)} نتيجة** لـ **{query}**\n"
+                f"🔐 النوع: **{label}** • ⚡ البحث اكتمل خلال **{elapsed_text}**"
+            ),
+            embed=embed,
+            view=result_view,
+        )
+
+    except Exception as e:
+        import traceback
+        print(f"❌ Auto search background error: {e}")
+        traceback.print_exc()
+
+        try:
+            await interaction.edit_original_response(
                 content=(
-                    f"✅ لقيت **{len(collected)}** نتيجة "
-                    f"لـ **{self.query}**\n"
-                    f"🔐 النوع: **{label}**"
+                    "❌ **حدث خطأ أثناء تجهيز النتائج.**\n"
+                    "جرب البحث مرة ثانية."
                 ),
-                embed=embed,
-                view=result_view
+                embed=None,
+                view=None,
             )
-
-        except Exception as e:
-
-            import traceback
-
-            print(
-                f"❌ Key select result-edit error: {e}"
-            )
-
-            traceback.print_exc()
-
-            try:
-
-                await interaction.followup.send(
-                    "❌ صار خطأ أثناء عرض النتيجة، حاول تبحث مرة ثانية.",
-                    ephemeral=True
-                )
-
-            except Exception:
-                pass
-
-
-# ============================================================
-# AUTO SEARCH KEY VIEW
-# ============================================================
-
-class AutoSearchKeyView(
-    discord.ui.View
-):
-
-    def __init__(
-        self,
-        requester,
-        query,
-        resolved_query
-    ):
-
-        super().__init__(
-            timeout=60
-        )
-
-        self.requester_id = requester.id
-
-        self.add_item(
-            AutoSearchKeySelect(
-                requester.id,
-                query,
-                resolved_query
-            )
-        )
-
-    async def interaction_check(
-        self,
-        interaction: discord.Interaction
-    ):
-
-        if (
-            interaction.user.id
-            != self.requester_id
-        ):
-
-            await interaction.response.send_message(
-                "⚠️ هذي الخيارات للشخص اللي طلب البحث فقط.",
-                ephemeral=True
-            )
-
-            return False
-
-        return True
-
-    async def on_timeout(
-        self
-    ):
-
-        for item in self.children:
-
-            item.disabled = True
+        except Exception:
+            pass
 
 
 # ============================================================
@@ -2004,7 +1484,7 @@ class AutoSearchResultBrowseView(
     ):
 
         super().__init__(
-            timeout=180
+            timeout=240
         )
 
         self.requester_id = requester_id
@@ -2314,7 +1794,7 @@ async def automatic_game_search(
             f"**{resolved_query}**"
         )
 
-    await message.channel.send(
+    sent_message = await message.channel.send(
         content=(
             f"🔎 **تم استلام طلب البحث عن {query}**"
             f"{recognized_text}\n"
@@ -2322,6 +1802,8 @@ async def automatic_game_search(
         ),
         view=view
     )
+
+    view.message = sent_message
 
 
 # ============================================================
@@ -2344,6 +1826,7 @@ class MyBot(
         )
 
         self.active_searches = {}
+        self.active_search_tasks = set()
 
     async def setup_hook(
         self
@@ -3385,6 +2868,13 @@ def create_embed(
         source_type = script.get(
             "_fime_key_source"
         )
+
+        if not source_type:
+            source_type = (
+                "بمفتاح"
+                if script.get("key", False)
+                else "بدون مفتاح"
+            )
 
         if source_type:
 
