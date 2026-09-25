@@ -509,62 +509,63 @@ def resolve_game_query(query):
     return query
 
 
-class AutoSearchKeyView(discord.ui.View):
+class AutoSearchKeySelect(discord.ui.Select):
+    """قائمة منسدلة احترافية لاختيار نوع السكربت بدل زرّين منفصلين."""
 
-    def __init__(self, requester, query, resolved_query):
+    def __init__(self, requester_id, query, resolved_query):
 
-        super().__init__(timeout=45)
-
-        self.requester_id = requester.id
+        self.requester_id = requester_id
         self.query = query
         self.resolved_query = resolved_query
-        self.used = False
 
-    async def interaction_check(self, interaction: discord.Interaction):
+        options = [
+            discord.SelectOption(
+                label="بدون مفتاح",
+                value="no_key",
+                description="سكربتات لا تحتاج مفتاح تفعيل",
+                emoji="🔓"
+            ),
+            discord.SelectOption(
+                label="بمفتاح",
+                value="with_key",
+                description="سكربتات تحتاج مفتاح تفعيل",
+                emoji="🔑"
+            ),
+        ]
 
-        if interaction.user.id != self.requester_id:
-            await interaction.response.send_message(
-                "⚠️ هذي الخيارات للشخص اللي طلب البحث فقط.",
-                ephemeral=True
-            )
-            return False
+        super().__init__(
+            placeholder="🔐 اختر نوع السكربت اللي تبيه...",
+            min_values=1,
+            max_values=1,
+            options=options,
+            row=0
+        )
 
-        return True
+    async def callback(self, interaction: discord.Interaction):
 
-    async def show_result(self, interaction, no_key):
+        no_key = self.values[0] == "no_key"
+        label = "بدون مفتاح" if no_key else "بمفتاح"
 
-        if self.used:
-            if not interaction.response.is_done():
-                await interaction.response.send_message(
-                    "⚠️ تم اختيار نوع السكربت بالفعل.",
-                    ephemeral=True
-                )
+        # نعطّل القائمة فورًا حتى لا يقدر أحد يختار مرتين على نفس الرسالة.
+        self.disabled = True
+        self.placeholder = f"🔐 تم الاختيار: {label}"
+
+        # defer() يردّ فورًا (أقل من 3 ثوانٍ) بدون ما يحتاج محتوى جاهز،
+        # وهو أضمن رد أولي من edit_message لأنه ما يفشل حتى لو الرسالة
+        # تغيّرت. بعده نقدر نعدّل الرسالة الأصلية براحتنا.
+        try:
+            await interaction.response.defer()
+        except Exception as e:
+            print(f"❌ Key select defer error: {e}")
             return
 
-        self.used = True
-        self.disable_all_items()
-
-        # نرد على الـ interaction فورًا (قبل أي طلب شبكة) حتى لا تنتهي
-        # صلاحية التفاعل (Discord يعطي 3 ثوانٍ فقط للرد الأول).
         try:
-            await interaction.response.edit_message(
-                content=(
-                    "🔎 جاري البحث عن نسخة "
-                    f"**{'بدون مفتاح' if no_key else 'بمفتاح'}**..."
-                ),
-                view=self
-            )
-        except discord.errors.InteractionResponded:
             await interaction.edit_original_response(
-                content=(
-                    "🔎 جاري البحث عن نسخة "
-                    f"**{'بدون مفتاح' if no_key else 'بمفتاح'}**..."
-                ),
-                view=self
+                content=f"🔎 جاري البحث عن نسخة **{label}**...",
+                view=self.view
             )
         except Exception as e:
-            print(f"❌ Key button ack error: {e}")
-            return
+            print(f"❌ Key select ack-edit error: {e}")
 
         # نفذ طلبات الشبكة في executor منفصل حتى لا نجمّد حلقة الأحداث
         # (أثناء هذا الوقت باقي أوامر البوت تبقى تعمل بشكل طبيعي).
@@ -586,14 +587,12 @@ class AutoSearchKeyView(discord.ui.View):
 
         collected = []
         seen = set()
-        last_error = None
 
         try:
             for page in (1, 2):
                 scripts, _, error = await fetch_page(page)
 
                 if error and not collected:
-                    last_error = error
                     break
 
                 if not scripts:
@@ -617,59 +616,82 @@ class AutoSearchKeyView(discord.ui.View):
                     break
 
         except Exception as e:
+            import traceback
             print(f"❌ Key mode search error: {e}")
-            last_error = str(e)
+            traceback.print_exc()
 
-        if not collected:
+        try:
+            if not collected:
+                await interaction.edit_original_response(
+                    content=(
+                        f"❌ ما لقيت نسخة **{label}** لـ **{self.query}**."
+                    ),
+                    embed=None,
+                    view=None
+                )
+                return
+
+            result_view = AutoSearchResultBrowseView(
+                self.requester_id,
+                collected,
+                self.query,
+                no_key
+            )
+
+            embed = result_view.build_embed()
 
             await interaction.edit_original_response(
                 content=(
-                    f"❌ ما لقيت نسخة **{'بدون مفتاح' if no_key else 'بمفتاح'}** "
-                    f"لـ **{self.query}**."
+                    f"✅ لقيت **{len(collected)}** نتيجة لـ **{self.query}**\n"
+                    f"🔐 النوع: **{label}**"
                 ),
-                embed=None,
-                view=None
+                embed=embed,
+                view=result_view
             )
-            return
 
-        result_view = AutoSearchResultBrowseView(
-            self.requester_id,
-            collected,
-            self.query,
-            no_key
+        except Exception as e:
+            import traceback
+            print(f"❌ Key select result-edit error: {e}")
+            traceback.print_exc()
+            try:
+                await interaction.followup.send(
+                    "❌ صار خطأ أثناء عرض النتيجة، حاول تبحث مرة ثانية.",
+                    ephemeral=True
+                )
+            except Exception:
+                pass
+
+
+class AutoSearchKeyView(discord.ui.View):
+
+    def __init__(self, requester, query, resolved_query):
+
+        super().__init__(timeout=60)
+
+        self.requester_id = requester.id
+
+        self.add_item(
+            AutoSearchKeySelect(
+                requester.id,
+                query,
+                resolved_query
+            )
         )
 
-        embed = result_view.build_embed()
+    async def interaction_check(self, interaction: discord.Interaction):
 
-        await interaction.edit_original_response(
-            content=(
-                f"✅ لقيت **{len(collected)}** نتيجة لـ **{self.query}**\n"
-                f"🔐 النوع: **{'بدون مفتاح' if no_key else 'بمفتاح'}**"
-            ),
-            embed=embed,
-            view=result_view
-        )
+        if interaction.user.id != self.requester_id:
+            await interaction.response.send_message(
+                "⚠️ هذي الخيارات للشخص اللي طلب البحث فقط.",
+                ephemeral=True
+            )
+            return False
 
-    @discord.ui.button(
-        label="بدون مفتاح",
-        emoji="🔓",
-        style=discord.ButtonStyle.success,
-        row=0
-    )
-    async def no_key_button(self, interaction, button):
-        await self.show_result(interaction, no_key=True)
-
-    @discord.ui.button(
-        label="بمفتاح",
-        emoji="🔑",
-        style=discord.ButtonStyle.primary,
-        row=0
-    )
-    async def key_button(self, interaction, button):
-        await self.show_result(interaction, no_key=False)
+        return True
 
     async def on_timeout(self):
-        self.disable_all_items()
+        for item in self.children:
+            item.disabled = True
 
 
 class AutoSearchResultBrowseView(discord.ui.View):
