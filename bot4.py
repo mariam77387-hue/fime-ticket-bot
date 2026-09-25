@@ -3,8 +3,8 @@
 # Game Search System
 # ============================================================
 
-# Last Updated: 2026-02-10
-# Version: 2.6
+# Last Updated: 2026-09-25
+# Version: 2.8
 
 import discord
 from discord.ext import commands
@@ -36,7 +36,6 @@ SEARCH_ROOMS_FILE = "bot4_search_rooms.json"
 AUTO_SEARCH_COOLDOWN = 8
 
 _search_cooldowns = {}
-
 
 
 def load_search_rooms():
@@ -323,49 +322,39 @@ GAME_ALIASES = {
 }
 
 
+# ============================================================
+# SMART GAME NAME NORMALIZATION
+# ============================================================
+
 def normalize_game_name(text):
+
     if not text:
         return ""
 
     text = str(text).lower().strip()
 
+    # حذف التشكيل
     text = re.sub(
         r"[\u064B-\u065F\u0670]",
         "",
         text
     )
 
-    text = text.replace(
-        "أ",
-        "ا"
-    ).replace(
-        "إ",
-        "ا"
-    ).replace(
-        "آ",
-        "ا"
+    # توحيد الحروف العربية
+    text = (
+        text
+        .replace("أ", "ا")
+        .replace("إ", "ا")
+        .replace("آ", "ا")
+        .replace("ٱ", "ا")
+        .replace("ة", "ه")
+        .replace("ى", "ي")
+        .replace("ؤ", "و")
+        .replace("ئ", "ي")
+        .replace("ـ", "")
     )
 
-    text = text.replace(
-        "ة",
-        "ه"
-    )
-
-    text = text.replace(
-        "ى",
-        "ي"
-    )
-
-    text = text.replace(
-        "ؤ",
-        "و"
-    )
-
-    text = text.replace(
-        "ئ",
-        "ي"
-    )
-
+    # إزالة الرموز وتحويلها لمسافات
     text = re.sub(
         r"[^a-z0-9\u0600-\u06FF]+",
         " ",
@@ -378,17 +367,55 @@ def normalize_game_name(text):
         text
     ).strip()
 
-    # نشيل "ال" التعريف من بداية الكلمات الطويلة حتى يتطابق
-    # "الدورز" مع "دورز" وما شابه.
+    # إزالة "ال" من بداية بعض الكلمات العربية
     stripped_words = []
-    for word in text.split():
-        if len(word) > 4 and word.startswith("ال"):
-            stripped_words.append(word[2:])
-        else:
-            stripped_words.append(word)
-    text = " ".join(stripped_words)
 
-    return text
+    for word in text.split():
+
+        if len(word) > 4 and word.startswith("ال"):
+            stripped_words.append(
+                word[2:]
+            )
+
+        else:
+            stripped_words.append(
+                word
+            )
+
+    return " ".join(
+        stripped_words
+    )
+
+
+def compact_game_name(text):
+    """
+    نسخة مضغوطة للمطابقة الذكية.
+
+    أمثلة:
+    grow a garden -> growagarden
+    growagarden -> growagarden
+    doorssss -> doors
+    بلوك فروتس -> بلوكفروتس
+    """
+
+    normalized = normalize_game_name(
+        text
+    )
+
+    # تقليل تكرار الحروف.
+    # إذا كتب المستخدم:
+    # doooors / بلووووك
+    # يصبح أقرب للاسم الأصلي.
+    normalized = re.sub(
+        r"(.)\1{1,}",
+        r"\1",
+        normalized
+    )
+
+    return normalized.replace(
+        " ",
+        ""
+    )
 
 
 NORMALIZED_GAME_ALIASES = {}
@@ -398,6 +425,7 @@ for game_name, aliases in GAME_ALIASES.items():
     normalized_aliases = []
 
     for alias in aliases:
+
         normalized = normalize_game_name(
             alias
         )
@@ -415,14 +443,18 @@ for game_name, aliases in GAME_ALIASES.items():
         normalized_game
     )
 
+    # إزالة التكرارات مع الحفاظ على القائمة
     NORMALIZED_GAME_ALIASES[
         normalized_game
     ] = list(
-        set(normalized_aliases)
+        dict.fromkeys(
+            normalized_aliases
+        )
     )
 
 
 def resolve_game_query(query):
+
     normalized_query = normalize_game_name(
         query
     )
@@ -430,89 +462,264 @@ def resolve_game_query(query):
     if not normalized_query:
         return query
 
-    # تطابق مباشر
+    compact_query = compact_game_name(
+        query
+    )
+
+    # ========================================================
+    # 1. تطابق مباشر
+    # ========================================================
+
     for game_name, aliases in NORMALIZED_GAME_ALIASES.items():
 
         if normalized_query in aliases:
             return game_name
 
-    # إذا كانت عبارة طويلة تحتوي اسم اللعبة
+    # ========================================================
+    # 2. تطابق بدون مسافات
+    # ========================================================
+
     for game_name, aliases in NORMALIZED_GAME_ALIASES.items():
 
         for alias in aliases:
 
-            if len(alias) >= 4:
+            compact_alias = compact_game_name(
+                alias
+            )
 
-                if (
-                    alias in normalized_query
-                    or normalized_query in alias
-                ):
-                    return game_name
+            if compact_query == compact_alias:
+                return game_name
 
-    # تصحيح الأخطاء الإملائية البسيطة
-    all_aliases = []
+    # ========================================================
+    # 3. احتواء الاسم
+    # ========================================================
 
-    for aliases in NORMALIZED_GAME_ALIASES.values():
-        all_aliases.extend(
-            aliases
-        )
+    for game_name, aliases in NORMALIZED_GAME_ALIASES.items():
 
-    matches = difflib.get_close_matches(
-        normalized_query,
-        all_aliases,
-        n=1,
-        cutoff=0.62
-    )
+        for alias in aliases:
 
-    if matches:
+            if len(alias) < 4:
+                continue
 
-        matched_alias = matches[0]
+            compact_alias = compact_game_name(
+                alias
+            )
+
+            if (
+                alias in normalized_query
+                or normalized_query in alias
+                or compact_alias in compact_query
+                or compact_query in compact_alias
+            ):
+                return game_name
+
+    # ========================================================
+    # 4. البحث الذكي بالأخطاء الإملائية
+    # ========================================================
+
+    if len(compact_query) >= 3:
+
+        best_match = None
+        best_score = 0.0
 
         for game_name, aliases in NORMALIZED_GAME_ALIASES.items():
 
-            if matched_alias in aliases:
-                return game_name
+            for alias in aliases:
 
-    # مطابقة الكلمات والأخطاء البسيطة عندما لا يوجد alias مطابق حرفيًا.
-    query_words = set(normalized_query.split())
+                compact_alias = compact_game_name(
+                    alias
+                )
+
+                if len(compact_alias) < 3:
+                    continue
+
+                score = difflib.SequenceMatcher(
+                    None,
+                    compact_query,
+                    compact_alias
+                ).ratio()
+
+                # تشابه البداية يعطي دفعة بسيطة
+                if (
+                    len(compact_query) >= 4
+                    and len(compact_alias) >= 4
+                    and compact_query[:3]
+                    == compact_alias[:3]
+                ):
+                    score += 0.08
+
+                # إذا كان طول الاسم متقاربًا
+                length_difference = abs(
+                    len(compact_query)
+                    - len(compact_alias)
+                )
+
+                if length_difference <= 2:
+                    score += 0.03
+
+                if score > best_score:
+
+                    best_score = score
+                    best_match = game_name
+
+        # الأسماء القصيرة تحتاج دقة أعلى
+        if len(compact_query) <= 4:
+            threshold = 0.82
+        elif len(compact_query) <= 6:
+            threshold = 0.68
+        else:
+            threshold = 0.58
+
+        if (
+            best_match
+            and best_score >= threshold
+        ):
+            return best_match
+
+    # ========================================================
+    # 5. مطابقة الكلمات
+    # ========================================================
+
+    query_words = set(
+        normalized_query.split()
+    )
+
     if query_words:
+
         best_game = None
         best_score = 0.0
 
         for game_name, aliases in NORMALIZED_GAME_ALIASES.items():
+
             for alias in aliases:
-                alias_words = set(alias.split())
+
+                alias_words = set(
+                    alias.split()
+                )
+
                 if not alias_words:
                     continue
 
-                overlap = len(query_words & alias_words) / max(len(query_words | alias_words), 1)
+                overlap = (
+                    len(
+                        query_words
+                        & alias_words
+                    )
+                    / max(
+                        len(
+                            query_words
+                            | alias_words
+                        ),
+                        1
+                    )
+                )
+
                 partial = 0.0
 
                 for word in query_words:
+
                     for alias_word in alias_words:
-                        if len(word) >= 4 and len(alias_word) >= 4:
+
+                        if (
+                            len(word) >= 3
+                            and len(alias_word) >= 3
+                        ):
+
                             partial = max(
                                 partial,
-                                difflib.SequenceMatcher(None, word, alias_word).ratio()
+                                difflib.SequenceMatcher(
+                                    None,
+                                    word,
+                                    alias_word
+                                ).ratio()
                             )
 
-                score = (overlap * 0.55) + (partial * 0.45)
+                score = (
+                    overlap * 0.55
+                ) + (
+                    partial * 0.45
+                )
 
                 if score > best_score:
+
                     best_score = score
                     best_game = game_name
 
-        if best_game and best_score >= 0.55:
+        if (
+            best_game
+            and best_score >= 0.55
+        ):
             return best_game
 
-    # البحث العادي إذا لم تكن اللعبة من القائمة
+    # ========================================================
+    # إذا ما عرف اللعبة، نستخدم بحث المستخدم نفسه.
+    # ========================================================
+
     return query
 
 
-class AutoSearchKeySelect(discord.ui.Select):
-    """قائمة منسدلة احترافية لاختيار نوع السكربت بدل زرّين منفصلين."""
+def get_game_search_queries(query):
+    """
+    يرجع صيغ البحث التي سيجربها البوت.
 
-    def __init__(self, requester_id, query, resolved_query):
+    الأول:
+    الاسم المصحح/المعروف.
+
+    الثاني:
+    الاسم الأصلي الذي كتبه العضو.
+
+    الحد الأقصى محاولتان حتى لا يتم إغراق API.
+    """
+
+    resolved = resolve_game_query(
+        query
+    )
+
+    queries = []
+
+    def add_query(value):
+
+        if not value:
+            return
+
+        normalized = normalize_game_name(
+            value
+        )
+
+        if not normalized:
+            return
+
+        for existing in queries:
+
+            if (
+                normalize_game_name(existing)
+                == normalized
+            ):
+                return
+
+        queries.append(
+            value
+        )
+
+    add_query(resolved)
+    add_query(query)
+
+    return queries[:2]
+
+
+# ============================================================
+# AUTO SEARCH KEY SELECT
+# ============================================================
+
+class AutoSearchKeySelect(discord.ui.Select):
+    """قائمة اختيار نوع السكربت للبحث التلقائي."""
+
+    def __init__(
+        self,
+        requester_id,
+        query,
+        resolved_query
+    ):
 
         self.requester_id = requester_id
         self.query = query
@@ -541,108 +748,269 @@ class AutoSearchKeySelect(discord.ui.Select):
             row=0
         )
 
-    async def callback(self, interaction: discord.Interaction):
+    async def callback(
+        self,
+        interaction: discord.Interaction
+    ):
 
-        no_key = self.values[0] == "no_key"
-        label = "بدون مفتاح" if no_key else "بمفتاح"
+        no_key = (
+            self.values[0]
+            == "no_key"
+        )
 
-        # نعطّل القائمة فورًا حتى لا يقدر أحد يختار مرتين على نفس الرسالة.
+        label = (
+            "بدون مفتاح"
+            if no_key
+            else "بمفتاح"
+        )
+
+        # ====================================================
+        # تغيير الرسالة فور الضغط.
+        # لا ننتظر API.
+        # ====================================================
+
         self.disabled = True
-        self.placeholder = f"🔐 تم الاختيار: {label}"
+        self.placeholder = (
+            f"🔐 تم الاختيار: {label}"
+        )
 
-        # defer() يردّ فورًا (أقل من 3 ثوانٍ) بدون ما يحتاج محتوى جاهز،
-        # وهو أضمن رد أولي من edit_message لأنه ما يفشل حتى لو الرسالة
-        # تغيّرت. بعده نقدر نعدّل الرسالة الأصلية براحتنا.
-        try:
-            await interaction.response.defer()
-        except Exception as e:
-            print(f"❌ Key select defer error: {e}")
-            return
+        searching_content = (
+            f"⏳ **جاري البحث الآن...**\n"
+            f"🎮 الماب: **{self.query}**\n"
+            f"🔐 النوع: **{label}**\n\n"
+            f"جاري البحث عن أفضل النتائج..."
+        )
 
         try:
-            await interaction.edit_original_response(
-                content=f"🔎 جاري البحث عن نسخة **{label}**...",
+
+            await interaction.response.edit_message(
+                content=searching_content,
+                embed=None,
                 view=self.view
             )
+
         except Exception as e:
-            print(f"❌ Key select ack-edit error: {e}")
 
-        # نفذ طلبات الشبكة في executor منفصل حتى لا نجمّد حلقة الأحداث
-        # (أثناء هذا الوقت باقي أوامر البوت تبقى تعمل بشكل طبيعي).
-        loop = asyncio.get_running_loop()
+            print(
+                f"❌ Key select immediate edit error: {e}"
+            )
 
-        async def fetch_page(page):
-            return await loop.run_in_executor(
-                None,
-                lambda: fetch_scripts(
-                    "scriptblox",
-                    self.resolved_query,
-                    "free",
-                    page,
-                    # ScriptBlox يستخدم 0 = بدون مفتاح و 1 = بمفتاح.
-                    # نمرر القيمة صراحة حتى لا يبقى الفلتر مفتوحًا.
-                    key=0 if no_key else 1
+            try:
+
+                await interaction.response.defer()
+
+                await interaction.edit_original_response(
+                    content=searching_content,
+                    embed=None,
+                    view=self.view
+                )
+
+            except Exception as fallback_error:
+
+                print(
+                    "❌ Key select fallback error: "
+                    f"{fallback_error}"
+                )
+
+                return
+
+        # ====================================================
+        # الطلبات الخارجية خارج Event Loop.
+        # ====================================================
+
+        async def fetch_page(
+            search_query,
+            page
+        ):
+
+            return await asyncio.to_thread(
+                fetch_scripts,
+                "scriptblox",
+                search_query,
+                "free",
+                page,
+                key=(
+                    0
+                    if no_key
+                    else 1
                 )
             )
 
         collected = []
         seen = set()
 
+        # نفرق بين:
+        # - API لم يجد نتائج
+        # - API نفسه فيه مشكلة
+        had_network_error = False
+        had_successful_request = False
+
+        search_queries = get_game_search_queries(
+            self.query
+        )
+
         try:
-            for page in (1, 2):
-                scripts, _, error = await fetch_page(page)
 
-                if error and not collected:
-                    break
+            # ==================================================
+            # نجرب الاسم المصحح ثم الأصلي إذا لزم.
+            # ==================================================
 
-                if not scripts:
-                    break
+            for search_query in search_queries:
 
-                for script in scripts:
-                    script_key = (
-                        script.get("_id")
-                        or script.get("slug")
-                        or script.get("title")
+                current_results = []
+
+                for page in (
+                    1,
+                    2
+                ):
+
+                    scripts, _, error = (
+                        await fetch_page(
+                            search_query,
+                            page
+                        )
                     )
-                    if script_key in seen:
+
+                    if error:
+
+                        # "Couldn't find..." معناها لا توجد نتائج،
+                        # وليست مشكلة اتصال.
+                        error_text = str(
+                            error
+                        ).lower()
+
+                        if (
+                            "something went wrong"
+                            in error_text
+                            or "unexpected response"
+                            in error_text
+                            or "timeout"
+                            in error_text
+                            or "connection"
+                            in error_text
+                            or "http"
+                            in error_text
+                        ):
+                            had_network_error = True
+
                         continue
-                    seen.add(script_key)
-                    collected.append(script)
+
+                    had_successful_request = True
+
+                    if not scripts:
+                        break
+
+                    for script in scripts:
+
+                        script_key = (
+                            script.get("_id")
+                            or script.get("slug")
+                            or script.get("title")
+                        )
+
+                        if not script_key:
+
+                            script_key = (
+                                f"{search_query}:"
+                                f"{page}:"
+                                f"{len(collected)}"
+                            )
+
+                        if script_key in seen:
+                            continue
+
+                        seen.add(
+                            script_key
+                        )
+
+                        collected.append(
+                            script
+                        )
+
+                        current_results.append(
+                            script
+                        )
+
+                        if len(collected) >= 20:
+                            break
 
                     if len(collected) >= 20:
                         break
 
-                if len(collected) >= 20:
+                    if not scripts:
+                        break
+
+                # إذا وجدنا نتائج،
+                # لا نحتاج تجربة الصيغة الثانية.
+                if current_results:
                     break
 
         except Exception as e:
+
             import traceback
-            print(f"❌ Key mode search error: {e}")
-            traceback.print_exc()
 
-        try:
-            if not collected:
-                await interaction.edit_original_response(
-                    content=(
-                        f"❌ ما لقيت نسخة **{label}** لـ **{self.query}**."
-                    ),
-                    embed=None,
-                    view=None
-                )
-                return
-
-            result_view = AutoSearchResultBrowseView(
-                self.requester_id,
-                collected,
-                self.query,
-                no_key
+            print(
+                f"❌ Key mode search error: {e}"
             )
 
-            embed = result_view.build_embed()
+            traceback.print_exc()
+
+            had_network_error = True
+
+        # ====================================================
+        # عرض النتيجة
+        # ====================================================
+
+        try:
+
+            if not collected:
+
+                if (
+                    had_network_error
+                    and not had_successful_request
+                ):
+
+                    await interaction.edit_original_response(
+                        content=(
+                            "⚠️ **تعذر الوصول لمصدر البحث حاليًا.**\n"
+                            "جرّب مرة ثانية بعد قليل."
+                        ),
+                        embed=None,
+                        view=None
+                    )
+
+                else:
+
+                    await interaction.edit_original_response(
+                        content=(
+                            f"❌ **ما لقيت أي سكربت {label}** "
+                            f"للماب **{self.query}**.\n\n"
+                            "💡 جرّب كتابة اسم الماب بشكل مختلف "
+                            "أو استخدم الاسم الإنجليزي."
+                        ),
+                        embed=None,
+                        view=None
+                    )
+
+                return
+
+            result_view = (
+                AutoSearchResultBrowseView(
+                    self.requester_id,
+                    collected,
+                    self.query,
+                    no_key
+                )
+            )
+
+            embed = (
+                result_view.build_embed()
+            )
 
             await interaction.edit_original_response(
                 content=(
-                    f"✅ لقيت **{len(collected)}** نتيجة لـ **{self.query}**\n"
+                    f"✅ لقيت **{len(collected)}** نتيجة "
+                    f"لـ **{self.query}**\n"
                     f"🔐 النوع: **{label}**"
                 ),
                 embed=embed,
@@ -650,23 +1018,42 @@ class AutoSearchKeySelect(discord.ui.Select):
             )
 
         except Exception as e:
+
             import traceback
-            print(f"❌ Key select result-edit error: {e}")
+
+            print(
+                f"❌ Key select result-edit error: {e}"
+            )
+
             traceback.print_exc()
+
             try:
+
                 await interaction.followup.send(
                     "❌ صار خطأ أثناء عرض النتيجة، حاول تبحث مرة ثانية.",
                     ephemeral=True
                 )
+
             except Exception:
                 pass
 
 
+# ============================================================
+# AUTO SEARCH KEY VIEW
+# ============================================================
+
 class AutoSearchKeyView(discord.ui.View):
 
-    def __init__(self, requester, query, resolved_query):
+    def __init__(
+        self,
+        requester,
+        query,
+        resolved_query
+    ):
 
-        super().__init__(timeout=60)
+        super().__init__(
+            timeout=60
+        )
 
         self.requester_id = requester.id
 
@@ -678,98 +1065,204 @@ class AutoSearchKeyView(discord.ui.View):
             )
         )
 
-    async def interaction_check(self, interaction: discord.Interaction):
+    async def interaction_check(
+        self,
+        interaction: discord.Interaction
+    ):
 
-        if interaction.user.id != self.requester_id:
+        if (
+            interaction.user.id
+            != self.requester_id
+        ):
+
             await interaction.response.send_message(
                 "⚠️ هذي الخيارات للشخص اللي طلب البحث فقط.",
                 ephemeral=True
             )
+
             return False
 
         return True
 
-    async def on_timeout(self):
+    async def on_timeout(
+        self
+    ):
+
         for item in self.children:
             item.disabled = True
 
 
-class AutoSearchResultBrowseView(discord.ui.View):
-    """تصفح نتائج البحث التلقائي (بدون مفتاح / بمفتاح) بأزرار السابق/التالي."""
+# ============================================================
+# AUTO SEARCH RESULT BROWSER
+# ============================================================
 
-    def __init__(self, requester_id, scripts, query, no_key):
-        super().__init__(timeout=180)
+class AutoSearchResultBrowseView(
+    discord.ui.View
+):
+    """تصفح نتائج البحث التلقائي."""
+
+    def __init__(
+        self,
+        requester_id,
+        scripts,
+        query,
+        no_key
+    ):
+
+        super().__init__(
+            timeout=180
+        )
+
         self.requester_id = requester_id
         self.scripts = scripts
         self.query = query
         self.no_key = no_key
         self.index = 0
+
         self.refresh_buttons()
 
-    async def interaction_check(self, interaction: discord.Interaction):
-        if interaction.user.id != self.requester_id:
+    async def interaction_check(
+        self,
+        interaction: discord.Interaction
+    ):
+
+        if (
+            interaction.user.id
+            != self.requester_id
+        ):
+
             await interaction.response.send_message(
                 "⚠️ أزرار النتائج للشخص اللي طلب البحث فقط.",
                 ephemeral=True
             )
+
             return False
+
         return True
 
-    def refresh_buttons(self):
+    def refresh_buttons(
+        self
+    ):
+
         self.clear_items()
 
         previous = discord.ui.Button(
             label="◀️",
             style=discord.ButtonStyle.primary,
-            disabled=self.index <= 0,
+            disabled=(
+                self.index <= 0
+            ),
             row=0
         )
-        previous.callback = self.previous_callback
-        self.add_item(previous)
+
+        previous.callback = (
+            self.previous_callback
+        )
+
+        self.add_item(
+            previous
+        )
 
         position = discord.ui.Button(
-            label=f"{self.index + 1}/{len(self.scripts)}",
+            label=(
+                f"{self.index + 1}/"
+                f"{len(self.scripts)}"
+            ),
             style=discord.ButtonStyle.secondary,
             disabled=True,
             row=0
         )
-        self.add_item(position)
+
+        self.add_item(
+            position
+        )
 
         nxt = discord.ui.Button(
             label="▶️",
             style=discord.ButtonStyle.primary,
-            disabled=self.index >= len(self.scripts) - 1,
+            disabled=(
+                self.index
+                >= len(self.scripts) - 1
+            ),
             row=0
         )
-        nxt.callback = self.next_callback
-        self.add_item(nxt)
 
-        script = self.scripts[self.index]
+        nxt.callback = (
+            self.next_callback
+        )
 
-        post_url = f"https://scriptblox.com/script/{script.get('slug','')}"
-        raw_url = f"https://rawscripts.net/raw/{script.get('slug','')}"
-        download_url = f"https://scriptblox.com/download/{script.get('_id','')}"
+        self.add_item(
+            nxt
+        )
 
-        self.add_item(discord.ui.Button(
-            label="View", url=post_url, style=discord.ButtonStyle.link, row=1
-        ))
-        self.add_item(discord.ui.Button(
-            label="Raw", url=raw_url, style=discord.ButtonStyle.link, row=1
-        ))
-        self.add_item(discord.ui.Button(
-            label="Download", url=download_url, style=discord.ButtonStyle.link, row=1
-        ))
+        script = self.scripts[
+            self.index
+        ]
+
+        post_url = (
+            "https://scriptblox.com/script/"
+            f"{script.get('slug','')}"
+        )
+
+        raw_url = (
+            "https://rawscripts.net/raw/"
+            f"{script.get('slug','')}"
+        )
+
+        download_url = (
+            "https://scriptblox.com/download/"
+            f"{script.get('_id','')}"
+        )
+
+        self.add_item(
+            discord.ui.Button(
+                label="View",
+                url=post_url,
+                style=discord.ButtonStyle.link,
+                row=1
+            )
+        )
+
+        self.add_item(
+            discord.ui.Button(
+                label="Raw",
+                url=raw_url,
+                style=discord.ButtonStyle.link,
+                row=1
+            )
+        )
+
+        self.add_item(
+            discord.ui.Button(
+                label="Download",
+                url=download_url,
+                style=discord.ButtonStyle.link,
+                row=1
+            )
+        )
 
         copy_button = discord.ui.Button(
             label="Copy",
             style=discord.ButtonStyle.success,
             row=1
         )
-        copy_button.callback = self.copy_callback
-        self.add_item(copy_button)
 
-    def build_embed(self):
-        script = self.scripts[self.index]
+        copy_button.callback = (
+            self.copy_callback
+        )
+
+        self.add_item(
+            copy_button
+        )
+
+    def build_embed(
+        self
+    ):
+
+        script = self.scripts[
+            self.index
+        ]
+
         return create_embed(
             script,
             self.index + 1,
@@ -777,60 +1270,116 @@ class AutoSearchResultBrowseView(discord.ui.View):
             "scriptblox"
         )
 
-    async def previous_callback(self, interaction: discord.Interaction):
+    async def previous_callback(
+        self,
+        interaction: discord.Interaction
+    ):
+
         if self.index <= 0:
             return await interaction.response.defer()
+
         self.index -= 1
-        self.refresh_buttons()
-        await interaction.response.edit_message(embed=self.build_embed(), view=self)
 
-    async def next_callback(self, interaction: discord.Interaction):
-        if self.index >= len(self.scripts) - 1:
+        self.refresh_buttons()
+
+        await interaction.response.edit_message(
+            embed=self.build_embed(),
+            view=self
+        )
+
+    async def next_callback(
+        self,
+        interaction: discord.Interaction
+    ):
+
+        if (
+            self.index
+            >= len(self.scripts) - 1
+        ):
             return await interaction.response.defer()
-        self.index += 1
-        self.refresh_buttons()
-        await interaction.response.edit_message(embed=self.build_embed(), view=self)
 
-    async def copy_callback(self, interaction: discord.Interaction):
-        script = self.scripts[self.index]
-        content = str(script.get("script", "") or "").strip()
+        self.index += 1
+
+        self.refresh_buttons()
+
+        await interaction.response.edit_message(
+            embed=self.build_embed(),
+            view=self
+        )
+
+    async def copy_callback(
+        self,
+        interaction: discord.Interaction
+    ):
+
+        script = self.scripts[
+            self.index
+        ]
+
+        content = str(
+            script.get(
+                "script",
+                ""
+            )
+            or ""
+        ).strip()
 
         if not content:
+
             await interaction.response.send_message(
                 "❌ ما فيه كود لهذا السكربت.",
                 ephemeral=True
             )
+
             return
 
         if len(content) <= 1990:
+
             await interaction.response.send_message(
                 content,
                 ephemeral=True,
                 allowed_mentions=discord.AllowedMentions.none()
             )
+
         else:
+
             import io
+
             file = discord.File(
-                io.BytesIO(content.encode("utf-8")),
+                io.BytesIO(
+                    content.encode(
+                        "utf-8"
+                    )
+                ),
                 filename="script.lua"
             )
+
             await interaction.response.send_message(
                 "📜 الكود طويل، هذا ملف السكربت:",
                 file=file,
                 ephemeral=True
             )
 
-    async def on_timeout(self):
+    async def on_timeout(
+        self
+    ):
+
         self.clear_items()
 
+
+# ============================================================
+# AUTOMATIC GAME SEARCH
+# ============================================================
 
 async def automatic_game_search(
     message,
     query
 ):
 
-    resolved_query = resolve_game_query(
-        query
+    resolved_query = (
+        resolve_game_query(
+            query
+        )
     )
 
     view = AutoSearchKeyView(
@@ -839,22 +1388,52 @@ async def automatic_game_search(
         resolved_query
     )
 
+    recognized_text = ""
+
+    normalized_original = normalize_game_name(
+        query
+    )
+
+    normalized_resolved = normalize_game_name(
+        resolved_query
+    )
+
+    if (
+        normalized_resolved
+        and normalized_original
+        and normalized_resolved
+        != normalized_original
+    ):
+
+        recognized_text = (
+            f"\n🎯 فهمت أنك تقصد: "
+            f"**{resolved_query}**"
+        )
+
     await message.channel.send(
         content=(
-            f"🔎 لقيت لك بحث عن **{query}** 👀\n"
-            "وش نوع السكربت اللي تبيه؟ اختر من تحت:"
+            f"🔎 **تم استلام طلب البحث عن {query}**"
+            f"{recognized_text}\n"
+            "🔐 اختر نوع السكربت اللي تبيه من القائمة:"
         ),
         view=view
     )
 
 
-class MyBot(commands.Bot):
+# ============================================================
+# BOT
+# ============================================================
+
+class MyBot(
+    commands.Bot
+):
 
     def __init__(
         self,
         *args,
         **kwargs
     ):
+
         super().__init__(
             *args,
             **kwargs
@@ -862,14 +1441,9 @@ class MyBot(commands.Bot):
 
         self.active_searches = {}
 
-    # ========================================================
-    # IMPORTANT:
-    # bot4.py is loaded as an extension by the main bot.
-    # Slash-command synchronization must be handled by the
-    # main bot, not by this temporary extension bot.
-    # ========================================================
-
-    async def setup_hook(self):
+    async def setup_hook(
+        self
+    ):
         pass
 
 
@@ -920,15 +1494,18 @@ async def automatic_search_listener(
         message.guild.id
     )
 
-    configured_channel = search_rooms.get(
-        guild_id
+    configured_channel = (
+        search_rooms.get(
+            guild_id
+        )
     )
 
     if not configured_channel:
         return
 
-    if str(message.channel.id) != str(
-        configured_channel
+    if (
+        str(message.channel.id)
+        != str(configured_channel)
     ):
         return
 
@@ -937,15 +1514,12 @@ async def automatic_search_listener(
     if not query:
         return
 
-    # تجاهل الرسائل الطويلة
     if len(query) > 80:
         return
 
-    # تجاهل الأوامر
-    if query.startswith(
-        "!"
-    ) or query.startswith(
-        "/"
+    if (
+        query.startswith("!")
+        or query.startswith("/")
     ):
         return
 
@@ -958,9 +1532,11 @@ async def automatic_search_listener(
         timezone.utc
     ).timestamp()
 
-    last_search = _search_cooldowns.get(
-        cooldown_key,
-        0
+    last_search = (
+        _search_cooldowns.get(
+            cooldown_key,
+            0
+        )
     )
 
     if (
@@ -973,25 +1549,24 @@ async def automatic_search_listener(
         cooldown_key
     ] = now
 
-    async with message.channel.typing():
+    try:
 
-        try:
-            await automatic_game_search(
-                message,
-                query
-            )
+        await automatic_game_search(
+            message,
+            query
+        )
 
-        except Exception as e:
+    except Exception as e:
 
-            print(
-                "❌ Automatic search error: "
-                f"{e}"
-            )
+        print(
+            "❌ Automatic search error: "
+            f"{e}"
+        )
 
-            await message.channel.send(
-                "❌ صار خطأ أثناء البحث، "
-                "حاول مرة ثانية."
-            )
+        await message.channel.send(
+            "❌ صار خطأ أثناء البحث، "
+            "حاول مرة ثانية."
+        )
 
 
 # ============================================================
@@ -1040,9 +1615,15 @@ def fetch_scripts(
                 "key"
             ) is not None:
 
+                # مهم جدًا:
+                # key=0 = بدون مفتاح
+                # key=1 = بمفتاح
+                #
+                # لا يتم عكس القيم.
                 params["key"] = (
                     1
-                    if filters["key"]
+                    if filters["key"] == 1
+                    or filters["key"] is True
                     else 0
                 )
 
@@ -1111,7 +1692,8 @@ def fetch_scripts(
             )
 
             r = requests.get(
-                url
+                url,
+                timeout=15
             )
 
             r.raise_for_status()
@@ -1224,7 +1806,8 @@ def fetch_scripts(
             )
 
             r = requests.get(
-                url
+                url,
+                timeout=15
             )
 
             r.raise_for_status()
@@ -1266,6 +1849,10 @@ def fetch_scripts(
             f"Unexpected response format: {ke}"
         )
 
+
+# ============================================================
+# باقي نظام البحث الأساسي كما هو
+# ============================================================
 
 def fetch_scripts_from_api(
     api,
@@ -1350,7 +1937,6 @@ def fetch_scripts_from_api(
         )
 
 
-# ugly code right here yes
 def fetch_trending(api):
 
     try:
@@ -2843,7 +3429,7 @@ async def send_help(
 
     embed.set_footer(
         text=(
-            "Made by AdvanceFalling Team | v2.6"
+            "Made by AdvanceFalling Team | v2.7"
         )
     )
 
@@ -3036,11 +3622,17 @@ async def slash_set_search_room(
     channel: discord.TextChannel
 ):
 
-    guild_id = str(interaction.guild.id)
+    guild_id = str(
+        interaction.guild.id
+    )
 
-    search_rooms[guild_id] = str(channel.id)
+    search_rooms[guild_id] = str(
+        channel.id
+    )
 
-    save_search_rooms(search_rooms)
+    save_search_rooms(
+        search_rooms
+    )
 
     await interaction.response.send_message(
         f"✅ تم تحديد {channel.mention} كروم البحث التلقائي.\n"
@@ -3084,8 +3676,6 @@ async def slash_show_search_room(
         f"🔎 روم البحث التلقائي الحالي: "
         f"{channel.mention}"
     )
-
-
 
 
 class APISelect(
@@ -4165,7 +4755,6 @@ async def setup(main_bot):
 
     global bot
 
-    # استخدام البوت الرئيسي الموجود في bot.py
     bot = main_bot
 
     # --------------------------------------------------------
@@ -4274,12 +4863,6 @@ async def setup(main_bot):
         automatic_search_listener,
         "on_message"
     )
-
-    # --------------------------------------------------------
-    # ملاحظة:
-    # لا نسوي tree.sync() هنا لأن البوت الرئيسي
-    # هو المسؤول عن مزامنة أوامر Slash.
-    # --------------------------------------------------------
 
     # --------------------------------------------------------
     # تأكيد أوامر الغرف العربية
