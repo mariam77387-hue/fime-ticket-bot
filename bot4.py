@@ -543,14 +543,18 @@ class AutoSearchKeyView(discord.ui.View):
         )
 
         async with interaction.channel.typing():
-
-            scripts, total_pages, error = fetch_scripts(
-                "scriptblox",
-                self.resolved_query,
-                "free",
-                1,
-                key=not no_key
-            )
+            try:
+                # ScriptBlox يستخدم 0 = بدون مفتاح و 1 = بمفتاح.
+                scripts, total_pages, error = fetch_scripts(
+                    "scriptblox",
+                    self.resolved_query,
+                    "free",
+                    1,
+                    key=0 if no_key else 1
+                )
+            except Exception as e:
+                print(f"❌ Key mode search error: {e}")
+                scripts, total_pages, error = None, None, str(e)
 
         if error or not scripts:
 
