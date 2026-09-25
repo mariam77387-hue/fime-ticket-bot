@@ -33,33 +33,10 @@ intents.message_content = True
 # ============================================================
 
 SEARCH_ROOMS_FILE = "bot4_search_rooms.json"
-AUTO_SEARCH_SETTINGS_FILE = "bot4_auto_search_settings.json"
-
 AUTO_SEARCH_COOLDOWN = 8
 
 _search_cooldowns = {}
 
-
-def load_auto_search_settings():
-    try:
-        if not os.path.exists(AUTO_SEARCH_SETTINGS_FILE):
-            return {}
-        with open(AUTO_SEARCH_SETTINGS_FILE, "r", encoding="utf-8") as f:
-            data = json.load(f)
-        return data if isinstance(data, dict) else {}
-    except Exception:
-        return {}
-
-
-def save_auto_search_settings(data):
-    try:
-        with open(AUTO_SEARCH_SETTINGS_FILE, "w", encoding="utf-8") as f:
-            json.dump(data, f, ensure_ascii=False, indent=4)
-    except Exception as e:
-        print(f"❌ Failed to save auto search settings: {e}")
-
-
-auto_search_settings = load_auto_search_settings()
 
 
 def load_search_rooms():
@@ -522,128 +499,208 @@ def resolve_game_query(query):
     return query
 
 
+class AutoSearchKeyView(discord.ui.View):
+
+    def __init__(self, requester, query, resolved_query):
+
+        super().__init__(timeout=45)
+
+        self.requester_id = requester.id
+        self.query = query
+        self.resolved_query = resolved_query
+        self.used = False
+
+    async def interaction_check(self, interaction: discord.Interaction):
+
+        if interaction.user.id != self.requester_id:
+            await interaction.response.send_message(
+                "⚠️ هذي الخيارات للشخص اللي طلب البحث فقط.",
+                ephemeral=True
+            )
+            return False
+
+        return True
+
+    async def show_result(self, interaction, no_key):
+
+        if self.used:
+            if not interaction.response.is_done():
+                await interaction.response.send_message(
+                    "⚠️ تم اختيار نوع السكربت بالفعل.",
+                    ephemeral=True
+                )
+            return
+
+        self.used = True
+        self.disable_all_items()
+
+        await interaction.response.edit_message(
+            content=(
+                "🔎 جاري البحث عن نسخة "
+                f"**{'بدون مفتاح' if no_key else 'بمفتاح'}**..."
+            ),
+            view=self
+        )
+
+        async with interaction.channel.typing():
+
+            scripts, total_pages, error = fetch_scripts(
+                "scriptblox",
+                self.resolved_query,
+                "free",
+                1,
+                key=not no_key
+            )
+
+        if error or not scripts:
+
+            await interaction.edit_original_response(
+                content=(
+                    f"❌ ما لقيت نسخة **{'بدون مفتاح' if no_key else 'بمفتاح'}** "
+                    f"لـ **{self.query}**."
+                ),
+                view=None
+            )
+            return
+
+        script = scripts[0]
+
+        display_total = (
+            total_pages
+            if total_pages is not None
+            else "Unknown"
+        )
+
+        embed = create_embed(
+            script,
+            1,
+            display_total,
+            "scriptblox"
+        )
+
+        post_url = (
+            f"https://scriptblox.com/script/"
+            f"{script.get('slug','')}"
+        )
+
+        raw_url = (
+            f"https://rawscripts.net/raw/"
+            f"{script.get('slug','')}"
+        )
+
+        download_url = (
+            f"https://scriptblox.com/download/"
+            f"{script.get('_id','')}"
+        )
+
+        result_view = discord.ui.View(timeout=60)
+
+        result_view.add_item(
+            discord.ui.Button(
+                label="View",
+                url=post_url,
+                style=discord.ButtonStyle.link,
+                row=1
+            )
+        )
+
+        result_view.add_item(
+            discord.ui.Button(
+                label="Raw",
+                url=raw_url,
+                style=discord.ButtonStyle.link,
+                row=1
+            )
+        )
+
+        result_view.add_item(
+            discord.ui.Button(
+                label="Download",
+                url=download_url,
+                style=discord.ButtonStyle.link,
+                row=1
+            )
+        )
+
+        copy_button = discord.ui.Button(
+            label="Copy",
+            style=discord.ButtonStyle.primary,
+            row=1
+        )
+
+        async def auto_copy_callback(btn_interaction):
+
+            if btn_interaction.user.id != self.requester_id:
+                await btn_interaction.response.send_message(
+                    "⚠️ زر النسخ هذا للشخص اللي طلب البحث فقط.",
+                    ephemeral=True
+                )
+                return
+
+            content = script.get(
+                "script",
+                ""
+            )
+
+            await btn_interaction.response.send_message(
+                f"```\n{content}\n```",
+                ephemeral=True
+            )
+
+        copy_button.callback = auto_copy_callback
+        result_view.add_item(copy_button)
+
+        await interaction.edit_original_response(
+            content=(
+                f"✅ لقيت لك **{script.get('title', self.query)}**\n"
+                f"🔐 النوع: **{'بدون مفتاح' if no_key else 'بمفتاح'}**"
+            ),
+            embed=embed,
+            view=result_view
+        )
+
+    @discord.ui.button(
+        label="بدون مفتاح",
+        emoji="🔓",
+        style=discord.ButtonStyle.success,
+        row=0
+    )
+    async def no_key_button(self, interaction, button):
+        await self.show_result(interaction, no_key=True)
+
+    @discord.ui.button(
+        label="بمفتاح",
+        emoji="🔑",
+        style=discord.ButtonStyle.primary,
+        row=0
+    )
+    async def key_button(self, interaction, button):
+        await self.show_result(interaction, no_key=False)
+
+    async def on_timeout(self):
+        self.disable_all_items()
+
+
 async def automatic_game_search(
     message,
     query
 ):
+
     resolved_query = resolve_game_query(
         query
     )
 
-    # نستخدم ScriptBlox مباشرة في البحث التلقائي
-    guild_settings = auto_search_settings.get(str(message.guild.id), {})
-    no_key_system = bool(guild_settings.get("no_key_system", False)) if isinstance(guild_settings, dict) else False
-
-    scripts, total_pages, error = fetch_scripts(
-        "scriptblox",
-        resolved_query,
-        "free",
-        1,
-        key=False if no_key_system else None
-    )
-
-    if error:
-        await message.channel.send(
-            f"❌ ما لقيت نتائج لـ **{query}**."
-        )
-        return
-
-    if not scripts:
-        await message.channel.send(
-            f"❌ ما لقيت نتائج لـ **{query}**."
-        )
-        return
-
-    script = scripts[0]
-
-    display_total = (
-        total_pages
-        if total_pages is not None
-        else "Unknown"
-    )
-
-    embed = create_embed(
-        script,
-        1,
-        display_total,
-        "scriptblox"
-    )
-
-    post_url = (
-        f"https://scriptblox.com/script/"
-        f"{script.get('slug','')}"
-    )
-
-    raw_url = (
-        f"https://rawscripts.net/raw/"
-        f"{script.get('slug','')}"
-    )
-
-    download_url = (
-        f"https://scriptblox.com/download/"
-        f"{script.get('_id','')}"
-    )
-
-    view = discord.ui.View(
-        timeout=60
-    )
-
-    view.add_item(
-        discord.ui.Button(
-            label="View",
-            url=post_url,
-            style=discord.ButtonStyle.link,
-            row=1
-        )
-    )
-
-    view.add_item(
-        discord.ui.Button(
-            label="Raw",
-            url=raw_url,
-            style=discord.ButtonStyle.link,
-            row=1
-        )
-    )
-
-    view.add_item(
-        discord.ui.Button(
-            label="Download",
-            url=download_url,
-            style=discord.ButtonStyle.link,
-            row=1
-        )
-    )
-
-    copy_button = discord.ui.Button(
-        label="Copy",
-        style=discord.ButtonStyle.primary,
-        row=1
-    )
-
-    async def auto_copy_callback(
-        btn_interaction
-    ):
-        content = script.get(
-            "script",
-            ""
-        )
-
-        await btn_interaction.response.send_message(
-            f"```\n{content}\n```",
-            ephemeral=True
-        )
-
-    copy_button.callback = (
-        auto_copy_callback
-    )
-
-    view.add_item(
-        copy_button
+    view = AutoSearchKeyView(
+        message.author,
+        query,
+        resolved_query
     )
 
     await message.channel.send(
-        embed=embed,
+        content=(
+            f"🔎 لقيت لك بحث عن **{query}** 👀\n"
+            "وش نوع السكربت اللي تبيه؟ اختر من تحت:"
+        ),
         view=view
     )
 
@@ -2826,35 +2883,25 @@ async def remove_search_room_arabic(
     description="تحديد روم البحث التلقائي"
 )
 @app_commands.describe(
-    channel="الروم الذي سيتم فيه البحث التلقائي",
-    no_key_system="بدون مفتاح فقط؟"
+    channel="الروم الذي سيتم فيه البحث التلقائي"
 )
 @app_commands.checks.has_permissions(
     manage_guild=True
 )
 async def slash_set_search_room(
     interaction: discord.Interaction,
-    channel: discord.TextChannel,
-    no_key_system: bool = False
+    channel: discord.TextChannel
 ):
 
     guild_id = str(interaction.guild.id)
 
     search_rooms[guild_id] = str(channel.id)
 
-    auto_search_settings[guild_id] = {
-        "no_key_system": bool(no_key_system)
-    }
-
     save_search_rooms(search_rooms)
-    save_auto_search_settings(auto_search_settings)
-
-    key_text = "بدون مفتاح فقط 🔓" if no_key_system else "كل النتائج 🔑"
 
     await interaction.response.send_message(
         f"✅ تم تحديد {channel.mention} كروم البحث التلقائي.\n"
-        f"🔎 وضع المفتاح: **{key_text}**\n"
-        f"والبحث الآن يفهم الاسم القريب والأخطاء البسيطة أيضًا."
+        "🔎 العضو يكتب اسم الماب، وبعدها يختار بنفسه **بدون مفتاح** أو **بمفتاح**."
     )
 
 
@@ -2896,40 +2943,6 @@ async def slash_show_search_room(
     )
 
 
-@bot.tree.command(
-    name="setsearchkeymode",
-    description="تغيير وضع المفتاح للبحث التلقائي"
-)
-@app_commands.describe(
-    no_key_system="True = بدون مفتاح فقط | False = كل النتائج"
-)
-@app_commands.checks.has_permissions(
-    manage_guild=True
-)
-async def slash_set_search_key_mode(
-    interaction: discord.Interaction,
-    no_key_system: bool
-):
-
-    guild_id = str(interaction.guild.id)
-
-    if guild_id not in search_rooms:
-        return await interaction.response.send_message(
-            "❌ حدد روم البحث أولًا باستخدام /setscriptroom.",
-            ephemeral=True
-        )
-
-    auto_search_settings[guild_id] = {
-        "no_key_system": bool(no_key_system)
-    }
-
-    save_auto_search_settings(auto_search_settings)
-
-    text = "بدون مفتاح فقط 🔓" if no_key_system else "كل النتائج 🔑"
-
-    await interaction.response.send_message(
-        f"✅ تم تغيير وضع البحث التلقائي إلى: **{text}**"
-    )
 
 
 class APISelect(
