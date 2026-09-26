@@ -12,6 +12,8 @@
 # TOP SYSTEM — DAY / WEEK / MONTH / ALL
 # +
 # SAY SYSTEM — BOT SPEAK + PROFILE MENU + AVATAR/BANNER/TEMPLATE
+# +
+# SAVED ROOM DEFINITION SYSTEM
 # ============================================================
 
 from __future__ import annotations
@@ -23,7 +25,6 @@ import asyncio
 from copy import deepcopy
 from pathlib import Path
 from datetime import datetime, timezone, timedelta
-from textwrap import wrap
 
 import discord
 from discord.ext import commands
@@ -31,7 +32,7 @@ from discord import app_commands
 
 from PIL import Image, ImageDraw, ImageFilter, ImageFont
 
-# دعم تشكيل العربية إذا كانت المكتبات موجودة
+# دعم تشكيل العربية
 try:
     import arabic_reshaper
     from bidi.algorithm import get_display
@@ -51,6 +52,7 @@ CONFIG_FILE = Path("bot5_config.json")
 TOP_FILE = Path("bot5_top.json")
 
 SAUDI_TZ = timezone(timedelta(hours=3))
+
 
 DEFAULT_GUILD_CONFIG = {
     # ========================================================
@@ -86,6 +88,12 @@ DEFAULT_GUILD_CONFIG = {
 
     "top_channel_id": None,
     "top_allowed_role_ids": [],
+
+    # ========================================================
+    # SAY SYSTEM
+    # ========================================================
+
+    "say_room_definition": "",
 }
 
 
@@ -94,25 +102,42 @@ DEFAULT_GUILD_CONFIG = {
 # ============================================================
 
 def load_config():
+
     try:
+
         if not CONFIG_FILE.exists():
             return {}
 
-        with CONFIG_FILE.open("r", encoding="utf-8") as file:
+        with CONFIG_FILE.open(
+            "r",
+            encoding="utf-8"
+        ) as file:
+
             data = json.load(file)
 
         return data if isinstance(data, dict) else {}
 
     except Exception as error:
-        print("❌ bot5 config load error:", error)
+
+        print(
+            "❌ bot5 config load error:",
+            error
+        )
+
         return {}
 
 
 def save_config(data):
+
     temp_file = CONFIG_FILE.with_suffix(".tmp")
 
     try:
-        with temp_file.open("w", encoding="utf-8") as file:
+
+        with temp_file.open(
+            "w",
+            encoding="utf-8"
+        ) as file:
+
             json.dump(
                 data,
                 file,
@@ -120,14 +145,23 @@ def save_config(data):
                 indent=2
             )
 
-        os.replace(temp_file, CONFIG_FILE)
+        os.replace(
+            temp_file,
+            CONFIG_FILE
+        )
 
     except Exception as error:
-        print("❌ bot5 config save error:", error)
+
+        print(
+            "❌ bot5 config save error:",
+            error
+        )
 
         try:
+
             if temp_file.exists():
                 temp_file.unlink()
+
         except Exception:
             pass
 
@@ -137,25 +171,42 @@ def save_config(data):
 # ============================================================
 
 def load_top():
+
     try:
+
         if not TOP_FILE.exists():
             return {}
 
-        with TOP_FILE.open("r", encoding="utf-8") as file:
+        with TOP_FILE.open(
+            "r",
+            encoding="utf-8"
+        ) as file:
+
             data = json.load(file)
 
         return data if isinstance(data, dict) else {}
 
     except Exception as error:
-        print("❌ bot5 top load error:", error)
+
+        print(
+            "❌ bot5 top load error:",
+            error
+        )
+
         return {}
 
 
 def save_top(data):
+
     temp_file = TOP_FILE.with_suffix(".tmp")
 
     try:
-        with temp_file.open("w", encoding="utf-8") as file:
+
+        with temp_file.open(
+            "w",
+            encoding="utf-8"
+        ) as file:
+
             json.dump(
                 data,
                 file,
@@ -163,14 +214,23 @@ def save_top(data):
                 indent=2
             )
 
-        os.replace(temp_file, TOP_FILE)
+        os.replace(
+            temp_file,
+            TOP_FILE
+        )
 
     except Exception as error:
-        print("❌ bot5 top save error:", error)
+
+        print(
+            "❌ bot5 top save error:",
+            error
+        )
 
         try:
+
             if temp_file.exists():
                 temp_file.unlink()
+
         except Exception:
             pass
 
@@ -181,30 +241,38 @@ def save_top(data):
 
 class TopSelect(discord.ui.Select):
 
-    def __init__(self, cog, guild_id):
+    def __init__(
+        self,
+        cog,
+        guild_id
+    ):
 
         self.cog = cog
         self.guild_id = guild_id
 
         options = [
+
             discord.SelectOption(
                 label="توب اليوم",
                 value="day",
                 emoji="📅",
                 description="عرض أكثر الأعضاء نشاطًا اليوم"
             ),
+
             discord.SelectOption(
                 label="توب الأسبوع",
                 value="week",
                 emoji="📊",
                 description="عرض أكثر الأعضاء نشاطًا هذا الأسبوع"
             ),
+
             discord.SelectOption(
                 label="توب الشهر",
                 value="month",
                 emoji="🗓️",
                 description="عرض أكثر الأعضاء نشاطًا هذا الشهر"
             ),
+
             discord.SelectOption(
                 label="توب الكل",
                 value="all",
@@ -221,13 +289,19 @@ class TopSelect(discord.ui.Select):
             custom_id=f"fime_top_select_{guild_id}"
         )
 
-    async def callback(self, interaction: discord.Interaction):
+
+    async def callback(
+        self,
+        interaction: discord.Interaction
+    ):
 
         if interaction.guild is None:
+
             await interaction.response.send_message(
                 "❌ هذا الخيار يعمل داخل السيرفر فقط.",
                 ephemeral=True
             )
+
             return
 
         period = self.values[0]
@@ -245,9 +319,15 @@ class TopSelect(discord.ui.Select):
 
 class TopSelectView(discord.ui.View):
 
-    def __init__(self, cog, guild_id):
+    def __init__(
+        self,
+        cog,
+        guild_id
+    ):
 
-        super().__init__(timeout=900)
+        super().__init__(
+            timeout=900
+        )
 
         self.add_item(
             TopSelect(
@@ -265,93 +345,104 @@ class SayProfileSelect(discord.ui.Select):
 
     def __init__(
         self,
-        cog,
         avatar_bytes=None,
         banner_bytes=None,
-        full_profile_bytes=None,
-        room_definition=None
+        full_profile_bytes=None
     ):
 
-        self.cog = cog
         self.avatar_bytes = avatar_bytes
         self.banner_bytes = banner_bytes
         self.full_profile_bytes = full_profile_bytes
-        self.room_definition = room_definition
 
         options = [
+
             discord.SelectOption(
-                label="الافتار",
+                label="أخذ الافتار",
                 value="avatar",
-                emoji="🖼️",
+                emoji="👤",
                 description="إرسال الافتار كصورة"
             ),
+
             discord.SelectOption(
-                label="البنر",
+                label="أخذ البنر",
                 value="banner",
                 emoji="🎨",
                 description="إرسال البنر كصورة"
             ),
+
             discord.SelectOption(
                 label="البروفايل كامل",
                 value="profile",
-                emoji="👤",
+                emoji="🪪",
                 description="إرسال بطاقة البروفايل كاملة"
             ),
         ]
 
-        if room_definition:
-            options.append(
-                discord.SelectOption(
-                    label="تعريف الروم",
-                    value="room",
-                    emoji="📖",
-                    description="عرض تعريف الروم"
-                )
-            )
-
         super().__init__(
-            placeholder="اختر من القائمة...",
+            placeholder="اختر ما تريد من البروفايل...",
             min_values=1,
             max_values=1,
             options=options,
             custom_id=f"fime_say_profile_{id(self)}"
         )
 
-    async def callback(self, interaction: discord.Interaction):
+
+    async def callback(
+        self,
+        interaction: discord.Interaction
+    ):
 
         choice = self.values[0]
+
+        # ====================================================
+        # AVATAR
+        # ====================================================
 
         if choice == "avatar":
 
             if not self.avatar_bytes:
+
                 await interaction.response.send_message(
-                    "❌ ما تم تحديد افتار في هذا الأمر.",
+                    "❌ ما تم تحديد افتار في هذا الـ /say.",
                     ephemeral=True
                 )
+
                 return
 
             file = discord.File(
-                io.BytesIO(self.avatar_bytes),
+                io.BytesIO(
+                    self.avatar_bytes
+                ),
                 filename="fime-avatar.png"
             )
 
             await interaction.response.send_message(
-                "🖼️ **الافتار**",
+                "👤 **الافتار**",
                 file=file,
                 ephemeral=True
             )
 
-        elif choice == "banner":
+            return
+
+        # ====================================================
+        # BANNER
+        # ====================================================
+
+        if choice == "banner":
 
             if not self.banner_bytes:
+
                 await interaction.response.send_message(
-                    "❌ ما تم تحديد بنر في هذا الأمر.",
+                    "❌ ما تم تحديد بنر في هذا الـ /say.",
                     ephemeral=True
                 )
+
                 return
 
             file = discord.File(
-                io.BytesIO(self.banner_bytes),
+                io.BytesIO(
+                    self.banner_bytes
+                ),
                 filename="fime-banner.png"
             )
 
@@ -361,82 +452,149 @@ class SayProfileSelect(discord.ui.Select):
                 ephemeral=True
             )
 
-        elif choice == "profile":
+            return
+
+        # ====================================================
+        # FULL PROFILE
+        # ====================================================
+
+        if choice == "profile":
 
             if not self.full_profile_bytes:
+
                 await interaction.response.send_message(
                     "❌ تعذر تجهيز البروفايل الكامل.",
                     ephemeral=True
                 )
+
                 return
 
             file = discord.File(
-                io.BytesIO(self.full_profile_bytes),
+                io.BytesIO(
+                    self.full_profile_bytes
+                ),
                 filename="fime-profile.png"
             )
 
             await interaction.response.send_message(
-                "👤 **البروفايل كامل**",
+                "🪪 **البروفايل الكامل**",
                 file=file,
                 ephemeral=True
             )
 
-        elif choice == "room":
+            return
 
-            if not self.room_definition:
-                await interaction.response.send_message(
-                    "❌ ما تم إضافة تعريف لهذا الروم.",
-                    ephemeral=True
-                )
-                return
 
-            embed = discord.Embed(
-                title="📖 تعريف الروم",
-                description=self.room_definition,
-                color=discord.Color.blurple()
+# ============================================================
+# SAY ROOM DEFINITION BUTTON
+# ============================================================
+
+class SayRoomDefinitionButton(
+    discord.ui.Button
+):
+
+    def __init__(
+        self,
+        room_definition
+    ):
+
+        self.room_definition = (
+            str(room_definition or "").strip()
+        )
+
+        super().__init__(
+            label="تعريف الروم",
+            emoji="📖",
+            style=discord.ButtonStyle.secondary,
+            custom_id=f"fime_room_definition_{id(self)}",
+            disabled=not bool(
+                self.room_definition
             )
+        )
 
-            embed.set_footer(
-                text="Team Fime • Room Information"
-            )
+
+    async def callback(
+        self,
+        interaction: discord.Interaction
+    ):
+
+        if not self.room_definition:
 
             await interaction.response.send_message(
-                embed=embed,
+                "❌ ما تم وضع تعريف للروم.",
                 ephemeral=True
             )
 
+            return
+
+        embed = discord.Embed(
+            title="📖 تعريف الروم",
+            description=self.room_definition,
+            color=discord.Color.blurple()
+        )
+
+        embed.set_footer(
+            text="Team Fime • Room Information"
+        )
+
+        await interaction.response.send_message(
+            embed=embed,
+            ephemeral=True
+        )
+
+
+# ============================================================
+# SAY PROFILE VIEW
+# ============================================================
 
 class SayProfileView(discord.ui.View):
 
     def __init__(
         self,
-        cog,
         avatar_bytes=None,
         banner_bytes=None,
         full_profile_bytes=None,
         room_definition=None
     ):
 
-        super().__init__(timeout=1800)
+        super().__init__(
+            timeout=1800
+        )
 
         self.add_item(
             SayProfileSelect(
-                cog=cog,
                 avatar_bytes=avatar_bytes,
                 banner_bytes=banner_bytes,
-                full_profile_bytes=full_profile_bytes,
-                room_definition=room_definition
+                full_profile_bytes=full_profile_bytes
             )
         )
+
+        self.add_item(
+            SayRoomDefinitionButton(
+                room_definition
+            )
+        )
+
+
+    async def on_timeout(self):
+
+        for item in self.children:
+
+            item.disabled = True
 
 
 # ============================================================
 # COG
 # ============================================================
 
-class AutomaticLineSystem(commands.Cog):
+class AutomaticLineSystem(
+    commands.Cog
+):
 
-    def __init__(self, bot):
+    def __init__(
+        self,
+        bot
+    ):
 
         self.bot = bot
 
@@ -453,7 +611,10 @@ class AutomaticLineSystem(commands.Cog):
     # CONFIG HELPERS
     # ========================================================
 
-    def get_config(self, guild_id):
+    def get_config(
+        self,
+        guild_id
+    ):
 
         key = str(guild_id)
 
@@ -463,11 +624,16 @@ class AutomaticLineSystem(commands.Cog):
                 DEFAULT_GUILD_CONFIG
             )
 
-            save_config(self.config)
+            save_config(
+                self.config
+            )
 
         current = self.config[key]
 
-        if not isinstance(current, dict):
+        if not isinstance(
+            current,
+            dict
+        ):
 
             current = deepcopy(
                 DEFAULT_GUILD_CONFIG
@@ -481,19 +647,43 @@ class AutomaticLineSystem(commands.Cog):
 
             if name not in current:
 
-                current[name] = deepcopy(default)
+                current[name] = deepcopy(
+                    default
+                )
+
                 changed = True
 
         if not isinstance(
-            current.get("top_allowed_role_ids"),
+            current.get(
+                "top_allowed_role_ids"
+            ),
             list
         ):
 
-            current["top_allowed_role_ids"] = []
+            current[
+                "top_allowed_role_ids"
+            ] = []
+
+            changed = True
+
+        if not isinstance(
+            current.get(
+                "say_room_definition"
+            ),
+            str
+        ):
+
+            current[
+                "say_room_definition"
+            ] = ""
+
             changed = True
 
         if changed:
-            save_config(self.config)
+
+            save_config(
+                self.config
+            )
 
         return current
 
@@ -502,14 +692,26 @@ class AutomaticLineSystem(commands.Cog):
     # OWNER CHECK
     # ========================================================
 
-    def is_owner(self, interaction):
+    def is_owner(
+        self,
+        interaction
+    ):
 
-        return interaction.user.id == OWNER_ID
+        return (
+            interaction.user.id
+            == OWNER_ID
+        )
 
 
-    async def silently_ignore_if_not_owner(self, interaction):
+    async def silently_ignore_if_not_owner(
+        self,
+        interaction
+    ):
 
-        if self.is_owner(interaction):
+        if self.is_owner(
+            interaction
+        ):
+
             return False
 
         return True
@@ -519,7 +721,10 @@ class AutomaticLineSystem(commands.Cog):
     # IMAGE VALIDATION
     # ========================================================
 
-    def is_supported_image(self, attachment):
+    def is_supported_image(
+        self,
+        attachment
+    ):
 
         content_type = (
             attachment.content_type or ""
@@ -530,28 +735,38 @@ class AutomaticLineSystem(commands.Cog):
         ).lower().strip()
 
         supported_types = {
+
             "image/png",
             "image/jpeg",
             "image/jpg",
             "image/webp",
             "image/gif",
             "image/apng"
+
         }
 
         supported_extensions = (
+
             ".png",
             ".jpg",
             ".jpeg",
             ".webp",
             ".gif",
             ".apng"
+
         )
 
         return (
-            content_type in supported_types
-            or filename.endswith(
+
+            content_type
+            in supported_types
+
+            or
+
+            filename.endswith(
                 supported_extensions
             )
+
         )
 
 
@@ -559,27 +774,47 @@ class AutomaticLineSystem(commands.Cog):
     # STORAGE FILENAME
     # ========================================================
 
-    def get_storage_filename(self, attachment):
+    def get_storage_filename(
+        self,
+        attachment
+    ):
 
         original_name = (
             attachment.filename or ""
         ).strip()
 
-        lower_name = original_name.lower()
+        lower_name = (
+            original_name.lower()
+        )
 
-        if lower_name.endswith(".gif"):
+        if lower_name.endswith(
+            ".gif"
+        ):
+
             return "fime-line.gif"
 
-        if lower_name.endswith(".apng"):
+        if lower_name.endswith(
+            ".apng"
+        ):
+
             return "fime-line.apng"
 
-        if lower_name.endswith(".webp"):
+        if lower_name.endswith(
+            ".webp"
+        ):
+
             return "fime-line.webp"
 
-        if lower_name.endswith(".jpg"):
+        if lower_name.endswith(
+            ".jpg"
+        ):
+
             return "fime-line.jpg"
 
-        if lower_name.endswith(".jpeg"):
+        if lower_name.endswith(
+            ".jpeg"
+        ):
+
             return "fime-line.jpeg"
 
         return "fime-line.png"
@@ -595,14 +830,20 @@ class AutomaticLineSystem(commands.Cog):
         image_attachment
     ):
 
-        cfg = self.get_config(guild.id)
+        cfg = self.get_config(
+            guild.id
+        )
 
         storage_channel = None
 
-        if cfg.get("storage_channel_id"):
+        if cfg.get(
+            "storage_channel_id"
+        ):
 
             storage_channel = guild.get_channel(
-                int(cfg["storage_channel_id"])
+                int(
+                    cfg["storage_channel_id"]
+                )
             )
 
         if storage_channel is None:
@@ -614,10 +855,13 @@ class AutomaticLineSystem(commands.Cog):
             if configured_channel_id:
 
                 storage_channel = guild.get_channel(
-                    int(configured_channel_id)
+                    int(
+                        configured_channel_id
+                    )
                 )
 
         if storage_channel is None:
+
             storage_channel = guild.system_channel
 
         if storage_channel is None:
@@ -625,7 +869,8 @@ class AutomaticLineSystem(commands.Cog):
             storage_channel = next(
                 (
                     channel
-                    for channel in guild.text_channels
+                    for channel
+                    in guild.text_channels
                     if channel.permissions_for(
                         guild.me
                     ).send_messages
@@ -647,7 +892,9 @@ class AutomaticLineSystem(commands.Cog):
                 "تعذر معرفة صلاحيات البوت."
             )
 
-        permissions = storage_channel.permissions_for(me)
+        permissions = storage_channel.permissions_for(
+            me
+        )
 
         if not permissions.view_channel:
 
@@ -678,12 +925,16 @@ class AutomaticLineSystem(commands.Cog):
                 "الصورة المرفوعة فارغة."
             )
 
-        storage_filename = self.get_storage_filename(
-            image_attachment
+        storage_filename = (
+            self.get_storage_filename(
+                image_attachment
+            )
         )
 
         file = discord.File(
-            fp=io.BytesIO(image_bytes),
+            fp=io.BytesIO(
+                image_bytes
+            ),
             filename=storage_filename
         )
 
@@ -698,13 +949,25 @@ class AutomaticLineSystem(commands.Cog):
                 "تعذر الحصول على رابط صورة التخزين."
             )
 
-        stored_attachment = message.attachments[0]
+        stored_attachment = (
+            message.attachments[0]
+        )
 
-        cfg["image_url"] = stored_attachment.url
-        cfg["storage_channel_id"] = storage_channel.id
-        cfg["storage_message_id"] = message.id
+        cfg["image_url"] = (
+            stored_attachment.url
+        )
 
-        save_config(self.config)
+        cfg["storage_channel_id"] = (
+            storage_channel.id
+        )
+
+        cfg["storage_message_id"] = (
+            message.id
+        )
+
+        save_config(
+            self.config
+        )
 
         return (
             stored_attachment.url,
@@ -717,12 +980,22 @@ class AutomaticLineSystem(commands.Cog):
     # DELETE OLD STORAGE
     # ========================================================
 
-    async def delete_old_storage(self, guild):
+    async def delete_old_storage(
+        self,
+        guild
+    ):
 
-        cfg = self.get_config(guild.id)
+        cfg = self.get_config(
+            guild.id
+        )
 
-        channel_id = cfg.get("storage_channel_id")
-        message_id = cfg.get("storage_message_id")
+        channel_id = cfg.get(
+            "storage_channel_id"
+        )
+
+        message_id = cfg.get(
+            "storage_message_id"
+        )
 
         if not channel_id or not message_id:
             return
@@ -747,6 +1020,7 @@ class AutomaticLineSystem(commands.Cog):
             discord.Forbidden,
             discord.HTTPException
         ):
+
             pass
 
 
@@ -756,7 +1030,9 @@ class AutomaticLineSystem(commands.Cog):
 
     def get_now(self):
 
-        return datetime.now(SAUDI_TZ)
+        return datetime.now(
+            SAUDI_TZ
+        )
 
 
     def get_period_keys(self):
@@ -764,14 +1040,19 @@ class AutomaticLineSystem(commands.Cog):
         now = self.get_now()
 
         if now.hour >= 22:
+
             daily_date = now.date()
+
         else:
+
             daily_date = (
                 now.date()
                 - timedelta(days=1)
             )
 
-        daily_key = daily_date.isoformat()
+        daily_key = (
+            daily_date.isoformat()
+        )
 
         week_start = (
             now.date()
@@ -780,7 +1061,9 @@ class AutomaticLineSystem(commands.Cog):
             )
         )
 
-        weekly_key = week_start.isoformat()
+        weekly_key = (
+            week_start.isoformat()
+        )
 
         monthly_key = (
             f"{now.year}-{now.month:02d}"
@@ -793,20 +1076,29 @@ class AutomaticLineSystem(commands.Cog):
         )
 
 
-    def ensure_top_guild(self, guild_id):
+    def ensure_top_guild(
+        self,
+        guild_id
+    ):
 
-        guild_key = str(guild_id)
+        guild_key = str(
+            guild_id
+        )
 
         if guild_key not in self.top_data:
 
             self.top_data[guild_key] = {
+
                 "day": {},
                 "week": {},
                 "month": {},
                 "all": {}
+
             }
 
-        guild_data = self.top_data[guild_key]
+        guild_data = (
+            self.top_data[guild_key]
+        )
 
         for period in (
             "day",
@@ -816,20 +1108,29 @@ class AutomaticLineSystem(commands.Cog):
         ):
 
             if period not in guild_data:
+
                 guild_data[period] = {}
 
         return guild_data
 
 
-    def add_top_point(self, guild_id, user_id):
+    def add_top_point(
+        self,
+        guild_id,
+        user_id
+    ):
 
-        guild_data = self.ensure_top_guild(
-            guild_id
+        guild_data = (
+            self.ensure_top_guild(
+                guild_id
+            )
         )
 
-        daily_key, weekly_key, monthly_key = (
-            self.get_period_keys()
-        )
+        (
+            daily_key,
+            weekly_key,
+            monthly_key
+        ) = self.get_period_keys()
 
         guild_data["day"].setdefault(
             "_period",
@@ -846,43 +1147,65 @@ class AutomaticLineSystem(commands.Cog):
             monthly_key
         )
 
-        if guild_data["day"].get("_period") != daily_key:
+        if guild_data["day"].get(
+            "_period"
+        ) != daily_key:
 
             guild_data["day"] = {
                 "_period": daily_key
             }
 
-        if guild_data["week"].get("_period") != weekly_key:
+        if guild_data["week"].get(
+            "_period"
+        ) != weekly_key:
 
             guild_data["week"] = {
                 "_period": weekly_key
             }
 
-        if guild_data["month"].get("_period") != monthly_key:
+        if guild_data["month"].get(
+            "_period"
+        ) != monthly_key:
 
             guild_data["month"] = {
                 "_period": monthly_key
             }
 
-        user_key = str(user_id)
+        user_key = str(
+            user_id
+        )
 
         guild_data["day"][user_key] = (
-            guild_data["day"].get(user_key, 0) + 1
+            guild_data["day"].get(
+                user_key,
+                0
+            ) + 1
         )
 
         guild_data["week"][user_key] = (
-            guild_data["week"].get(user_key, 0) + 1
+            guild_data["week"].get(
+                user_key,
+                0
+            ) + 1
         )
 
         guild_data["month"][user_key] = (
-            guild_data["month"].get(user_key, 0) + 1
+            guild_data["month"].get(
+                user_key,
+                0
+            ) + 1
         )
 
         guild_data["all"][user_key] = (
-            guild_data["all"].get(user_key, 0) + 1
+            guild_data["all"].get(
+                user_key,
+                0
+            ) + 1
         )
 
-        save_top(self.top_data)
+        save_top(
+            self.top_data
+        )
 
 
     def get_top_users(
@@ -892,55 +1215,83 @@ class AutomaticLineSystem(commands.Cog):
         limit=10
     ):
 
-        guild_data = self.ensure_top_guild(
-            guild.id
+        guild_data = (
+            self.ensure_top_guild(
+                guild.id
+            )
         )
 
         if period == "day":
 
-            daily_key, _, _ = self.get_period_keys()
+            daily_key, _, _ = (
+                self.get_period_keys()
+            )
 
-            if guild_data["day"].get("_period") != daily_key:
+            if guild_data["day"].get(
+                "_period"
+            ) != daily_key:
 
                 guild_data["day"] = {
                     "_period": daily_key
                 }
 
-                save_top(self.top_data)
+                save_top(
+                    self.top_data
+                )
 
-            source = guild_data["day"]
+            source = (
+                guild_data["day"]
+            )
 
         elif period == "week":
 
-            _, weekly_key, _ = self.get_period_keys()
+            _, weekly_key, _ = (
+                self.get_period_keys()
+            )
 
-            if guild_data["week"].get("_period") != weekly_key:
+            if guild_data["week"].get(
+                "_period"
+            ) != weekly_key:
 
                 guild_data["week"] = {
                     "_period": weekly_key
                 }
 
-                save_top(self.top_data)
+                save_top(
+                    self.top_data
+                )
 
-            source = guild_data["week"]
+            source = (
+                guild_data["week"]
+            )
 
         elif period == "month":
 
-            _, _, monthly_key = self.get_period_keys()
+            _, _, monthly_key = (
+                self.get_period_keys()
+            )
 
-            if guild_data["month"].get("_period") != monthly_key:
+            if guild_data["month"].get(
+                "_period"
+            ) != monthly_key:
 
                 guild_data["month"] = {
                     "_period": monthly_key
                 }
 
-                save_top(self.top_data)
+                save_top(
+                    self.top_data
+                )
 
-            source = guild_data["month"]
+            source = (
+                guild_data["month"]
+            )
 
         else:
 
-            source = guild_data["all"]
+            source = (
+                guild_data["all"]
+            )
 
         results = []
 
@@ -950,8 +1301,13 @@ class AutomaticLineSystem(commands.Cog):
                 continue
 
             try:
-                member = guild.get_member(int(user_id))
+
+                member = guild.get_member(
+                    int(user_id)
+                )
+
             except Exception:
+
                 member = None
 
             if member is None:
@@ -972,7 +1328,10 @@ class AutomaticLineSystem(commands.Cog):
         return results[:limit]
 
 
-    def get_period_title(self, period):
+    def get_period_title(
+        self,
+        period
+    ):
 
         if period == "day":
             return "توب اليوم"
@@ -986,15 +1345,23 @@ class AutomaticLineSystem(commands.Cog):
         return "توب الكل"
 
 
-    def build_top_embed(self, guild, period):
+    def build_top_embed(
+        self,
+        guild,
+        period
+    ):
 
-        results = self.get_top_users(
-            guild,
-            period
+        results = (
+            self.get_top_users(
+                guild,
+                period
+            )
         )
 
-        title = self.get_period_title(
-            period
+        title = (
+            self.get_period_title(
+                period
+            )
         )
 
         if not results:
@@ -1006,14 +1373,19 @@ class AutomaticLineSystem(commands.Cog):
             )
 
         medals = {
+
             1: "🥇",
             2: "🥈",
             3: "🥉"
+
         }
 
         lines = []
 
-        for index, (member, points) in enumerate(
+        for index, (
+            member,
+            points
+        ) in enumerate(
             results,
             start=1
         ):
@@ -1024,7 +1396,8 @@ class AutomaticLineSystem(commands.Cog):
             )
 
             lines.append(
-                f"{medal} {member.mention} — **{points} نقطة**"
+                f"{medal} {member.mention} — "
+                f"**{points} نقطة**"
             )
 
         embed = discord.Embed(
@@ -1048,9 +1421,11 @@ class AutomaticLineSystem(commands.Cog):
 
         guild = channel.guild
 
-        embed = self.build_top_embed(
-            guild,
-            period
+        embed = (
+            self.build_top_embed(
+                guild,
+                period
+            )
         )
 
         view = TopSelectView(
@@ -1064,9 +1439,14 @@ class AutomaticLineSystem(commands.Cog):
         )
 
 
-    def normalize_top_keyword(self, content):
+    def normalize_top_keyword(
+        self,
+        content
+    ):
 
-        value = str(content or "").strip()
+        value = str(
+            content or ""
+        ).strip()
 
         value = " ".join(
             value.split()
@@ -1075,20 +1455,29 @@ class AutomaticLineSystem(commands.Cog):
         return value.casefold()
 
 
-    def get_top_keyword_period(self, content):
+    def get_top_keyword_period(
+        self,
+        content
+    ):
 
-        normalized = self.normalize_top_keyword(
-            content
+        normalized = (
+            self.normalize_top_keyword(
+                content
+            )
         )
 
         keywords = {
+
             "day": "day",
             "week": "week",
             "month": "month",
             "all": "all",
+
         }
 
-        return keywords.get(normalized)
+        return keywords.get(
+            normalized
+        )
 
 
     def member_can_use_top_keyword(
@@ -1117,17 +1506,21 @@ class AutomaticLineSystem(commands.Cog):
             allowed_roles = set()
 
         member_roles = {
+
             role.id
-            for role in getattr(
+            for role
+            in getattr(
                 message.author,
                 "roles",
                 []
             )
+
         }
 
         if allowed_roles.intersection(
             member_roles
         ):
+
             return True
 
         top_channel_id = cfg.get(
@@ -1140,7 +1533,9 @@ class AutomaticLineSystem(commands.Cog):
 
                 return (
                     message.channel.id
-                    == int(top_channel_id)
+                    == int(
+                        top_channel_id
+                    )
                 )
 
             except Exception:
@@ -1156,8 +1551,10 @@ class AutomaticLineSystem(commands.Cog):
         cfg
     ):
 
-        period = self.get_top_keyword_period(
-            message.content
+        period = (
+            self.get_top_keyword_period(
+                message.content
+            )
         )
 
         if period is None:
@@ -1167,6 +1564,7 @@ class AutomaticLineSystem(commands.Cog):
             message,
             cfg
         ):
+
             return False
 
         try:
@@ -1218,7 +1616,10 @@ class AutomaticLineSystem(commands.Cog):
         if channel is None:
 
             cfg["top_channel_id"] = None
-            save_config(self.config)
+
+            save_config(
+                self.config
+            )
 
             await interaction.response.send_message(
                 (
@@ -1242,7 +1643,9 @@ class AutomaticLineSystem(commands.Cog):
 
             return
 
-        permissions = channel.permissions_for(me)
+        permissions = channel.permissions_for(
+            me
+        )
 
         if not permissions.view_channel:
 
@@ -1262,9 +1665,13 @@ class AutomaticLineSystem(commands.Cog):
 
             return
 
-        cfg["top_channel_id"] = channel.id
+        cfg["top_channel_id"] = (
+            channel.id
+        )
 
-        save_config(self.config)
+        save_config(
+            self.config
+        )
 
         await interaction.response.send_message(
             (
@@ -1316,9 +1723,13 @@ class AutomaticLineSystem(commands.Cog):
 
             return
 
-        roles.append(role.id)
+        roles.append(
+            role.id
+        )
 
-        save_config(self.config)
+        save_config(
+            self.config
+        )
 
         await interaction.response.send_message(
             (
@@ -1371,9 +1782,13 @@ class AutomaticLineSystem(commands.Cog):
 
             return
 
-        roles.remove(role.id)
+        roles.remove(
+            role.id
+        )
 
-        save_config(self.config)
+        save_config(
+            self.config
+        )
 
         await interaction.response.send_message(
             f"✅ تم إزالة {role.mention} من رتب التوب.",
@@ -1385,7 +1800,10 @@ class AutomaticLineSystem(commands.Cog):
         name="توب-حالة",
         description="عرض إعدادات نظام التوب"
     )
-    async def top_status(self, interaction):
+    async def top_status(
+        self,
+        interaction
+    ):
 
         if await self.silently_ignore_if_not_owner(
             interaction
@@ -1406,13 +1824,19 @@ class AutomaticLineSystem(commands.Cog):
         if top_channel_id:
 
             try:
-                top_channel = interaction.guild.get_channel(
-                    int(top_channel_id)
+
+                top_channel = (
+                    interaction.guild.get_channel(
+                        int(top_channel_id)
+                    )
                 )
+
             except Exception:
+
                 top_channel = None
 
         else:
+
             top_channel = None
 
         roles = []
@@ -1423,14 +1847,22 @@ class AutomaticLineSystem(commands.Cog):
         ):
 
             try:
-                role = interaction.guild.get_role(
-                    int(role_id)
+
+                role = (
+                    interaction.guild.get_role(
+                        int(role_id)
+                    )
                 )
+
             except Exception:
+
                 role = None
 
             if role:
-                roles.append(role.mention)
+
+                roles.append(
+                    role.mention
+                )
 
         channel_text = (
             top_channel.mention
@@ -1489,7 +1921,9 @@ class AutomaticLineSystem(commands.Cog):
 
             return
 
-        if not self.is_supported_image(image):
+        if not self.is_supported_image(
+            image
+        ):
 
             await interaction.response.send_message(
                 (
@@ -1508,7 +1942,9 @@ class AutomaticLineSystem(commands.Cog):
 
         guild = interaction.guild
 
-        cfg = self.get_config(guild.id)
+        cfg = self.get_config(
+            guild.id
+        )
 
         if channel is None:
 
@@ -1527,7 +1963,9 @@ class AutomaticLineSystem(commands.Cog):
 
                 return
 
-            permissions = channel.permissions_for(me)
+            permissions = channel.permissions_for(
+                me
+            )
 
             if not permissions.view_channel:
 
@@ -1547,9 +1985,13 @@ class AutomaticLineSystem(commands.Cog):
 
                 return
 
-            cfg["channel_id"] = channel.id
+            cfg["channel_id"] = (
+                channel.id
+            )
 
-        await self.delete_old_storage(guild)
+        await self.delete_old_storage(
+            guild
+        )
 
         try:
 
@@ -1581,12 +2023,15 @@ class AutomaticLineSystem(commands.Cog):
 
         cfg["enabled"] = True
 
-        save_config(self.config)
+        save_config(
+            self.config
+        )
 
         target_text = (
             channel.mention
             if channel
-            else "كل الرومات النصية التي يستطيع البوت الكتابة فيها"
+            else
+            "كل الرومات النصية التي يستطيع البوت الكتابة فيها"
         )
 
         await interaction.followup.send(
@@ -1604,7 +2049,10 @@ class AutomaticLineSystem(commands.Cog):
         name="خط-إيقاف",
         description="إيقاف الخط التلقائي"
     )
-    async def line_off(self, interaction):
+    async def line_off(
+        self,
+        interaction
+    ):
 
         if await self.silently_ignore_if_not_owner(
             interaction
@@ -1620,7 +2068,9 @@ class AutomaticLineSystem(commands.Cog):
 
         cfg["enabled"] = False
 
-        save_config(self.config)
+        save_config(
+            self.config
+        )
 
         await interaction.response.send_message(
             "🛑 تم إيقاف نظام الخط.",
@@ -1632,7 +2082,10 @@ class AutomaticLineSystem(commands.Cog):
         name="خط-حالة",
         description="عرض حالة نظام الخط"
     )
-    async def line_status(self, interaction):
+    async def line_status(
+        self,
+        interaction
+    ):
 
         if await self.silently_ignore_if_not_owner(
             interaction
@@ -1646,7 +2099,9 @@ class AutomaticLineSystem(commands.Cog):
             interaction.guild.id
         )
 
-        if not cfg.get("enabled"):
+        if not cfg.get(
+            "enabled"
+        ):
 
             await interaction.response.send_message(
                 "🛑 نظام الخط متوقف.",
@@ -1661,8 +2116,10 @@ class AutomaticLineSystem(commands.Cog):
 
         if channel_id:
 
-            channel = interaction.guild.get_channel(
-                int(channel_id)
+            channel = (
+                interaction.guild.get_channel(
+                    int(channel_id)
+                )
             )
 
             target = (
@@ -1721,7 +2178,9 @@ class AutomaticLineSystem(commands.Cog):
 
             cfg["channel_id"] = None
 
-            save_config(self.config)
+            save_config(
+                self.config
+            )
 
             await interaction.response.send_message(
                 (
@@ -1745,7 +2204,9 @@ class AutomaticLineSystem(commands.Cog):
 
             return
 
-        permissions = channel.permissions_for(me)
+        permissions = channel.permissions_for(
+            me
+        )
 
         if not permissions.view_channel:
 
@@ -1765,9 +2226,13 @@ class AutomaticLineSystem(commands.Cog):
 
             return
 
-        cfg["channel_id"] = channel.id
+        cfg["channel_id"] = (
+            channel.id
+        )
 
-        save_config(self.config)
+        save_config(
+            self.config
+        )
 
         await interaction.response.send_message(
             (
@@ -1782,9 +2247,14 @@ class AutomaticLineSystem(commands.Cog):
     # FIME KEYWORD SYSTEM
     # ========================================================
 
-    def normalize_fime_keyword(self, content):
+    def normalize_fime_keyword(
+        self,
+        content
+    ):
 
-        value = str(content or "").strip()
+        value = str(
+            content or ""
+        ).strip()
 
         value = " ".join(
             value.split()
@@ -1799,14 +2269,21 @@ class AutomaticLineSystem(commands.Cog):
         accept_fimi=False
     ):
 
-        normalized = self.normalize_fime_keyword(
-            content
+        normalized = (
+            self.normalize_fime_keyword(
+                content
+            )
         )
 
         if normalized == "فيم":
             return True
 
-        if accept_fimi and normalized == "فيمي":
+        if (
+            accept_fimi
+            and
+            normalized == "فيمي"
+        ):
+
             return True
 
         return False
@@ -1822,6 +2299,7 @@ class AutomaticLineSystem(commands.Cog):
             "fime_word_enabled",
             True
         ):
+
             return False
 
         accept_fimi = bool(
@@ -1835,6 +2313,7 @@ class AutomaticLineSystem(commands.Cog):
             message.content,
             accept_fimi
         ):
+
             return False
 
         response_text = str(
@@ -1885,7 +2364,9 @@ class AutomaticLineSystem(commands.Cog):
         if interaction.guild is None:
             return
 
-        message = str(message or "").strip()
+        message = str(
+            message or ""
+        ).strip()
 
         if not message:
 
@@ -1909,10 +2390,15 @@ class AutomaticLineSystem(commands.Cog):
             interaction.guild.id
         )
 
-        cfg["fime_word_response"] = message
+        cfg["fime_word_response"] = (
+            message
+        )
+
         cfg["fime_word_enabled"] = True
 
-        save_config(self.config)
+        save_config(
+            self.config
+        )
 
         await interaction.response.send_message(
             (
@@ -1928,7 +2414,10 @@ class AutomaticLineSystem(commands.Cog):
         name="فيم-تشغيل",
         description="تشغيل الرد التلقائي على كلمة فيم"
     )
-    async def fime_enable(self, interaction):
+    async def fime_enable(
+        self,
+        interaction
+    ):
 
         if await self.silently_ignore_if_not_owner(
             interaction
@@ -1944,7 +2433,9 @@ class AutomaticLineSystem(commands.Cog):
 
         cfg["fime_word_enabled"] = True
 
-        save_config(self.config)
+        save_config(
+            self.config
+        )
 
         await interaction.response.send_message(
             "🟢 تم تشغيل نظام كلمة فيم.",
@@ -1956,7 +2447,10 @@ class AutomaticLineSystem(commands.Cog):
         name="فيم-إيقاف",
         description="إيقاف الرد التلقائي على كلمة فيم"
     )
-    async def fime_disable(self, interaction):
+    async def fime_disable(
+        self,
+        interaction
+    ):
 
         if await self.silently_ignore_if_not_owner(
             interaction
@@ -1972,7 +2466,9 @@ class AutomaticLineSystem(commands.Cog):
 
         cfg["fime_word_enabled"] = False
 
-        save_config(self.config)
+        save_config(
+            self.config
+        )
 
         await interaction.response.send_message(
             "🛑 تم إيقاف نظام كلمة فيم.",
@@ -1984,7 +2480,10 @@ class AutomaticLineSystem(commands.Cog):
         name="فيم-حالة",
         description="عرض حالة نظام كلمة فيم"
     )
-    async def fime_status(self, interaction):
+    async def fime_status(
+        self,
+        interaction
+    ):
 
         if await self.silently_ignore_if_not_owner(
             interaction
@@ -2044,94 +2543,316 @@ class AutomaticLineSystem(commands.Cog):
 
 
     # ========================================================
+    # SAY ROOM DEFINITION
+    # ========================================================
+
+    @app_commands.command(
+        name="تعريف-الروم",
+        description="حفظ أو تعديل تعريف الروم الذي يظهر في نظام /say"
+    )
+    @app_commands.describe(
+        definition="التعريف الذي تريد حفظه لهذا السيرفر"
+    )
+    async def set_room_definition(
+        self,
+        interaction,
+        definition: str
+    ):
+
+        if await self.silently_ignore_if_not_owner(
+            interaction
+        ):
+            return
+
+        if interaction.guild is None:
+
+            await interaction.response.send_message(
+                "❌ هذا الأمر يعمل داخل السيرفر فقط.",
+                ephemeral=True
+            )
+
+            return
+
+        definition = str(
+            definition or ""
+        ).strip()
+
+        if not definition:
+
+            await interaction.response.send_message(
+                "❌ اكتب تعريف الروم أولًا.",
+                ephemeral=True
+            )
+
+            return
+
+        if len(definition) > 800:
+
+            await interaction.response.send_message(
+                "❌ تعريف الروم لا يمكن أن يتجاوز 800 حرف.",
+                ephemeral=True
+            )
+
+            return
+
+        cfg = self.get_config(
+            interaction.guild.id
+        )
+
+        cfg["say_room_definition"] = (
+            definition
+        )
+
+        save_config(
+            self.config
+        )
+
+        await interaction.response.send_message(
+            (
+                "✅ **تم حفظ تعريف الروم.**\n\n"
+                f"{definition}\n\n"
+                "📌 الآن `/say` سيستخدم هذا التعريف "
+                "تلقائيًا بدون ما تحتاج تكتبه مرة ثانية."
+            ),
+            ephemeral=True
+        )
+
+
+    @app_commands.command(
+        name="تعريف-الروم-حذف",
+        description="حذف تعريف الروم المحفوظ"
+    )
+    async def delete_room_definition(
+        self,
+        interaction
+    ):
+
+        if await self.silently_ignore_if_not_owner(
+            interaction
+        ):
+            return
+
+        if interaction.guild is None:
+            return
+
+        cfg = self.get_config(
+            interaction.guild.id
+        )
+
+        cfg["say_room_definition"] = ""
+
+        save_config(
+            self.config
+        )
+
+        await interaction.response.send_message(
+            (
+                "🗑️ **تم حذف تعريف الروم المحفوظ.**\n"
+                "لن يظهر زر تعريف الروم في رسائل `/say` الجديدة."
+            ),
+            ephemeral=True
+        )
+
+
+    @app_commands.command(
+        name="تعريف-الروم-حالة",
+        description="عرض تعريف الروم المحفوظ"
+    )
+    async def room_definition_status(
+        self,
+        interaction
+    ):
+
+        if await self.silently_ignore_if_not_owner(
+            interaction
+        ):
+            return
+
+        if interaction.guild is None:
+            return
+
+        cfg = self.get_config(
+            interaction.guild.id
+        )
+
+        definition = str(
+            cfg.get(
+                "say_room_definition",
+                ""
+            ) or ""
+        ).strip()
+
+        if not definition:
+
+            await interaction.response.send_message(
+                (
+                    "📖 **تعريف الروم**\n\n"
+                    "لا يوجد تعريف محفوظ حاليًا."
+                ),
+                ephemeral=True
+            )
+
+            return
+
+        embed = discord.Embed(
+            title="📖 تعريف الروم الحالي",
+            description=definition,
+            color=discord.Color.blurple()
+        )
+
+        embed.set_footer(
+            text="Team Fime • SAY System"
+        )
+
+        await interaction.response.send_message(
+            embed=embed,
+            ephemeral=True
+        )
+
+
+    # ========================================================
     # SAY IMAGE HELPERS
     # ========================================================
 
-    def get_font(self, size, bold=False):
+    def get_font(
+        self,
+        size,
+        bold=False
+    ):
 
         candidates = []
 
         if bold:
 
             candidates.extend([
+
                 "/usr/share/fonts/truetype/noto/NotoSansArabic-Bold.ttf",
                 "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf",
                 "/usr/share/fonts/truetype/lato/Lato-Bold.ttf",
+
             ])
 
         else:
 
             candidates.extend([
+
                 "/usr/share/fonts/truetype/noto/NotoSansArabic-Regular.ttf",
                 "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
                 "/usr/share/fonts/truetype/lato/Lato-Regular.ttf",
+
             ])
 
         for path in candidates:
 
             try:
+
                 if os.path.exists(path):
+
                     return ImageFont.truetype(
                         path,
                         size
                     )
+
             except Exception:
+
                 pass
 
         return ImageFont.load_default()
 
 
-    def prepare_text(self, text):
+    def prepare_text(
+        self,
+        text
+    ):
 
-        text = str(text or "")
+        text = str(
+            text or ""
+        )
 
         if ARABIC_SUPPORT:
 
             try:
-                reshaped = arabic_reshaper.reshape(text)
-                return get_display(reshaped)
+
+                reshaped = (
+                    arabic_reshaper.reshape(
+                        text
+                    )
+                )
+
+                return get_display(
+                    reshaped
+                )
+
             except Exception:
+
                 pass
 
         return text
 
 
-    def crop_to_fill(self, image, size):
+    def crop_to_fill(
+        self,
+        image,
+        size
+    ):
 
         target_width, target_height = size
 
-        image = image.convert("RGBA")
+        image = image.convert(
+            "RGBA"
+        )
 
-        source_width, source_height = image.size
+        source_width, source_height = (
+            image.size
+        )
 
-        if source_width <= 0 or source_height <= 0:
+        if (
+            source_width <= 0
+            or
+            source_height <= 0
+        ):
 
             return Image.new(
                 "RGBA",
                 size,
-                (10, 12, 18, 255)
+                (
+                    10,
+                    12,
+                    18,
+                    255
+                )
             )
 
         source_ratio = (
-            source_width / source_height
+            source_width
+            /
+            source_height
         )
 
         target_ratio = (
-            target_width / target_height
+            target_width
+            /
+            target_height
         )
 
         if source_ratio > target_ratio:
 
             new_height = target_height
+
             new_width = int(
-                new_height * source_ratio
+                new_height
+                *
+                source_ratio
             )
 
         else:
 
             new_width = target_width
+
             new_height = int(
-                new_width / source_ratio
+                new_width
+                /
+                source_ratio
             )
 
         image = image.resize(
@@ -2143,11 +2864,15 @@ class AutomaticLineSystem(commands.Cog):
         )
 
         left = (
-            new_width - target_width
+            new_width
+            -
+            target_width
         ) // 2
 
         top = (
-            new_height - target_height
+            new_height
+            -
+            target_height
         ) // 2
 
         return image.crop(
@@ -2160,20 +2885,32 @@ class AutomaticLineSystem(commands.Cog):
         )
 
 
-    def circle_avatar(self, image, size):
+    def circle_avatar(
+        self,
+        image,
+        size
+    ):
 
         image = self.crop_to_fill(
             image,
-            (size, size)
+            (
+                size,
+                size
+            )
         )
 
         mask = Image.new(
             "L",
-            (size, size),
+            (
+                size,
+                size
+            ),
             0
         )
 
-        draw = ImageDraw.Draw(mask)
+        draw = ImageDraw.Draw(
+            mask
+        )
 
         draw.ellipse(
             (
@@ -2187,13 +2924,24 @@ class AutomaticLineSystem(commands.Cog):
 
         result = Image.new(
             "RGBA",
-            (size, size),
-            (0, 0, 0, 0)
+            (
+                size,
+                size
+            ),
+            (
+                0,
+                0,
+                0,
+                0
+            )
         )
 
         result.paste(
             image,
-            (0, 0),
+            (
+                0,
+                0
+            ),
             mask
         )
 
@@ -2211,16 +2959,25 @@ class AutomaticLineSystem(commands.Cog):
     ):
 
         bbox = draw.textbbox(
-            (0, 0),
+            (
+                0,
+                0
+            ),
             text,
             font=font
         )
 
-        width = bbox[2] - bbox[0]
+        width = (
+            bbox[2]
+            -
+            bbox[0]
+        )
 
         draw.text(
             (
-                center_x - width / 2,
+                center_x
+                -
+                width / 2,
                 y
             ),
             text,
@@ -2243,6 +3000,7 @@ class AutomaticLineSystem(commands.Cog):
             return []
 
         lines = []
+
         current = ""
 
         for word in words:
@@ -2252,12 +3010,19 @@ class AutomaticLineSystem(commands.Cog):
             )
 
             bbox = draw.textbbox(
-                (0, 0),
+                (
+                    0,
+                    0
+                ),
                 candidate,
                 font=font
             )
 
-            width = bbox[2] - bbox[0]
+            width = (
+                bbox[2]
+                -
+                bbox[0]
+            )
 
             if width <= max_width:
 
@@ -2266,12 +3031,16 @@ class AutomaticLineSystem(commands.Cog):
             else:
 
                 if current:
-                    lines.append(current)
+                    lines.append(
+                        current
+                    )
 
                 current = word
 
         if current:
-            lines.append(current)
+            lines.append(
+                current
+            )
 
         return lines
 
@@ -2290,22 +3059,38 @@ class AutomaticLineSystem(commands.Cog):
         shadow = Image.new(
             "RGBA",
             canvas.size,
-            (0, 0, 0, 0)
+            (
+                0,
+                0,
+                0,
+                0
+            )
         )
 
-        draw = ImageDraw.Draw(shadow)
+        draw = ImageDraw.Draw(
+            shadow
+        )
 
         draw.rounded_rectangle(
             box,
             radius=radius,
-            fill=(0, 0, 0, alpha)
+            fill=(
+                0,
+                0,
+                0,
+                alpha
+            )
         )
 
         shadow = shadow.filter(
-            ImageFilter.GaussianBlur(blur)
+            ImageFilter.GaussianBlur(
+                blur
+            )
         )
 
-        canvas.alpha_composite(shadow)
+        canvas.alpha_composite(
+            shadow
+        )
 
 
     async def read_image_attachment(
@@ -2332,7 +3117,9 @@ class AutomaticLineSystem(commands.Cog):
         try:
 
             image = Image.open(
-                io.BytesIO(data)
+                io.BytesIO(
+                    data
+                )
             )
 
             try:
@@ -2340,7 +3127,9 @@ class AutomaticLineSystem(commands.Cog):
             except Exception:
                 pass
 
-            return image.convert("RGBA")
+            return image.convert(
+                "RGBA"
+            )
 
         except Exception as error:
 
@@ -2358,15 +3147,17 @@ class AutomaticLineSystem(commands.Cog):
         if not definition:
             return
 
-        draw = ImageDraw.Draw(canvas)
+        draw = ImageDraw.Draw(
+            canvas
+        )
 
         font = self.get_font(
-            25,
+            22,
             bold=False
         )
 
         title_font = self.get_font(
-            19,
+            18,
             bold=True
         )
 
@@ -2378,7 +3169,7 @@ class AutomaticLineSystem(commands.Cog):
             definition
         )
 
-        max_width = 680
+        max_width = 690
 
         lines = self.wrap_text(
             draw,
@@ -2390,54 +3181,126 @@ class AutomaticLineSystem(commands.Cog):
         if not lines:
             return
 
-        lines = lines[:3]
+        lines = lines[:4]
 
-        line_height = 35
+        line_height = 31
 
         box_height = (
-            76
-            + len(lines) * line_height
+            72
+            +
+            len(lines)
+            *
+            line_height
         )
 
-        box_x1 = 445
-        box_y2 = 625
-        box_y1 = box_y2 - box_height
+        box_x1 = 420
+        box_x2 = 1335
+
+        box_y2 = 665
+
+        box_y1 = (
+            box_y2
+            -
+            box_height
+        )
+
+        self.add_soft_shadow(
+            canvas,
+            (
+                box_x1,
+                box_y1,
+                box_x2,
+                box_y2
+            ),
+            radius=25,
+            alpha=110,
+            blur=15
+        )
 
         draw.rounded_rectangle(
             (
                 box_x1,
                 box_y1,
-                1135,
+                box_x2,
                 box_y2
             ),
-            radius=24,
-            fill=(17, 20, 30, 235),
-            outline=(124, 92, 255, 95),
+            radius=25,
+            fill=(
+                12,
+                15,
+                23,
+                242
+            ),
+            outline=(
+                124,
+                92,
+                255,
+                90
+            ),
             width=2
+        )
+
+        # خط هوية
+        draw.rounded_rectangle(
+            (
+                box_x1,
+                box_y1,
+                box_x1 + 7,
+                box_y2
+            ),
+            radius=4,
+            fill=(
+                124,
+                92,
+                255,
+                255
+            )
         )
 
         draw.text(
             (
-                box_x1 + 25,
-                box_y1 + 18
+                box_x1 + 28,
+                box_y1 + 15
             ),
-            self.prepare_text("تعريف الروم"),
+            self.prepare_text(
+                "تعريف الروم"
+            ),
             font=title_font,
-            fill=(245, 247, 251, 245)
+            fill=(
+                245,
+                247,
+                251,
+                250
+            )
         )
 
-        start_y = box_y1 + 50
+        start_y = (
+            box_y1
+            +
+            47
+        )
 
-        for index, line in enumerate(lines):
+        for index, line in enumerate(
+            lines
+        ):
 
             draw.text(
                 (
-                    box_x1 + 25,
-                    start_y + index * line_height
+                    box_x1 + 28,
+                    start_y
+                    +
+                    index
+                    *
+                    line_height
                 ),
                 line,
                 font=font,
-                fill=(165, 171, 188, 230)
+                fill=(
+                    165,
+                    171,
+                    188,
+                    235
+                )
             )
 
 
@@ -2449,17 +3312,19 @@ class AutomaticLineSystem(commands.Cog):
         room_definition=None
     ):
 
-        # ====================================================
-        # CANVAS
-        # ====================================================
-
         WIDTH = 1400
         HEIGHT = 800
 
+        # ====================================================
+        # CUSTOM TEMPLATE
+        # ====================================================
+
         if template_attachment:
 
-            template_image = await self.read_image_attachment(
-                template_attachment
+            template_image = (
+                await self.read_image_attachment(
+                    template_attachment
+                )
             )
 
             canvas = self.crop_to_fill(
@@ -2470,14 +3335,20 @@ class AutomaticLineSystem(commands.Cog):
                 )
             )
 
-            # طبقة داكنة خفيفة حتى يندمج المحتوى مع القالب
             dark = Image.new(
                 "RGBA",
                 canvas.size,
-                (5, 7, 12, 65)
+                (
+                    5,
+                    7,
+                    12,
+                    75
+                )
             )
 
-            canvas.alpha_composite(dark)
+            canvas.alpha_composite(
+                dark
+            )
 
         else:
 
@@ -2495,77 +3366,120 @@ class AutomaticLineSystem(commands.Cog):
                 )
             )
 
-            # =================================================
-            # GRADIENT-LIKE PANELS
-            # =================================================
+            draw = ImageDraw.Draw(
+                canvas
+            )
 
-            draw = ImageDraw.Draw(canvas)
+            # =================================================
+            # MAIN CARD
+            # =================================================
 
             draw.rounded_rectangle(
                 (
-                    30,
-                    30,
-                    WIDTH - 30,
-                    HEIGHT - 30
+                    25,
+                    25,
+                    WIDTH - 25,
+                    HEIGHT - 25
                 ),
-                radius=42,
-                fill=(13, 16, 24, 255),
-                outline=(40, 44, 58, 255),
+                radius=45,
+                fill=(
+                    12,
+                    15,
+                    23,
+                    255
+                ),
+                outline=(
+                    45,
+                    49,
+                    65,
+                    255
+                ),
                 width=2
             )
 
-            # وهج بنفسجي خلفي
+            # =================================================
+            # PURPLE / BLUE GLOW
+            # =================================================
+
             glow = Image.new(
                 "RGBA",
                 canvas.size,
-                (0, 0, 0, 0)
+                (
+                    0,
+                    0,
+                    0,
+                    0
+                )
             )
 
-            glow_draw = ImageDraw.Draw(glow)
-
-            glow_draw.ellipse(
-                (
-                    870,
-                    -180,
-                    1450,
-                    390
-                ),
-                fill=(124, 92, 255, 70)
+            glow_draw = ImageDraw.Draw(
+                glow
             )
 
             glow_draw.ellipse(
                 (
+                    800,
                     -250,
-                    530,
-                    450,
+                    1510,
+                    430
+                ),
+                fill=(
+                    124,
+                    92,
+                    255,
+                    75
+                )
+            )
+
+            glow_draw.ellipse(
+                (
+                    -300,
+                    500,
+                    500,
                     1050
                 ),
-                fill=(45, 90, 255, 30)
+                fill=(
+                    40,
+                    100,
+                    255,
+                    35
+                )
             )
 
             glow = glow.filter(
-                ImageFilter.GaussianBlur(90)
+                ImageFilter.GaussianBlur(
+                    100
+                )
             )
 
-            canvas.alpha_composite(glow)
+            canvas.alpha_composite(
+                glow
+            )
 
-            # خطوط زخرفية بسيطة
-            draw = ImageDraw.Draw(canvas)
+            draw = ImageDraw.Draw(
+                canvas
+            )
 
             draw.rounded_rectangle(
                 (
-                    65,
-                    65,
-                    WIDTH - 65,
-                    HEIGHT - 65
+                    55,
+                    55,
+                    WIDTH - 55,
+                    HEIGHT - 55
                 ),
-                radius=32,
-                outline=(124, 92, 255, 40),
+                radius=35,
+                outline=(
+                    124,
+                    92,
+                    255,
+                    45
+                ),
                 width=2
             )
 
-
-        draw = ImageDraw.Draw(canvas)
+        draw = ImageDraw.Draw(
+            canvas
+        )
 
         # ====================================================
         # BANNER
@@ -2573,8 +3487,10 @@ class AutomaticLineSystem(commands.Cog):
 
         if banner_attachment:
 
-            banner = await self.read_image_attachment(
-                banner_attachment
+            banner = (
+                await self.read_image_attachment(
+                    banner_attachment
+                )
             )
 
             banner = self.crop_to_fill(
@@ -2585,14 +3501,15 @@ class AutomaticLineSystem(commands.Cog):
                 )
             )
 
-            # Rounded mask
             mask = Image.new(
                 "L",
                 banner.size,
                 0
             )
 
-            mask_draw = ImageDraw.Draw(mask)
+            mask_draw = ImageDraw.Draw(
+                mask
+            )
 
             mask_draw.rounded_rectangle(
                 (
@@ -2608,16 +3525,23 @@ class AutomaticLineSystem(commands.Cog):
             banner_layer = Image.new(
                 "RGBA",
                 banner.size,
-                (0, 0, 0, 0)
+                (
+                    0,
+                    0,
+                    0,
+                    0
+                )
             )
 
             banner_layer.paste(
                 banner,
-                (0, 0),
+                (
+                    0,
+                    0
+                ),
                 mask
             )
 
-            # ظل
             self.add_soft_shadow(
                 canvas,
                 (
@@ -2627,8 +3551,8 @@ class AutomaticLineSystem(commands.Cog):
                     365
                 ),
                 radius=30,
-                alpha=150,
-                blur=20
+                alpha=155,
+                blur=22
             )
 
             canvas.alpha_composite(
@@ -2639,14 +3563,19 @@ class AutomaticLineSystem(commands.Cog):
                 )
             )
 
-            # Gradient داكن سفلي
+            # تدرج سفلي
             gradient = Image.new(
                 "RGBA",
                 (
                     1270,
                     300
                 ),
-                (0, 0, 0, 0)
+                (
+                    0,
+                    0,
+                    0,
+                    0
+                )
             )
 
             gradient_draw = ImageDraw.Draw(
@@ -2656,11 +3585,16 @@ class AutomaticLineSystem(commands.Cog):
             gradient_draw.rectangle(
                 (
                     0,
-                    190,
+                    175,
                     1270,
                     300
                 ),
-                fill=(5, 7, 12, 165)
+                fill=(
+                    5,
+                    7,
+                    12,
+                    180
+                )
             )
 
             canvas.alpha_composite(
@@ -2681,12 +3615,22 @@ class AutomaticLineSystem(commands.Cog):
                     365
                 ),
                 radius=30,
-                fill=(10, 13, 21, 255),
-                outline=(124, 92, 255, 45),
+                fill=(
+                    10,
+                    13,
+                    21,
+                    255
+                ),
+                outline=(
+                    124,
+                    92,
+                    255,
+                    55
+                ),
                 width=2
             )
 
-            # زخرفة خلفية
+            # زخرفة هندسية
             for x in range(
                 100,
                 1300,
@@ -2700,61 +3644,101 @@ class AutomaticLineSystem(commands.Cog):
                         x + 100,
                         70
                     ),
-                    fill=(124, 92, 255, 12),
+                    fill=(
+                        124,
+                        92,
+                        255,
+                        13
+                    ),
                     width=2
                 )
 
+            draw.ellipse(
+                (
+                    1000,
+                    100,
+                    1180,
+                    280
+                ),
+                outline=(
+                    124,
+                    92,
+                    255,
+                    25
+                ),
+                width=2
+            )
+
+            draw.ellipse(
+                (
+                    1060,
+                    160,
+                    1240,
+                    340
+                ),
+                outline=(
+                    70,
+                    120,
+                    255,
+                    18
+                ),
+                width=2
+            )
 
         # ====================================================
         # HEADER
         # ====================================================
 
         brand_font = self.get_font(
-            24,
+            25,
             bold=True
         )
 
         small_font = self.get_font(
-            16,
+            15,
             bold=False
         )
 
         draw.text(
             (
                 95,
-                90
+                92
             ),
             "TEAM FIME",
             font=brand_font,
-            fill=(245, 247, 251, 235)
+            fill=(
+                245,
+                247,
+                251,
+                240
+            )
         )
 
         draw.text(
             (
-                95,
-                125
+                96,
+                130
             ),
-            "OFFICIAL MESSAGE",
+            "OFFICIAL • FIME",
             font=small_font,
-            fill=(154, 132, 255, 225)
+            fill=(
+                154,
+                132,
+                255,
+                235
+            )
         )
-
 
         # ====================================================
         # AVATAR
         # ====================================================
 
-        avatar_bytes = None
-
         if avatar_attachment:
 
-            avatar_data = await avatar_attachment.read()
-
-            if avatar_data:
-                avatar_bytes = avatar_data
-
-            avatar = await self.read_image_attachment(
-                avatar_attachment
+            avatar = (
+                await self.read_image_attachment(
+                    avatar_attachment
+                )
             )
 
             avatar = self.circle_avatar(
@@ -2762,17 +3746,23 @@ class AutomaticLineSystem(commands.Cog):
                 225
             )
 
-            # إطار خارجي
             ring = Image.new(
                 "RGBA",
                 (
                     255,
                     255
                 ),
-                (0, 0, 0, 0)
+                (
+                    0,
+                    0,
+                    0,
+                    0
+                )
             )
 
-            ring_draw = ImageDraw.Draw(ring)
+            ring_draw = ImageDraw.Draw(
+                ring
+            )
 
             ring_draw.ellipse(
                 (
@@ -2781,8 +3771,18 @@ class AutomaticLineSystem(commands.Cog):
                     248,
                     248
                 ),
-                fill=(7, 8, 13, 255),
-                outline=(124, 92, 255, 255),
+                fill=(
+                    7,
+                    8,
+                    13,
+                    255
+                ),
+                outline=(
+                    124,
+                    92,
+                    255,
+                    255
+                ),
                 width=5
             )
 
@@ -2793,21 +3793,32 @@ class AutomaticLineSystem(commands.Cog):
                     240,
                     240
                 ),
-                outline=(154, 131, 255, 85),
+                outline=(
+                    154,
+                    131,
+                    255,
+                    85
+                ),
                 width=2
             )
 
-            # ظل
             shadow = Image.new(
                 "RGBA",
                 (
                     290,
                     290
                 ),
-                (0, 0, 0, 0)
+                (
+                    0,
+                    0,
+                    0,
+                    0
+                )
             )
 
-            shadow_draw = ImageDraw.Draw(shadow)
+            shadow_draw = ImageDraw.Draw(
+                shadow
+            )
 
             shadow_draw.ellipse(
                 (
@@ -2816,11 +3827,18 @@ class AutomaticLineSystem(commands.Cog):
                     265,
                     270
                 ),
-                fill=(0, 0, 0, 190)
+                fill=(
+                    0,
+                    0,
+                    0,
+                    190
+                )
             )
 
             shadow = shadow.filter(
-                ImageFilter.GaussianBlur(18)
+                ImageFilter.GaussianBlur(
+                    18
+                )
             )
 
             canvas.alpha_composite(
@@ -2849,7 +3867,7 @@ class AutomaticLineSystem(commands.Cog):
 
         else:
 
-            # إذا ما فيه افتار
+            # Avatar placeholder
             draw.rounded_rectangle(
                 (
                     90,
@@ -2858,8 +3876,18 @@ class AutomaticLineSystem(commands.Cog):
                     545
                 ),
                 radius=112,
-                fill=(24, 28, 40, 255),
-                outline=(124, 92, 255, 100),
+                fill=(
+                    24,
+                    28,
+                    40,
+                    255
+                ),
+                outline=(
+                    124,
+                    92,
+                    255,
+                    105
+                ),
                 width=3
             )
 
@@ -2874,16 +3902,20 @@ class AutomaticLineSystem(commands.Cog):
                 380,
                 "F",
                 default_font,
-                (154, 132, 255, 230)
+                (
+                    154,
+                    132,
+                    255,
+                    235
+                )
             )
 
-
         # ====================================================
-        # MAIN PROFILE TEXT
+        # PROFILE TEXT
         # ====================================================
 
         title_font = self.get_font(
-            38,
+            39,
             bold=True
         )
 
@@ -2899,58 +3931,69 @@ class AutomaticLineSystem(commands.Cog):
             ),
             "Fime",
             font=title_font,
-            fill=(245, 247, 251, 255)
+            fill=(
+                245,
+                247,
+                251,
+                255
+            )
         )
 
         draw.text(
             (
                 390,
-                390
+                392
             ),
             "Team Fime • Community",
             font=subtitle_font,
-            fill=(151, 158, 176, 230)
+            fill=(
+                151,
+                158,
+                176,
+                235
+            )
         )
 
-        # نقطة هوية
-        draw.ellipse(
+        # هوية صغيرة
+        draw.rounded_rectangle(
             (
                 390,
-                440,
-                402,
-                452
+                435,
+                615,
+                468
             ),
-            fill=(124, 92, 255, 255)
+            radius=16,
+            fill=(
+                124,
+                92,
+                255,
+                35
+            ),
+            outline=(
+                124,
+                92,
+                255,
+                75
+            ),
+            width=1
         )
 
         draw.text(
             (
-                420,
-                430
+                410,
+                442
             ),
-            "Official profile card",
-            font=small_font,
-            fill=(124, 92, 255, 235)
-        )
-
-
-        # ====================================================
-        # MESSAGE AREA
-        # ====================================================
-
-        message_title_font = self.get_font(
-            17,
-            bold=True
-        )
-
-        draw.text(
-            (
-                390,
-                480
+            "OFFICIAL PROFILE",
+            font=self.get_font(
+                13,
+                bold=True
             ),
-            "MESSAGE",
-            font=message_title_font,
-            fill=(130, 137, 156, 220)
+            fill=(
+                154,
+                132,
+                255,
+                240
+            )
         )
 
         # ====================================================
@@ -2964,9 +4007,106 @@ class AutomaticLineSystem(commands.Cog):
                 room_definition
             )
 
+        else:
+
+            # Empty information panel
+            draw.rounded_rectangle(
+                (
+                    420,
+                    500,
+                    1335,
+                    625
+                ),
+                radius=24,
+                fill=(
+                    15,
+                    18,
+                    27,
+                    220
+                ),
+                outline=(
+                    50,
+                    54,
+                    70,
+                    180
+                ),
+                width=2
+            )
+
+            draw.text(
+                (
+                    450,
+                    530
+                ),
+                "FIME COMMUNITY",
+                font=self.get_font(
+                    17,
+                    bold=True
+                ),
+                fill=(
+                    124,
+                    92,
+                    255,
+                    235
+                )
+            )
+
+            draw.text(
+                (
+                    450,
+                    565
+                ),
+                "Official message • Team Fime",
+                font=self.get_font(
+                    21,
+                    bold=False
+                ),
+                fill=(
+                    180,
+                    185,
+                    198,
+                    225
+                )
+            )
 
         # ====================================================
-        # BOTTOM BRAND BAR
+        # DECORATIVE ACCENT
+        # ====================================================
+
+        draw.rounded_rectangle(
+            (
+                90,
+                620,
+                315,
+                628
+            ),
+            radius=4,
+            fill=(
+                124,
+                92,
+                255,
+                180
+            )
+        )
+
+        draw.rounded_rectangle(
+            (
+                90,
+                620,
+                180,
+                628
+            ),
+            radius=4,
+            fill=(
+                80,
+                125,
+                255,
+                230
+            )
+        )
+
+        # ====================================================
+        # BOTTOM BAR
         # ====================================================
 
         draw.rounded_rectangle(
@@ -2974,49 +4114,75 @@ class AutomaticLineSystem(commands.Cog):
                 65,
                 700,
                 1335,
-                735
+                745
             ),
-            radius=17,
-            fill=(19, 22, 32, 230)
+            radius=20,
+            fill=(
+                18,
+                21,
+                31,
+                235
+            ),
+            outline=(
+                45,
+                49,
+                65,
+                200
+            ),
+            width=1
         )
 
         draw.rounded_rectangle(
             (
                 65,
                 700,
-                250,
-                735
+                245,
+                745
             ),
-            radius=17,
-            fill=(124, 92, 255, 220)
+            radius=20,
+            fill=(
+                124,
+                92,
+                255,
+                225
+            )
         )
 
         draw.text(
             (
-                88,
-                707
+                92,
+                713
             ),
             "FIME",
             font=self.get_font(
                 16,
                 bold=True
             ),
-            fill=(255, 255, 255, 245)
+            fill=(
+                255,
+                255,
+                255,
+                250
+            )
         )
 
         draw.text(
             (
-                1080,
-                707
+                1050,
+                714
             ),
             "TEAM FIME",
             font=self.get_font(
-                15,
+                14,
                 bold=True
             ),
-            fill=(156, 162, 178, 220)
+            fill=(
+                156,
+                162,
+                178,
+                220
+            )
         )
-
 
         # ====================================================
         # OUTPUT
@@ -3024,7 +4190,9 @@ class AutomaticLineSystem(commands.Cog):
 
         output = io.BytesIO()
 
-        canvas.convert("RGB").save(
+        canvas.convert(
+            "RGB"
+        ).save(
             output,
             format="PNG",
             optimize=True
@@ -3033,32 +4201,6 @@ class AutomaticLineSystem(commands.Cog):
         output.seek(0)
 
         return output
-
-
-    async def create_avatar_output(
-        self,
-        avatar_attachment
-    ):
-
-        data = await avatar_attachment.read()
-
-        if not data:
-            return None
-
-        return data
-
-
-    async def create_banner_output(
-        self,
-        banner_attachment
-    ):
-
-        data = await banner_attachment.read()
-
-        if not data:
-            return None
-
-        return data
 
 
     # ========================================================
@@ -3074,8 +4216,7 @@ class AutomaticLineSystem(commands.Cog):
         channel="الروم الذي تريد إرسال الرسالة فيه",
         avatar="الافتار الذي سيظهر في التصميم",
         banner="البنر الذي سيظهر في التصميم",
-        template="قالب مخصص اختياري",
-        room_definition="تعريف اختياري للروم يظهر في قائمة البروفايل"
+        template="قالب مخصص اختياري"
     )
     async def say(
         self,
@@ -3084,8 +4225,7 @@ class AutomaticLineSystem(commands.Cog):
         channel: discord.TextChannel = None,
         avatar: discord.Attachment = None,
         banner: discord.Attachment = None,
-        template: discord.Attachment = None,
-        room_definition: str = None
+        template: discord.Attachment = None
     ):
 
         if await self.silently_ignore_if_not_owner(
@@ -3124,20 +4264,20 @@ class AutomaticLineSystem(commands.Cog):
 
             return
 
-        if room_definition:
+        # ====================================================
+        # GET SAVED ROOM DEFINITION
+        # ====================================================
 
-            room_definition = str(
-                room_definition
-            ).strip()
+        cfg = self.get_config(
+            interaction.guild.id
+        )
 
-            if len(room_definition) > 500:
-
-                await interaction.response.send_message(
-                    "❌ تعريف الروم لا يمكن أن يتجاوز 500 حرف.",
-                    ephemeral=True
-                )
-
-                return
+        room_definition = str(
+            cfg.get(
+                "say_room_definition",
+                ""
+            ) or ""
+        ).strip()
 
         target_channel = (
             channel
@@ -3167,7 +4307,9 @@ class AutomaticLineSystem(commands.Cog):
 
             return
 
-        permissions = target_channel.permissions_for(me)
+        permissions = target_channel.permissions_for(
+            me
+        )
 
         if not permissions.view_channel:
 
@@ -3187,20 +4329,12 @@ class AutomaticLineSystem(commands.Cog):
 
             return
 
-        has_profile_data = any(
-            (
-                avatar,
-                banner,
-                template,
-                room_definition
-            )
-        )
-
         await interaction.response.defer(
             ephemeral=True
         )
 
         generated_file = None
+
         avatar_bytes = None
         banner_bytes = None
         full_profile_bytes = None
@@ -3210,9 +4344,22 @@ class AutomaticLineSystem(commands.Cog):
         # ====================================================
 
         for attachment, name in (
-            (avatar, "الافتار"),
-            (banner, "البنر"),
-            (template, "القالب")
+
+            (
+                avatar,
+                "الافتار"
+            ),
+
+            (
+                banner,
+                "البنر"
+            ),
+
+            (
+                template,
+                "القالب"
+            )
+
         ):
 
             if attachment and not self.is_supported_image(
@@ -3231,8 +4378,19 @@ class AutomaticLineSystem(commands.Cog):
                 return
 
         # ====================================================
-        # BUILD PROFILE
+        # PROFILE
         # ====================================================
+
+        # إذا فيه صورة أو تعريف محفوظ، يتم إنشاء بطاقة.
+        # وإذا ما فيه شيء، تبقى /say رسالة عادية.
+        has_profile_data = any(
+            (
+                avatar,
+                banner,
+                template,
+                room_definition
+            )
+        )
 
         if has_profile_data:
 
@@ -3252,20 +4410,28 @@ class AutomaticLineSystem(commands.Cog):
 
                 if avatar:
 
-                    avatar_bytes = await avatar.read()
+                    avatar_bytes = (
+                        await avatar.read()
+                    )
 
                 if banner:
 
-                    banner_bytes = await banner.read()
+                    banner_bytes = (
+                        await banner.read()
+                    )
 
-                generated = await self.create_say_image(
-                    avatar_attachment=avatar,
-                    banner_attachment=banner,
-                    template_attachment=template,
-                    room_definition=room_definition
+                generated = (
+                    await self.create_say_image(
+                        avatar_attachment=avatar,
+                        banner_attachment=banner,
+                        template_attachment=template,
+                        room_definition=room_definition
+                    )
                 )
 
-                full_profile_bytes = generated.getvalue()
+                full_profile_bytes = (
+                    generated.getvalue()
+                )
 
                 generated.seek(0)
 
@@ -3298,7 +4464,7 @@ class AutomaticLineSystem(commands.Cog):
                 return
 
         # ====================================================
-        # SEND MESSAGE
+        # SEND
         # ====================================================
 
         try:
@@ -3311,7 +4477,6 @@ class AutomaticLineSystem(commands.Cog):
                 )
 
                 view = SayProfileView(
-                    cog=self,
                     avatar_bytes=avatar_bytes,
                     banner_bytes=banner_bytes,
                     full_profile_bytes=full_profile_bytes,
@@ -3382,15 +4547,13 @@ class AutomaticLineSystem(commands.Cog):
         if generated_file:
 
             menu_text = (
-                "\n"
-                "🎛️ **تمت إضافة قائمة البروفايل تحت الرسالة:**\n"
-                "🖼️ الافتار\n"
-                "🎨 البنر\n"
-                "👤 البروفايل كامل"
+                "\n\n"
+                "🎛️ **قائمة البروفايل تمت إضافتها تحت الرسالة.**\n"
+                "👤 أخذ الافتار\n"
+                "🎨 أخذ البنر\n"
+                "🪪 أخذ البروفايل كامل\n"
+                "📖 تعريف الروم"
             )
-
-            if room_definition:
-                menu_text += "\n📖 تعريف الروم"
 
         else:
 
@@ -3411,7 +4574,10 @@ class AutomaticLineSystem(commands.Cog):
     # ========================================================
 
     @commands.Cog.listener()
-    async def on_message(self, message):
+    async def on_message(
+        self,
+        message
+    ):
 
         if message.author.bot:
             return
@@ -3436,9 +4602,11 @@ class AutomaticLineSystem(commands.Cog):
         # TOP KEYWORDS
         # ====================================================
 
-        top_handled = await self.handle_top_keyword(
-            message,
-            cfg
+        top_handled = (
+            await self.handle_top_keyword(
+                message,
+                cfg
+            )
         )
 
         if top_handled:
@@ -3457,10 +4625,15 @@ class AutomaticLineSystem(commands.Cog):
         # LINE SYSTEM
         # ====================================================
 
-        if not cfg.get("enabled"):
+        if not cfg.get(
+            "enabled"
+        ):
+
             return
 
-        image_url = cfg.get("image_url")
+        image_url = cfg.get(
+            "image_url"
+        )
 
         if not image_url:
             return
@@ -3474,6 +4647,7 @@ class AutomaticLineSystem(commands.Cog):
             if message.channel.id != int(
                 configured_channel_id
             ):
+
                 return
 
         me = message.guild.me
@@ -3481,7 +4655,9 @@ class AutomaticLineSystem(commands.Cog):
         if me is None:
             return
 
-        permissions = message.channel.permissions_for(me)
+        permissions = message.channel.permissions_for(
+            me
+        )
 
         if not permissions.view_channel:
             return
@@ -3525,7 +4701,10 @@ class AutomaticLineSystem(commands.Cog):
     # JOIN MENTION SYSTEM
     # ========================================================
 
-    async def send_join_mention(self, member):
+    async def send_join_mention(
+        self,
+        member
+    ):
 
         guild = member.guild
 
@@ -3536,6 +4715,7 @@ class AutomaticLineSystem(commands.Cog):
         if not cfg.get(
             "join_mention_enabled"
         ):
+
             return
 
         channel_id = cfg.get(
@@ -3563,7 +4743,9 @@ class AutomaticLineSystem(commands.Cog):
         if me is None:
             return
 
-        permissions = channel.permissions_for(me)
+        permissions = channel.permissions_for(
+            me
+        )
 
         if not permissions.view_channel:
             return
@@ -3615,11 +4797,14 @@ class AutomaticLineSystem(commands.Cog):
 
         try:
 
-            await asyncio.sleep(duration)
+            await asyncio.sleep(
+                duration
+            )
 
             await sent_message.delete()
 
         except discord.NotFound:
+
             pass
 
         except Exception as error:
@@ -3635,12 +4820,17 @@ class AutomaticLineSystem(commands.Cog):
     # ========================================================
 
     @commands.Cog.listener()
-    async def on_member_join(self, member):
+    async def on_member_join(
+        self,
+        member
+    ):
 
         if member.bot:
             return
 
-        await asyncio.sleep(0.5)
+        await asyncio.sleep(
+            0.5
+        )
 
         await self.send_join_mention(
             member
@@ -3681,7 +4871,9 @@ class AutomaticLineSystem(commands.Cog):
 
             return
 
-        permissions = channel.permissions_for(me)
+        permissions = channel.permissions_for(
+            me
+        )
 
         if not permissions.view_channel:
 
@@ -3705,11 +4897,17 @@ class AutomaticLineSystem(commands.Cog):
             guild.id
         )
 
-        cfg["join_mention_channel_id"] = channel.id
+        cfg["join_mention_channel_id"] = (
+            channel.id
+        )
+
         cfg["join_mention_enabled"] = True
+
         cfg["join_mention_duration"] = 2
 
-        save_config(self.config)
+        save_config(
+            self.config
+        )
 
         await interaction.response.send_message(
             (
@@ -3728,7 +4926,10 @@ class AutomaticLineSystem(commands.Cog):
         name="منشن-إيقاف",
         description="إيقاف منشن الأعضاء الجدد"
     )
-    async def mention_off(self, interaction):
+    async def mention_off(
+        self,
+        interaction
+    ):
 
         if await self.silently_ignore_if_not_owner(
             interaction
@@ -3744,7 +4945,9 @@ class AutomaticLineSystem(commands.Cog):
 
         cfg["join_mention_enabled"] = False
 
-        save_config(self.config)
+        save_config(
+            self.config
+        )
 
         await interaction.response.send_message(
             "🛑 تم إيقاف منشن دخول الأعضاء.",
@@ -3756,7 +4959,10 @@ class AutomaticLineSystem(commands.Cog):
         name="منشن-حالة",
         description="عرض حالة منشن الأعضاء الجدد"
     )
-    async def mention_status(self, interaction):
+    async def mention_status(
+        self,
+        interaction
+    ):
 
         if await self.silently_ignore_if_not_owner(
             interaction
@@ -3783,8 +4989,10 @@ class AutomaticLineSystem(commands.Cog):
 
             try:
 
-                channel = interaction.guild.get_channel(
-                    int(channel_id)
+                channel = (
+                    interaction.guild.get_channel(
+                        int(channel_id)
+                    )
                 )
 
             except Exception:
@@ -3842,7 +5050,9 @@ class AutomaticLineSystem(commands.Cog):
         cfg["join_mention_enabled"] = False
         cfg["join_mention_channel_id"] = None
 
-        save_config(self.config)
+        save_config(
+            self.config
+        )
 
         await interaction.response.send_message(
             (
@@ -3857,7 +5067,9 @@ class AutomaticLineSystem(commands.Cog):
 # SETUP
 # ============================================================
 
-async def setup(bot):
+async def setup(
+    bot
+):
 
     for cog in bot.cogs.values():
 
@@ -3874,7 +5086,9 @@ async def setup(bot):
             return
 
     await bot.add_cog(
-        AutomaticLineSystem(bot)
+        AutomaticLineSystem(
+            bot
+        )
     )
 
     print(
