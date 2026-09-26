@@ -6,6 +6,8 @@
 # Temporary Join Mention System
 # +
 # Fime Keyword Response System
+# +
+# GIF Support
 # ============================================================
 
 from __future__ import annotations
@@ -55,14 +57,8 @@ DEFAULT_GUILD_CONFIG = {
     # FIME KEYWORD SYSTEM
     # ========================================================
 
-    # هل نظام كلمة "فيم" مفعل؟
     "fime_word_enabled": True,
-
-    # الرسالة التي يرسلها البوت عند كتابة "فيم"
     "fime_word_response": "هلا؟ وش تبي يا فايم؟",
-
-    # هل نسمح بكلمة "فيمي" أيضًا؟
-    # False = فقط "فيم"
     "fime_word_accept_fimi": False,
 }
 
@@ -149,7 +145,7 @@ class AutomaticLineSystem(commands.Cog):
         self.config = load_config()
 
         print(
-            "✅ bot5 — Automatic Line + Join Mention + Fime Keyword loaded."
+            "✅ bot5 — Automatic Line + Join Mention + Fime Keyword + GIF loaded."
         )
 
 
@@ -240,19 +236,20 @@ class AutomaticLineSystem(commands.Cog):
         content_type = (
             attachment.content_type
             or ""
-        ).lower()
+        ).lower().split(";")[0].strip()
 
         filename = (
             attachment.filename
             or ""
-        ).lower()
+        ).lower().strip()
 
         supported_types = {
             "image/png",
             "image/jpeg",
             "image/jpg",
             "image/webp",
-            "image/gif"
+            "image/gif",
+            "image/apng"
         }
 
         supported_extensions = (
@@ -260,7 +257,8 @@ class AutomaticLineSystem(commands.Cog):
             ".jpg",
             ".jpeg",
             ".webp",
-            ".gif"
+            ".gif",
+            ".apng"
         )
 
         return (
@@ -269,6 +267,40 @@ class AutomaticLineSystem(commands.Cog):
                 supported_extensions
             )
         )
+
+
+    # ========================================================
+    # STORAGE FILENAME
+    # ========================================================
+
+    def get_storage_filename(
+        self,
+        attachment: discord.Attachment
+    ):
+
+        original_name = (
+            attachment.filename
+            or ""
+        ).strip()
+
+        lower_name = original_name.lower()
+
+        if lower_name.endswith(".gif"):
+            return "fime-line.gif"
+
+        if lower_name.endswith(".apng"):
+            return "fime-line.apng"
+
+        if lower_name.endswith(".webp"):
+            return "fime-line.webp"
+
+        if lower_name.endswith(".jpg"):
+            return "fime-line.jpg"
+
+        if lower_name.endswith(".jpeg"):
+            return "fime-line.jpeg"
+
+        return "fime-line.png"
 
 
     # ========================================================
@@ -392,7 +424,7 @@ class AutomaticLineSystem(commands.Cog):
             )
 
         # ----------------------------------------------------
-        # Download image
+        # Download image / GIF
         # ----------------------------------------------------
 
         image_bytes = await image_attachment.read()
@@ -404,18 +436,23 @@ class AutomaticLineSystem(commands.Cog):
             )
 
         # ----------------------------------------------------
-        # Upload permanent storage copy
+        # Keep GIF as GIF
         # ----------------------------------------------------
+
+        storage_filename = self.get_storage_filename(
+            image_attachment
+        )
 
         file = discord.File(
             fp=io.BytesIO(
                 image_bytes
             ),
-            filename=(
-                image_attachment.filename
-                or "fime-line.png"
-            )
+            filename=storage_filename
         )
+
+        # ----------------------------------------------------
+        # Upload permanent storage copy
+        # ----------------------------------------------------
 
         message = await storage_channel.send(
             "🖼️ **Fime Line Image Storage**",
@@ -539,7 +576,7 @@ class AutomaticLineSystem(commands.Cog):
                 (
                     "❌ أرسل صورة بصيغة "
                     "`PNG` أو `JPG` أو `JPEG` "
-                    "أو `WEBP` أو `GIF`."
+                    "أو `WEBP` أو `GIF` أو `APNG`."
                 ),
                 ephemeral=True
             )
@@ -880,7 +917,6 @@ class AutomaticLineSystem(commands.Cog):
 
         value = str(content or "").strip()
 
-        # إزالة المسافات الزائدة فقط
         value = " ".join(
             value.split()
         )
@@ -1197,10 +1233,6 @@ class AutomaticLineSystem(commands.Cog):
         self,
         message: discord.Message
     ):
-
-        # ----------------------------------------------------
-        # Ignore bots
-        # ----------------------------------------------------
 
         if message.author.bot:
             return
@@ -1775,5 +1807,5 @@ async def setup(bot):
 
     print(
         "✅ Team Fime bot5 — "
-        "Automatic Line + Join Mention + Fime Keyword loaded."
+        "Automatic Line + Join Mention + Fime Keyword + GIF loaded."
     )
