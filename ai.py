@@ -410,34 +410,69 @@ class ServerKnowledgeManager:
         new_rooms = {}
 
         for channel in guild.channels:
-            if not isinstance(channel, (discord.TextChannel, discord.ForumChannel, discord.CategoryChannel)):
+            if not isinstance(
+                channel,
+                (
+                    discord.TextChannel,
+                    discord.ForumChannel,
+                    discord.CategoryChannel
+                )
+            ):
                 continue
 
             category_name = ""
             category_id = None
-            if isinstance(channel, discord.CategoryChannel):
+
+            if isinstance(
+                channel,
+                discord.CategoryChannel
+            ):
                 category_name = channel.name
                 category_id = channel.id
+
             elif channel.category:
                 category_name = channel.category.name
                 category_id = channel.category.id
 
-            if isinstance(channel, discord.CategoryChannel):
+            if isinstance(
+                channel,
+                discord.CategoryChannel
+            ):
                 channel_type = "قسم"
-            elif isinstance(channel, discord.ForumChannel):
+
+            elif isinstance(
+                channel,
+                discord.ForumChannel
+            ):
                 channel_type = "منتدى"
+
             else:
                 channel_type = "روم نصي"
 
-            old = old_rooms.get(str(channel.id), {})
+            old = old_rooms.get(
+                str(channel.id),
+                {}
+            )
+
             if not isinstance(old, dict):
                 old = {}
 
             topic = ""
-            if isinstance(channel, discord.TextChannel):
-                topic = (channel.topic or "").strip()[:500]
 
-            manual_description = (old.get("description", "") or "").strip()[:500]
+            if isinstance(
+                channel,
+                discord.TextChannel
+            ):
+                topic = (
+                    channel.topic or ""
+                ).strip()[:500]
+
+            manual_description = (
+                old.get(
+                    "description",
+                    ""
+                ) or ""
+            ).strip()[:500]
 
             new_rooms[str(channel.id)] = {
                 "name": channel.name,
@@ -446,15 +481,30 @@ class ServerKnowledgeManager:
                 "category": category_name,
                 "category_id": category_id,
                 "type": channel_type,
-                "position": getattr(channel, "position", 0),
-                "nsfw": bool(getattr(channel, "nsfw", False)),
+                "position": getattr(
+                    channel,
+                    "position",
+                    0
+                ),
+                "nsfw": bool(
+                    getattr(
+                        channel,
+                        "nsfw",
+                        False
+                    )
+                ),
                 "mention": f"<#{channel.id}>"
             }
 
         cfg["rooms"] = new_rooms
         cfg["server_name"] = guild.name
-        cfg["last_scan"] = int(asyncio.get_running_loop().time())
+
+        cfg["last_scan"] = int(
+            asyncio.get_running_loop().time()
+        )
+
         self.save()
+
         return len(new_rooms)
 
     def get_manual_description(
@@ -490,73 +540,186 @@ class ServerKnowledgeManager:
         current_channel=None
     ):
 
-        cfg = self.get(guild.id)
-        current_channel_id = current_channel.id if current_channel else None
+        cfg = self.get(
+            guild.id
+        )
+
+        current_channel_id = (
+            current_channel.id
+            if current_channel
+            else None
+        )
 
         channels = [
-            channel for channel in guild.channels
-            if isinstance(channel, (discord.TextChannel, discord.ForumChannel))
+            channel
+            for channel in guild.channels
+            if isinstance(
+                channel,
+                (
+                    discord.TextChannel,
+                    discord.ForumChannel
+                )
+            )
         ]
 
         if current_channel_id is not None:
-            channels.sort(key=lambda c: 0 if c.id == current_channel_id else 1)
+
+            channels.sort(
+                key=lambda c:
+                0
+                if c.id == current_channel_id
+                else 1
+            )
 
         room_lines = []
+
         for channel in channels:
-            category_name = channel.category.name if channel.category else "بدون قسم"
-            stored = cfg["rooms"].get(str(channel.id), {})
-            if not isinstance(stored, dict):
+
+            category_name = (
+                channel.category.name
+                if channel.category
+                else "بدون قسم"
+            )
+
+            stored = cfg["rooms"].get(
+                str(channel.id),
+                {}
+            )
+
+            if not isinstance(
+                stored,
+                dict
+            ):
                 stored = {}
 
-            topic = (channel.topic or "").strip() if isinstance(channel, discord.TextChannel) else ""
-            description = (stored.get("description", "") or "").strip()
-            channel_type = "منتدى" if isinstance(channel, discord.ForumChannel) else "روم نصي"
-            marker = " ← الروم الحالي" if channel.id == current_channel_id else ""
+            topic = (
+                (channel.topic or "").strip()
+                if isinstance(
+                    channel,
+                    discord.TextChannel
+                )
+                else ""
+            )
+
+            description = (
+                stored.get(
+                    "description",
+                    ""
+                ) or ""
+            ).strip()
+
+            channel_type = (
+                "منتدى"
+                if isinstance(
+                    channel,
+                    discord.ForumChannel
+                )
+                else "روم نصي"
+            )
+
+            marker = (
+                " ← الروم الحالي"
+                if channel.id == current_channel_id
+                else ""
+            )
 
             line = (
                 f"- #{channel.name} → <#{channel.id}>"
                 f" | القسم: {category_name}"
                 f" | النوع: {channel_type}{marker}"
             )
+
             if topic:
-                line += f" | Topic: {topic[:300]}"
+                line += (
+                    f" | Topic: {topic[:300]}"
+                )
+
             if description:
-                line += f" | ملاحظة: {description[:300]}"
-            room_lines.append(line)
+                line += (
+                    f" | ملاحظة: "
+                    f"{description[:300]}"
+                )
+
+            room_lines.append(
+                line
+            )
 
         if len(room_lines) > 120:
             room_lines = room_lines[:120]
 
-        rooms_text = "\n".join(room_lines) if room_lines else "لا توجد رومات نصية ظاهرة لفيمي."
-        description = cfg.get("description") or "لا يوجد وصف مخصص للسيرفر."
+        rooms_text = (
+            "\n".join(room_lines)
+            if room_lines
+            else
+            "لا توجد رومات نصية ظاهرة لفيمي."
+        )
+
+        description = (
+            cfg.get("description")
+            or
+            "لا يوجد وصف مخصص للسيرفر."
+        )
 
         owner = guild.owner
+
         owner_text = (
-            f"{owner.display_name} (ID: {owner.id})"
+            f"{owner.display_name} "
+            f"(ID: {owner.id})"
             if owner
-            else f"غير معروف (Guild Owner ID: {guild.owner_id})"
+            else
+            f"غير معروف "
+            f"(Guild Owner ID: {guild.owner_id})"
         )
 
         current_text = ""
+
         if current_channel is not None:
-            current_category = current_channel.category.name if getattr(current_channel, "category", None) else "بدون قسم"
-            current_topic = (current_channel.topic or "").strip() if isinstance(current_channel, discord.TextChannel) else ""
+
+            current_category = (
+                current_channel.category.name
+                if getattr(
+                    current_channel,
+                    "category",
+                    None
+                )
+                else "بدون قسم"
+            )
+
+            current_topic = (
+                (
+                    current_channel.topic
+                    or ""
+                ).strip()
+                if isinstance(
+                    current_channel,
+                    discord.TextChannel
+                )
+                else ""
+            )
+
             current_text = (
                 "\n\nالروم الذي تدور فيه المحادثة الآن:\n"
-                f"#{current_channel.name} → <#{current_channel.id}>\n"
+                f"#{current_channel.name} "
+                f"→ <#{current_channel.id}>\n"
                 f"القسم: {current_category}\n"
             )
+
             if current_topic:
-                current_text += f"وصف الروم (Topic): {current_topic[:500]}\n"
+                current_text += (
+                    f"وصف الروم (Topic): "
+                    f"{current_topic[:500]}\n"
+                )
 
         return (
             f"معلومات السيرفر الحالي:\n\n"
             f"اسم السيرفر: {guild.name}\n"
             f"Server ID: {guild.id}\n"
             f"صاحب السيرفر: {owner_text}\n"
-            f"عدد الأعضاء: {guild.member_count or 'غير معروف'}\n"
+            f"عدد الأعضاء: "
+            f"{guild.member_count or 'غير معروف'}\n"
             f"وصف السيرفر: {description}\n\n"
-            f"الرومات الحالية في السيرفر:\n{rooms_text}"
+            f"الرومات الحالية في السيرفر:\n"
+            f"{rooms_text}"
             + current_text
             + "\n\nقواعد معرفة السيرفر:\n"
             "- الروم الحالي هو السياق الأقرب للمحادثة.\n"
@@ -583,7 +746,9 @@ class MemoryManager:
         user_id
     ):
 
-        return f"{guild_id}:{user_id}"
+        return (
+            f"{guild_id}:{user_id}"
+        )
 
     def _expired(
         self,
@@ -699,7 +864,9 @@ class MemoryManager:
         guild_id
     ):
 
-        prefix = f"{guild_id}:"
+        prefix = (
+            f"{guild_id}:"
+        )
 
         for key in list(
             self.memory
@@ -1167,9 +1334,26 @@ Secrets
 
 # ============================================================
 # FIME AI COG
+#
+# IMPORTANT:
+# جميع أوامر فيمي الإدارية أصبحت Subcommands تحت /ai
+# لتقليل استهلاك أوامر Slash العالمية.
+#
+# مثال:
+# /ai emoji
+# /ai emoji-reset
+# /ai status
+# /ai server-scan
+# /ai set-channel
+#
+# الوظائف نفسها محفوظة، فقط تم تجميعها تحت /ai.
 # ============================================================
 
-class FimeAI(commands.Cog):
+class FimeAI(
+    commands.GroupCog,
+    group_name="ai",
+    group_description="إدارة وإعدادات فيمي"
+):
 
     def __init__(
         self,
@@ -1185,8 +1369,6 @@ class FimeAI(commands.Cog):
         self.emojis = EmojiManager()
 
         self.api_key_encoding_error = None
-
-        self.commands_synced = False
 
         if GROQ_API_KEY:
 
@@ -1263,39 +1445,11 @@ class FimeAI(commands.Cog):
             else "فشل"
         )
 
+        print(
+            "Slash structure: /ai + subcommands"
+        )
+
         print("=" * 60)
-
-    # ========================================================
-    # READY / COMMAND SYNC
-    # ========================================================
-
-    @commands.Cog.listener()
-    async def on_ready(self):
-
-        if self.commands_synced:
-            return
-
-        try:
-
-            synced = await self.bot.tree.sync()
-
-            self.commands_synced = True
-
-            print(
-                f"✅ Fime AI slash commands synced: "
-                f"{len(synced)}"
-            )
-
-        except Exception as error:
-
-            print(
-                "⚠️ Failed to sync Fime AI commands:"
-            )
-
-            print(
-                f"{type(error).__name__}: "
-                f"{error}"
-            )
 
     # ========================================================
     # ERROR HELPERS
@@ -1752,7 +1906,11 @@ class FimeAI(commands.Cog):
             self.knowledge.build_context(
                 guild,
                 self.bot.user,
-                current_channel=getattr(self, "_current_ai_channel", None)
+                current_channel=getattr(
+                    self,
+                    "_current_ai_channel",
+                    None
+                )
             )
         )
 
@@ -2158,14 +2316,20 @@ class FimeAI(commands.Cog):
 
                 try:
 
-                    self._current_ai_channel = message.channel
+                    self._current_ai_channel = (
+                        message.channel
+                    )
+
                     try:
+
                         answer = await self.ask_ai(
                             guild=message.guild,
                             member=message.author,
                             message=content
                         )
+
                     finally:
+
                         self._current_ai_channel = None
 
                 except Exception as error:
@@ -2278,11 +2442,11 @@ class FimeAI(commands.Cog):
             print("=" * 60)
 
     # ========================================================
-    # /ai-emoji
+    # /ai emoji
     # ========================================================
 
     @app_commands.command(
-        name="ai-emoji",
+        name="emoji",
         description="تحديد الإيموجي الذي يظهر مع ردود فيمي"
     )
     @app_commands.default_permissions(
@@ -2337,11 +2501,11 @@ class FimeAI(commands.Cog):
         )
 
     # ========================================================
-    # /ai-emoji-reset
+    # /ai emoji-reset
     # ========================================================
 
     @app_commands.command(
-        name="ai-emoji-reset",
+        name="emoji-reset",
         description="إرجاع إيموجي فيمي الافتراضي"
     )
     @app_commands.default_permissions(
@@ -2373,11 +2537,11 @@ class FimeAI(commands.Cog):
         )
 
     # ========================================================
-    # /ai-emoji-show
+    # /ai emoji-show
     # ========================================================
 
     @app_commands.command(
-        name="ai-emoji-show",
+        name="emoji-show",
         description="عرض إيموجي فيمي الحالي"
     )
     @app_commands.default_permissions(
@@ -2405,11 +2569,11 @@ class FimeAI(commands.Cog):
         )
 
     # ========================================================
-    # /ai-status
+    # /ai status
     # ========================================================
 
     @app_commands.command(
-        name="ai-status",
+        name="status",
         description="عرض حالة اتصال فيمي"
     )
     @app_commands.default_permissions(
@@ -2521,11 +2685,11 @@ class FimeAI(commands.Cog):
         )
 
     # ========================================================
-    # /ai-memory-clear
+    # /ai memory-clear
     # ========================================================
 
     @app_commands.command(
-        name="ai-memory-clear",
+        name="memory-clear",
         description="مسح ذاكرتك مع فيمي"
     )
     async def ai_memory_clear(
@@ -2553,11 +2717,11 @@ class FimeAI(commands.Cog):
         )
 
     # ========================================================
-    # /ai-reset
+    # /ai reset
     # ========================================================
 
     @app_commands.command(
-        name="ai-reset",
+        name="reset",
         description="مسح ذاكرة عضو"
     )
     @app_commands.default_permissions(
@@ -2597,11 +2761,11 @@ class FimeAI(commands.Cog):
         )
 
     # ========================================================
-    # /ai-channel
+    # /ai channel
     # ========================================================
 
     @app_commands.command(
-        name="ai-channel",
+        name="channel",
         description="معرفة روم فيمي الحالي"
     )
     @app_commands.default_permissions(
@@ -2663,11 +2827,11 @@ class FimeAI(commands.Cog):
             )
 
     # ========================================================
-    # /ai-server-info
+    # /ai server-info
     # ========================================================
 
     @app_commands.command(
-        name="ai-server-info",
+        name="server-info",
         description="تحديث وصف السيرفر عند فيمي"
     )
     @app_commands.default_permissions(
@@ -2693,11 +2857,11 @@ class FimeAI(commands.Cog):
         )
 
     # ========================================================
-    # /ai-server-scan
+    # /ai server-scan
     # ========================================================
 
     @app_commands.command(
-        name="ai-server-scan",
+        name="server-scan",
         description="فيمي يتعرف تلقائيًا على رومات السيرفر"
     )
     @app_commands.default_permissions(
@@ -2726,11 +2890,11 @@ class FimeAI(commands.Cog):
         )
 
     # ========================================================
-    # /ai-rooms
+    # /ai rooms
     # ========================================================
 
     @app_commands.command(
-        name="ai-rooms",
+        name="rooms",
         description="عرض الرومات التي يعرفها فيمي"
     )
     @app_commands.default_permissions(
@@ -2826,11 +2990,11 @@ class FimeAI(commands.Cog):
         )
 
     # ========================================================
-    # /ai-room-add
+    # /ai room-add
     # ========================================================
 
     @app_commands.command(
-        name="ai-room-add",
+        name="room-add",
         description="إضافة وصف مخصص لروم عند فيمي"
     )
     @app_commands.default_permissions(
@@ -2872,11 +3036,11 @@ class FimeAI(commands.Cog):
         )
 
     # ========================================================
-    # /ai-room-remove
+    # /ai room-remove
     # ========================================================
 
     @app_commands.command(
-        name="ai-room-remove",
+        name="room-remove",
         description="حذف معلومات روم من معرفة فيمي"
     )
     @app_commands.default_permissions(
@@ -2918,11 +3082,11 @@ class FimeAI(commands.Cog):
         )
 
     # ========================================================
-    # /ai-knowledge
+    # /ai knowledge
     # ========================================================
 
     @app_commands.command(
-        name="ai-knowledge",
+        name="knowledge",
         description="عرض معلومات السيرفر التي يعرفها فيمي"
     )
     @app_commands.default_permissions(
@@ -3029,11 +3193,11 @@ class FimeAI(commands.Cog):
         )
 
     # ========================================================
-    # /ai-set-channel
+    # /ai set-channel
     # ========================================================
 
     @app_commands.command(
-        name="ai-set-channel",
+        name="set-channel",
         description="تحديد روم فيمي لهذا السيرفر"
     )
     @app_commands.default_permissions(
