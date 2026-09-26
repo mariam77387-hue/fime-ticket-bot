@@ -25,7 +25,7 @@ import aiohttp
 
 load_dotenv()
 TOKEN = os.getenv("BOT_TOKEN")
-FALLBACK_IMAGE = "https://c.tenor.com/jnINmQlMNbsAAAAC/tenor.gif"
+FALLBACK_IMAGE = None  # لا تستخدم GIF كصورة احتياطية
 
 intents = discord.Intents.default()
 intents.message_content = True
@@ -160,6 +160,139 @@ def save_search_rooms(
 
 
 search_rooms = load_search_rooms()
+
+SEARCH_HELP_ROOMS_FILE = "bot4_search_help_rooms.json"
+
+
+def load_search_help_rooms():
+    try:
+        path = SEARCH_HELP_ROOMS_FILE
+        if not os.path.exists(path):
+            return {}
+        with open(path, "r", encoding="utf-8") as file:
+            data = json.load(file)
+        return data if isinstance(data, dict) else {}
+    except Exception as e:
+        print(f"❌ Failed to load search help rooms: {e}")
+        return {}
+
+
+def save_search_help_rooms(data):
+    try:
+        with open(SEARCH_HELP_ROOMS_FILE, "w", encoding="utf-8") as file:
+            json.dump(data, file, ensure_ascii=False, indent=2)
+        return True
+    except Exception as e:
+        print(f"❌ Failed to save search help rooms: {e}")
+        return False
+
+
+search_help_rooms = load_search_help_rooms()
+
+
+def get_configured_help_channel_ids(guild_id):
+    value = search_help_rooms.get(str(guild_id), [])
+    if isinstance(value, str):
+        value = [value]
+    if not isinstance(value, list):
+        return []
+    return [str(item) for item in value if str(item).isdigit()]
+
+
+class SearchHelpRoomSelect(discord.ui.Select):
+    def __init__(self, guild, channel_ids):
+        options = []
+        for channel_id in channel_ids[:25]:
+            channel = guild.get_channel(int(channel_id))
+            if channel and isinstance(channel, discord.TextChannel):
+                options.append(
+                    discord.SelectOption(
+                        label=channel.name[:100],
+                        value=str(channel.id),
+                        emoji="📌",
+                    )
+                )
+
+        super().__init__(
+            placeholder="اختر الروم الذي تبي تتوجه له...",
+            min_values=1,
+            max_values=1,
+            options=options,
+        )
+
+    async def callback(self, interaction: discord.Interaction):
+        try:
+            channel = interaction.guild.get_channel(int(self.values[0]))
+        except Exception:
+            channel = None
+
+        if not channel:
+            await interaction.response.send_message(
+                "❌ الروم المحفوظ لم يعد موجودًا.", ephemeral=True
+            )
+            return
+
+        await interaction.response.send_message(
+            f"📍 توجه إلى {channel.mention}",
+            ephemeral=True,
+        )
+
+
+class SearchHelpRoomsView(discord.ui.View):
+    def __init__(self, guild, channel_ids):
+        super().__init__(timeout=120)
+        valid_ids = []
+        for channel_id in channel_ids[:25]:
+            channel = guild.get_channel(int(channel_id))
+            if channel and isinstance(channel, discord.TextChannel):
+                valid_ids.append(str(channel.id))
+        if valid_ids:
+            self.add_item(SearchHelpRoomSelect(guild, valid_ids))
+
+
+class SearchHelpButtonView(discord.ui.View):
+    def __init__(self, guild, requester_id):
+        super().__init__(timeout=120)
+        self.guild_id = guild.id
+        self.requester_id = requester_id
+
+        button = discord.ui.Button(
+            label="توجه إلى الرومات",
+            emoji="📚",
+            style=discord.ButtonStyle.primary,
+        )
+        button.callback = self.open_rooms
+        self.add_item(button)
+
+    async def open_rooms(self, interaction: discord.Interaction):
+        if interaction.user.id != self.requester_id:
+            await interaction.response.send_message(
+                "⚠️ هذا الزر لصاحب البحث فقط.", ephemeral=True
+            )
+            return
+
+        ids = get_configured_help_channel_ids(self.guild_id)
+        if not ids:
+            await interaction.response.send_message(
+                "ℹ️ المالك ما حدد رومات للتوجه لها حتى الآن.",
+                ephemeral=True,
+            )
+            return
+
+        view = SearchHelpRoomsView(interaction.guild, ids)
+        if not view.children:
+            await interaction.response.send_message(
+                "⚠️ الرومات المحددة لم تعد موجودة.", ephemeral=True
+            )
+            return
+
+        await interaction.response.send_message(
+            "📚 **اختر الروم المناسب:**",
+            view=view,
+            ephemeral=True,
+        )
+
+
 
 
 # ============================================================
@@ -1423,9 +1556,15 @@ async def process_auto_search_request(
                 )
 
             await interaction.edit_original_response(
-                content=content,
+                content=(
+                    content
+                    + "\\n\\n📚 **ما لقيت النتيجة؟ توجه للرومات المحددة من المالك:**"
+                ),
                 embed=None,
-                view=None,
+                view=SearchHelpButtonView(
+                    interaction.guild,
+                    requester_id,
+                ),
             )
             return
 
@@ -1616,7 +1755,8 @@ class AutoSearchResultBrowseView(
         )
 
         copy_button = discord.ui.Button(
-            label="Copy",
+            label="نسخ",
+            emoji="📋",
             style=discord.ButtonStyle.success,
             row=1
         )
@@ -2704,6 +2844,26 @@ def format_timestamps(
     )
 
 
+def get_static_image_url(*candidates):
+    """يرجع أول صورة ثابتة صالحة، ويمنع GIF/Tenor/Giphy كصور نتائج."""
+    for candidate in candidates:
+        if not candidate or not isinstance(candidate, str):
+            continue
+        url = candidate.strip()
+        if not validators.url(url):
+            continue
+        lowered = url.lower()
+        parsed = urllib.parse.urlparse(lowered)
+        path = parsed.path or ""
+        host = parsed.netloc or ""
+        if path.endswith((".gif", ".gifv")):
+            continue
+        if "tenor.com" in host or "giphy.com" in host:
+            continue
+        return url
+    return None
+
+
 def create_embed(
     script,
     page,
@@ -2750,9 +2910,17 @@ def create_embed(
                 "https://www.roblox.com"
             )
 
-        script_image = script.get(
-            "image",
-            FALLBACK_IMAGE
+        owner = script.get("user") or script.get("owner") or {}
+        if not isinstance(owner, dict):
+            owner = {}
+        script_image = get_static_image_url(
+            script.get("image"),
+            game.get("imageUrl"),
+            game.get("image"),
+            game.get("thumbnail"),
+            owner.get("image"),
+            owner.get("avatar"),
+            owner.get("avatarUrl"),
         )
 
         views = script.get(
@@ -2915,19 +3083,8 @@ def create_embed(
             inline=False
         )
 
-        if validators.url(
-            script_image
-        ):
-
-            embed.set_image(
-                url=script_image
-            )
-
-        else:
-
-            embed.set_image(
-                url=FALLBACK_IMAGE
-            )
+        if script_image:
+            embed.set_image(url=script_image)
 
     elif api == "rscripts":
 
@@ -3014,9 +3171,10 @@ def create_embed(
             "Unknown"
         )
 
-        user_avatar_url = user.get(
-            "image",
-            FALLBACK_IMAGE
+        user_avatar_url = get_static_image_url(
+            user.get("image"),
+            user.get("avatar"),
+            user.get("avatarUrl"),
         )
 
         embed.add_field(
@@ -3077,28 +3235,21 @@ def create_embed(
             inline=True
         )
 
-        embed.set_author(
-            name=user_name,
-            icon_url=user_avatar_url
-        )
-
-        image_url = script.get(
-            "image"
-        )
-
-        if validators.url(
-            image_url
-        ):
-
-            embed.set_image(
-                url=image_url
+        if user_avatar_url:
+            embed.set_author(
+                name=user_name,
+                icon_url=user_avatar_url
             )
-
         else:
+            embed.set_author(name=user_name)
 
-            embed.set_image(
-                url=FALLBACK_IMAGE
-            )
+        image_url = get_static_image_url(
+            script.get("image"),
+            user_avatar_url,
+        )
+
+        if image_url:
+            embed.set_image(url=image_url)
 
     embed.set_footer(
         text=(
@@ -4076,6 +4227,97 @@ async def slash_show_search_room(
         f"🔎 روم البحث التلقائي الحالي: "
         f"{channel.mention}"
     )
+
+
+# ============================================================
+# SEARCH RESULT HELP ROOMS — OWNER CONFIG
+# ============================================================
+
+@bot.tree.command(
+    name="addsearchhelproom",
+    description="إضافة روم يظهر للعضو إذا لم يجد نتيجة"
+)
+@app_commands.describe(channel="الروم الذي تريد إضافته للقائمة")
+@app_commands.checks.has_permissions(manage_guild=True)
+async def slash_add_search_help_room(
+    interaction: discord.Interaction,
+    channel: discord.TextChannel,
+):
+    guild_key = str(interaction.guild.id)
+    rooms = get_configured_help_channel_ids(interaction.guild.id)
+    if str(channel.id) not in rooms:
+        rooms.append(str(channel.id))
+    search_help_rooms[guild_key] = rooms[:25]
+    save_search_help_rooms(search_help_rooms)
+    await interaction.response.send_message(
+        f"✅ تمت إضافة {channel.mention} لقائمة رومات المساعدة.",
+        ephemeral=True,
+    )
+
+
+@bot.tree.command(
+    name="removesearchhelproom",
+    description="إزالة روم من قائمة رومات المساعدة"
+)
+@app_commands.describe(channel="الروم الذي تريد إزالته")
+@app_commands.checks.has_permissions(manage_guild=True)
+async def slash_remove_search_help_room(
+    interaction: discord.Interaction,
+    channel: discord.TextChannel,
+):
+    guild_key = str(interaction.guild.id)
+    rooms = [
+        item for item in get_configured_help_channel_ids(interaction.guild.id)
+        if str(item) != str(channel.id)
+    ]
+    search_help_rooms[guild_key] = rooms
+    save_search_help_rooms(search_help_rooms)
+    await interaction.response.send_message(
+        f"🗑️ تمت إزالة {channel.mention} من القائمة.",
+        ephemeral=True,
+    )
+
+
+@bot.tree.command(
+    name="searchhelprooms",
+    description="عرض رومات المساعدة المحددة عند عدم وجود نتيجة"
+)
+async def slash_show_search_help_rooms(interaction: discord.Interaction):
+    rooms = []
+    for channel_id in get_configured_help_channel_ids(interaction.guild.id):
+        channel = interaction.guild.get_channel(int(channel_id))
+        if channel:
+            rooms.append(channel.mention)
+    await interaction.response.send_message(
+        "📚 **رومات المساعدة:**\\n" + (", ".join(rooms) if rooms else "لا توجد رومات محددة."),
+        ephemeral=True,
+    )
+
+
+@bot.command(name="اضافة_روم_مساعدة")
+@commands.has_permissions(manage_guild=True)
+async def add_search_help_room_prefix(ctx, channel: discord.TextChannel = None):
+    channel = channel or ctx.channel
+    guild_key = str(ctx.guild.id)
+    rooms = get_configured_help_channel_ids(ctx.guild.id)
+    if str(channel.id) not in rooms:
+        rooms.append(str(channel.id))
+    search_help_rooms[guild_key] = rooms[:25]
+    save_search_help_rooms(search_help_rooms)
+    await ctx.send(f"✅ تمت إضافة {channel.mention} لقائمة رومات المساعدة.")
+
+
+@bot.command(name="حذف_روم_مساعدة")
+@commands.has_permissions(manage_guild=True)
+async def remove_search_help_room_prefix(ctx, channel: discord.TextChannel = None):
+    channel = channel or ctx.channel
+    guild_key = str(ctx.guild.id)
+    search_help_rooms[guild_key] = [
+        item for item in get_configured_help_channel_ids(ctx.guild.id)
+        if str(item) != str(channel.id)
+    ]
+    save_search_help_rooms(search_help_rooms)
+    await ctx.send(f"🗑️ تمت إزالة {channel.mention} من القائمة.")
 
 
 # ============================================================
