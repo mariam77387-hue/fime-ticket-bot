@@ -8,6 +8,8 @@
 # Fime Keyword Response System
 # +
 # GIF Support
+# +
+# TOP SYSTEM — DAY / WEEK / MONTH / ALL
 # ============================================================
 
 from __future__ import annotations
@@ -18,6 +20,7 @@ import json
 import asyncio
 from copy import deepcopy
 from pathlib import Path
+from datetime import datetime, timezone, timedelta
 
 import discord
 from discord.ext import commands
@@ -31,7 +34,10 @@ from discord import app_commands
 OWNER_ID = 1388514481444880549
 
 CONFIG_FILE = Path("bot5_config.json")
+TOP_FILE = Path("bot5_top.json")
 
+# توقيت السعودية UTC+3
+SAUDI_TZ = timezone(timedelta(hours=3))
 
 DEFAULT_GUILD_CONFIG = {
     # ========================================================
@@ -64,7 +70,7 @@ DEFAULT_GUILD_CONFIG = {
 
 
 # ============================================================
-# JSON
+# JSON — CONFIG
 # ============================================================
 
 def load_config():
@@ -133,6 +139,75 @@ def save_config(data):
 
 
 # ============================================================
+# JSON — TOP
+# ============================================================
+
+def load_top():
+
+    try:
+
+        if not TOP_FILE.exists():
+            return {}
+
+        with TOP_FILE.open(
+            "r",
+            encoding="utf-8"
+        ) as file:
+
+            data = json.load(file)
+
+        return data if isinstance(data, dict) else {}
+
+    except Exception as error:
+
+        print(
+            "❌ bot5 top load error:",
+            error
+        )
+
+        return {}
+
+
+def save_top(data):
+
+    temp_file = TOP_FILE.with_suffix(".tmp")
+
+    try:
+
+        with temp_file.open(
+            "w",
+            encoding="utf-8"
+        ) as file:
+
+            json.dump(
+                data,
+                file,
+                ensure_ascii=False,
+                indent=2
+            )
+
+        os.replace(
+            temp_file,
+            TOP_FILE
+        )
+
+    except Exception as error:
+
+        print(
+            "❌ bot5 top save error:",
+            error
+        )
+
+        try:
+
+            if temp_file.exists():
+                temp_file.unlink()
+
+        except Exception:
+            pass
+
+
+# ============================================================
 # COG
 # ============================================================
 
@@ -143,9 +218,10 @@ class AutomaticLineSystem(commands.Cog):
         self.bot = bot
 
         self.config = load_config()
+        self.top_data = load_top()
 
         print(
-            "✅ bot5 — Automatic Line + Join Mention + Fime Keyword + GIF loaded."
+            "✅ bot5 — Automatic Line + Join Mention + Fime Keyword + GIF + TOP loaded."
         )
 
 
@@ -319,10 +395,6 @@ class AutomaticLineSystem(commands.Cog):
 
         storage_channel = None
 
-        # ----------------------------------------------------
-        # Configured storage channel
-        # ----------------------------------------------------
-
         if cfg.get(
             "storage_channel_id"
         ):
@@ -336,10 +408,6 @@ class AutomaticLineSystem(commands.Cog):
                     )
                 )
             )
-
-        # ----------------------------------------------------
-        # Fallback to line channel
-        # ----------------------------------------------------
 
         if storage_channel is None:
 
@@ -359,17 +427,9 @@ class AutomaticLineSystem(commands.Cog):
                     )
                 )
 
-        # ----------------------------------------------------
-        # System channel
-        # ----------------------------------------------------
-
         if storage_channel is None:
 
             storage_channel = guild.system_channel
-
-        # ----------------------------------------------------
-        # Any usable text channel
-        # ----------------------------------------------------
 
         if storage_channel is None:
 
@@ -423,10 +483,6 @@ class AutomaticLineSystem(commands.Cog):
                 f"في {storage_channel.mention}."
             )
 
-        # ----------------------------------------------------
-        # Download image / GIF
-        # ----------------------------------------------------
-
         image_bytes = await image_attachment.read()
 
         if not image_bytes:
@@ -434,10 +490,6 @@ class AutomaticLineSystem(commands.Cog):
             raise RuntimeError(
                 "الصورة المرفوعة فارغة."
             )
-
-        # ----------------------------------------------------
-        # Keep GIF as GIF
-        # ----------------------------------------------------
 
         storage_filename = self.get_storage_filename(
             image_attachment
@@ -449,10 +501,6 @@ class AutomaticLineSystem(commands.Cog):
             ),
             filename=storage_filename
         )
-
-        # ----------------------------------------------------
-        # Upload permanent storage copy
-        # ----------------------------------------------------
 
         message = await storage_channel.send(
             "🖼️ **Fime Line Image Storage**",
@@ -537,6 +585,502 @@ class AutomaticLineSystem(commands.Cog):
             discord.HTTPException
         ):
             pass
+
+
+    # ========================================================
+    # TOP SYSTEM
+    # ========================================================
+
+    def get_now(self):
+
+        return datetime.now(
+            SAUDI_TZ
+        )
+
+
+    def get_period_keys(self):
+
+        now = self.get_now()
+
+        # اليوم يتغير الساعة 10 مساءً
+        if now.hour >= 22:
+
+            daily_date = now.date()
+
+        else:
+
+            daily_date = (
+                now.date()
+                - timedelta(days=1)
+            )
+
+        daily_key = (
+            daily_date.isoformat()
+        )
+
+        # الأسبوع يبدأ من السبت
+        week_start = (
+            now.date()
+            - timedelta(
+                days=(
+                    now.weekday() + 2
+                ) % 7
+            )
+        )
+
+        weekly_key = (
+            week_start.isoformat()
+        )
+
+        monthly_key = (
+            f"{now.year}-{now.month:02d}"
+        )
+
+        return (
+            daily_key,
+            weekly_key,
+            monthly_key
+        )
+
+
+    def ensure_top_guild(
+        self,
+        guild_id
+    ):
+
+        guild_key = str(guild_id)
+
+        if guild_key not in self.top_data:
+
+            self.top_data[guild_key] = {
+                "day": {},
+                "week": {},
+                "month": {},
+                "all": {}
+            }
+
+        guild_data = self.top_data[guild_key]
+
+        for period in (
+            "day",
+            "week",
+            "month",
+            "all"
+        ):
+
+            if period not in guild_data:
+                guild_data[period] = {}
+
+        return guild_data
+
+
+    def add_top_point(
+        self,
+        guild_id,
+        user_id
+    ):
+
+        guild_data = self.ensure_top_guild(
+            guild_id
+        )
+
+        daily_key, weekly_key, monthly_key = (
+            self.get_period_keys()
+        )
+
+        # نخزن الفترة داخل البيانات حتى يتم
+        # تصفيرها تلقائيًا عند انتقال الفترة.
+        guild_data["day"].setdefault(
+            "_period",
+            daily_key
+        )
+
+        guild_data["week"].setdefault(
+            "_period",
+            weekly_key
+        )
+
+        guild_data["month"].setdefault(
+            "_period",
+            monthly_key
+        )
+
+        # ----------------------------------------------------
+        # DAY
+        # ----------------------------------------------------
+
+        if guild_data["day"].get("_period") != daily_key:
+
+            guild_data["day"] = {
+                "_period": daily_key
+            }
+
+        # ----------------------------------------------------
+        # WEEK
+        # ----------------------------------------------------
+
+        if guild_data["week"].get("_period") != weekly_key:
+
+            guild_data["week"] = {
+                "_period": weekly_key
+            }
+
+        # ----------------------------------------------------
+        # MONTH
+        # ----------------------------------------------------
+
+        if guild_data["month"].get("_period") != monthly_key:
+
+            guild_data["month"] = {
+                "_period": monthly_key
+            }
+
+        user_key = str(user_id)
+
+        guild_data["day"][user_key] = (
+            guild_data["day"].get(
+                user_key,
+                0
+            ) + 1
+        )
+
+        guild_data["week"][user_key] = (
+            guild_data["week"].get(
+                user_key,
+                0
+            ) + 1
+        )
+
+        guild_data["month"][user_key] = (
+            guild_data["month"].get(
+                user_key,
+                0
+            ) + 1
+        )
+
+        # ALL لا يتجدد أبدًا
+        guild_data["all"][user_key] = (
+            guild_data["all"].get(
+                user_key,
+                0
+            ) + 1
+        )
+
+        save_top(
+            self.top_data
+        )
+
+
+    def get_top_users(
+        self,
+        guild,
+        period,
+        limit=10
+    ):
+
+        guild_data = self.ensure_top_guild(
+            guild.id
+        )
+
+        if period == "day":
+            daily_key, _, _ = self.get_period_keys()
+
+            if guild_data["day"].get(
+                "_period"
+            ) != daily_key:
+
+                guild_data["day"] = {
+                    "_period": daily_key
+                }
+
+                save_top(
+                    self.top_data
+                )
+
+            source = guild_data["day"]
+
+        elif period == "week":
+            _, weekly_key, _ = self.get_period_keys()
+
+            if guild_data["week"].get(
+                "_period"
+            ) != weekly_key:
+
+                guild_data["week"] = {
+                    "_period": weekly_key
+                }
+
+                save_top(
+                    self.top_data
+                )
+
+            source = guild_data["week"]
+
+        elif period == "month":
+            _, _, monthly_key = self.get_period_keys()
+
+            if guild_data["month"].get(
+                "_period"
+            ) != monthly_key:
+
+                guild_data["month"] = {
+                    "_period": monthly_key
+                }
+
+                save_top(
+                    self.top_data
+                )
+
+            source = guild_data["month"]
+
+        else:
+
+            source = guild_data["all"]
+
+        results = []
+
+        for user_id, points in source.items():
+
+            if user_id == "_period":
+                continue
+
+            try:
+
+                member = guild.get_member(
+                    int(user_id)
+                )
+
+            except Exception:
+
+                member = None
+
+            if member is None:
+                continue
+
+            results.append(
+                (
+                    member,
+                    int(points)
+                )
+            )
+
+        results.sort(
+            key=lambda item: item[1],
+            reverse=True
+        )
+
+        return results[:limit]
+
+
+    def get_period_title(
+        self,
+        period
+    ):
+
+        if period == "day":
+            return "توب اليوم"
+
+        if period == "week":
+            return "توب الأسبوع"
+
+        if period == "month":
+            return "توب الشهر"
+
+        return "التوب الدائم"
+
+
+    async def send_top(
+        self,
+        interaction,
+        period
+    ):
+
+        if interaction.guild is None:
+
+            await interaction.response.send_message(
+                "هذا الأمر يعمل داخل السيرفر فقط.",
+                ephemeral=True
+            )
+
+            return
+
+        results = self.get_top_users(
+            interaction.guild,
+            period
+        )
+
+        title = self.get_period_title(
+            period
+        )
+
+        if not results:
+
+            await interaction.response.send_message(
+                (
+                    f"## 🏆 {title}\n\n"
+                    "ما فيه بيانات كافية للحين."
+                )
+            )
+
+            return
+
+        medals = {
+            1: "🥇",
+            2: "🥈",
+            3: "🥉"
+        }
+
+        lines = []
+
+        for index, (
+            member,
+            points
+        ) in enumerate(
+            results,
+            start=1
+        ):
+
+            medal = medals.get(
+                index,
+                f"`#{index}`"
+            )
+
+            lines.append(
+                f"{medal} {member.mention} — **{points} نقطة**"
+            )
+
+        embed = discord.Embed(
+            title=f"🏆 {title}",
+            description="\n".join(lines),
+            color=discord.Color.blurple()
+        )
+
+        embed.set_footer(
+            text="Team Fime • Top System"
+        )
+
+        await interaction.response.send_message(
+            embed=embed
+        )
+
+
+    # ========================================================
+    # /top
+    # ========================================================
+
+    @app_commands.command(
+        name="top",
+        description="عرض التوب اليومي أو الأسبوعي أو الشهري أو الدائم"
+    )
+    @app_commands.describe(
+        period="اختر نوع التوب"
+    )
+    @app_commands.choices(
+        period=[
+            app_commands.Choice(
+                name="day — اليوم",
+                value="day"
+            ),
+            app_commands.Choice(
+                name="week — الأسبوع",
+                value="week"
+            ),
+            app_commands.Choice(
+                name="month — الشهر",
+                value="month"
+            ),
+            app_commands.Choice(
+                name="all — الدائم",
+                value="all"
+            )
+        ]
+    )
+    async def top_command(
+        self,
+        interaction: discord.Interaction,
+        period: app_commands.Choice[str]
+    ):
+
+        await self.send_top(
+            interaction,
+            period.value
+        )
+
+
+    # ========================================================
+    # /day
+    # ========================================================
+
+    @app_commands.command(
+        name="day",
+        description="عرض توب اليوم"
+    )
+    async def top_day(
+        self,
+        interaction: discord.Interaction
+    ):
+
+        await self.send_top(
+            interaction,
+            "day"
+        )
+
+
+    # ========================================================
+    # /week
+    # ========================================================
+
+    @app_commands.command(
+        name="week",
+        description="عرض توب الأسبوع"
+    )
+    async def top_week(
+        self,
+        interaction: discord.Interaction
+    ):
+
+        await self.send_top(
+            interaction,
+            "week"
+        )
+
+
+    # ========================================================
+    # /month
+    # ========================================================
+
+    @app_commands.command(
+        name="month",
+        description="عرض توب الشهر"
+    )
+    async def top_month(
+        self,
+        interaction: discord.Interaction
+    ):
+
+        await self.send_top(
+            interaction,
+            "month"
+        )
+
+
+    # ========================================================
+    # /all
+    # ========================================================
+
+    @app_commands.command(
+        name="all",
+        description="عرض التوب الدائم الذي لا يتجدد"
+    )
+    async def top_all(
+        self,
+        interaction: discord.Interaction
+    ):
+
+        await self.send_top(
+            interaction,
+            "all"
+        )
 
 
     # ========================================================
@@ -1245,6 +1789,15 @@ class AutomaticLineSystem(commands.Cog):
         )
 
         # ====================================================
+        # TOP POINT
+        # ====================================================
+
+        self.add_top_point(
+            message.guild.id,
+            message.author.id
+        )
+
+        # ====================================================
         # FIME KEYWORD
         # ====================================================
 
@@ -1267,10 +1820,6 @@ class AutomaticLineSystem(commands.Cog):
         if not image_url:
             return
 
-        # ----------------------------------------------------
-        # Channel filter
-        # ----------------------------------------------------
-
         configured_channel_id = (
             cfg.get("channel_id")
         )
@@ -1281,10 +1830,6 @@ class AutomaticLineSystem(commands.Cog):
                 configured_channel_id
             ):
                 return
-
-        # ----------------------------------------------------
-        # Bot permissions
-        # ----------------------------------------------------
 
         me = message.guild.me
 
@@ -1303,10 +1848,6 @@ class AutomaticLineSystem(commands.Cog):
 
         if not permissions.embed_links:
             return
-
-        # ----------------------------------------------------
-        # Send divider
-        # ----------------------------------------------------
 
         try:
 
@@ -1377,10 +1918,6 @@ class AutomaticLineSystem(commands.Cog):
         if channel is None:
             return
 
-        # ----------------------------------------------------
-        # Bot permissions
-        # ----------------------------------------------------
-
         me = guild.me
 
         if me is None:
@@ -1408,10 +1945,6 @@ class AutomaticLineSystem(commands.Cog):
 
             return
 
-        # ----------------------------------------------------
-        # Duration
-        # ----------------------------------------------------
-
         try:
 
             duration = float(
@@ -1432,10 +1965,6 @@ class AutomaticLineSystem(commands.Cog):
                 5
             )
         )
-
-        # ----------------------------------------------------
-        # Send actual mention
-        # ----------------------------------------------------
 
         try:
 
@@ -1476,10 +2005,6 @@ class AutomaticLineSystem(commands.Cog):
 
             return
 
-        # ----------------------------------------------------
-        # Wait then delete
-        # ----------------------------------------------------
-
         try:
 
             await asyncio.sleep(
@@ -1489,7 +2014,6 @@ class AutomaticLineSystem(commands.Cog):
             await sent_message.delete()
 
         except discord.NotFound:
-
             pass
 
         except discord.Forbidden:
@@ -1716,11 +2240,8 @@ class AutomaticLineSystem(commands.Cog):
             channel = None
 
         if enabled:
-
             status = "🟢 مفعل"
-
         else:
-
             status = "🔴 متوقف"
 
         channel_text = (
@@ -1807,5 +2328,5 @@ async def setup(bot):
 
     print(
         "✅ Team Fime bot5 — "
-        "Automatic Line + Join Mention + Fime Keyword + GIF loaded."
+        "Automatic Line + Join Mention + Fime Keyword + GIF + TOP loaded."
     )
