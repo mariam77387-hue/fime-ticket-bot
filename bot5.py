@@ -10,6 +10,8 @@
 # GIF Support
 # +
 # TOP SYSTEM — DAY / WEEK / MONTH / ALL
+# +
+# SAY SYSTEM — BOT SPEAK + AVATAR/BANNER/TEMPLATE
 # ============================================================
 
 from __future__ import annotations
@@ -25,6 +27,8 @@ from datetime import datetime, timezone, timedelta
 import discord
 from discord.ext import commands
 from discord import app_commands
+
+from PIL import Image, ImageDraw, ImageFilter
 
 
 # ============================================================
@@ -66,6 +70,16 @@ DEFAULT_GUILD_CONFIG = {
     "fime_word_enabled": True,
     "fime_word_response": "هلا؟ وش تبي يا فايم؟",
     "fime_word_accept_fimi": False,
+
+    # ========================================================
+    # TOP COMMAND SYSTEM
+    # ========================================================
+
+    # الروم الذي يستطيع أي عضو استخدام كلمات التوب فيه
+    "top_channel_id": None,
+
+    # الرتب التي تستطيع استخدام كلمات التوب في جميع الرومات
+    "top_allowed_role_ids": [],
 }
 
 
@@ -208,12 +222,111 @@ def save_top(data):
 
 
 # ============================================================
+# TOP SELECT MENU
+# ============================================================
+
+class TopSelect(discord.ui.Select):
+
+    def __init__(
+        self,
+        cog,
+        guild_id
+    ):
+
+        self.cog = cog
+        self.guild_id = guild_id
+
+        options = [
+            discord.SelectOption(
+                label="توب اليوم",
+                value="day",
+                emoji="📅",
+                description="عرض أكثر الأعضاء نشاطًا اليوم"
+            ),
+            discord.SelectOption(
+                label="توب الأسبوع",
+                value="week",
+                emoji="📊",
+                description="عرض أكثر الأعضاء نشاطًا هذا الأسبوع"
+            ),
+            discord.SelectOption(
+                label="توب الشهر",
+                value="month",
+                emoji="🗓️",
+                description="عرض أكثر الأعضاء نشاطًا هذا الشهر"
+            ),
+            discord.SelectOption(
+                label="توب الكل",
+                value="all",
+                emoji="🏆",
+                description="التوب الكامل منذ بداية النظام"
+            ),
+        ]
+
+        super().__init__(
+            placeholder="اختر نوع التوب...",
+            min_values=1,
+            max_values=1,
+            options=options,
+            custom_id=f"fime_top_select_{guild_id}"
+        )
+
+
+    async def callback(
+        self,
+        interaction: discord.Interaction
+    ):
+
+        if interaction.guild is None:
+            await interaction.response.send_message(
+                "❌ هذا الخيار يعمل داخل السيرفر فقط.",
+                ephemeral=True
+            )
+            return
+
+        period = self.values[0]
+
+        embed = self.cog.build_top_embed(
+            interaction.guild,
+            period
+        )
+
+        await interaction.response.edit_message(
+            embed=embed,
+            view=self.view
+        )
+
+
+class TopSelectView(discord.ui.View):
+
+    def __init__(
+        self,
+        cog,
+        guild_id
+    ):
+
+        super().__init__(
+            timeout=900
+        )
+
+        self.add_item(
+            TopSelect(
+                cog,
+                guild_id
+            )
+        )
+
+
+# ============================================================
 # COG
 # ============================================================
 
 class AutomaticLineSystem(commands.Cog):
 
-    def __init__(self, bot):
+    def __init__(
+        self,
+        bot
+    ):
 
         self.bot = bot
 
@@ -221,7 +334,8 @@ class AutomaticLineSystem(commands.Cog):
         self.top_data = load_top()
 
         print(
-            "✅ bot5 — Automatic Line + Join Mention + Fime Keyword + GIF + TOP loaded."
+            "✅ bot5 — Automatic Line + Join Mention + "
+            "Fime Keyword + GIF + TOP + SAY loaded."
         )
 
 
@@ -267,6 +381,14 @@ class AutomaticLineSystem(commands.Cog):
                 )
 
                 changed = True
+
+        if not isinstance(
+            current.get("top_allowed_role_ids"),
+            list
+        ):
+
+            current["top_allowed_role_ids"] = []
+            changed = True
 
         if changed:
 
@@ -688,8 +810,6 @@ class AutomaticLineSystem(commands.Cog):
             self.get_period_keys()
         )
 
-        # نخزن الفترة داخل البيانات حتى يتم
-        # تصفيرها تلقائيًا عند انتقال الفترة.
         guild_data["day"].setdefault(
             "_period",
             daily_key
@@ -705,31 +825,25 @@ class AutomaticLineSystem(commands.Cog):
             monthly_key
         )
 
-        # ----------------------------------------------------
-        # DAY
-        # ----------------------------------------------------
-
-        if guild_data["day"].get("_period") != daily_key:
+        if guild_data["day"].get(
+            "_period"
+        ) != daily_key:
 
             guild_data["day"] = {
                 "_period": daily_key
             }
 
-        # ----------------------------------------------------
-        # WEEK
-        # ----------------------------------------------------
-
-        if guild_data["week"].get("_period") != weekly_key:
+        if guild_data["week"].get(
+            "_period"
+        ) != weekly_key:
 
             guild_data["week"] = {
                 "_period": weekly_key
             }
 
-        # ----------------------------------------------------
-        # MONTH
-        # ----------------------------------------------------
-
-        if guild_data["month"].get("_period") != monthly_key:
+        if guild_data["month"].get(
+            "_period"
+        ) != monthly_key:
 
             guild_data["month"] = {
                 "_period": monthly_key
@@ -758,7 +872,6 @@ class AutomaticLineSystem(commands.Cog):
             ) + 1
         )
 
-        # ALL لا يتجدد أبدًا
         guild_data["all"][user_key] = (
             guild_data["all"].get(
                 user_key,
@@ -783,7 +896,10 @@ class AutomaticLineSystem(commands.Cog):
         )
 
         if period == "day":
-            daily_key, _, _ = self.get_period_keys()
+
+            daily_key, _, _ = (
+                self.get_period_keys()
+            )
 
             if guild_data["day"].get(
                 "_period"
@@ -800,7 +916,10 @@ class AutomaticLineSystem(commands.Cog):
             source = guild_data["day"]
 
         elif period == "week":
-            _, weekly_key, _ = self.get_period_keys()
+
+            _, weekly_key, _ = (
+                self.get_period_keys()
+            )
 
             if guild_data["week"].get(
                 "_period"
@@ -817,7 +936,10 @@ class AutomaticLineSystem(commands.Cog):
             source = guild_data["week"]
 
         elif period == "month":
-            _, _, monthly_key = self.get_period_keys()
+
+            _, _, monthly_key = (
+                self.get_period_keys()
+            )
 
             if guild_data["month"].get(
                 "_period"
@@ -886,26 +1008,17 @@ class AutomaticLineSystem(commands.Cog):
         if period == "month":
             return "توب الشهر"
 
-        return "التوب الدائم"
+        return "توب الكل"
 
 
-    async def send_top(
+    def build_top_embed(
         self,
-        interaction,
+        guild,
         period
     ):
 
-        if interaction.guild is None:
-
-            await interaction.response.send_message(
-                "هذا الأمر يعمل داخل السيرفر فقط.",
-                ephemeral=True
-            )
-
-            return
-
         results = self.get_top_users(
-            interaction.guild,
+            guild,
             period
         )
 
@@ -915,14 +1028,13 @@ class AutomaticLineSystem(commands.Cog):
 
         if not results:
 
-            await interaction.response.send_message(
-                (
-                    f"## 🏆 {title}\n\n"
+            return discord.Embed(
+                title=f"🏆 {title}",
+                description=(
                     "ما فيه بيانات كافية للحين."
-                )
+                ),
+                color=discord.Color.blurple()
             )
-
-            return
 
         medals = {
             1: "🥇",
@@ -959,127 +1071,490 @@ class AutomaticLineSystem(commands.Cog):
             text="Team Fime • Top System"
         )
 
-        await interaction.response.send_message(
-            embed=embed
+        return embed
+
+
+    async def send_top_to_channel(
+        self,
+        channel,
+        period
+    ):
+
+        guild = channel.guild
+
+        embed = self.build_top_embed(
+            guild,
+            period
+        )
+
+        view = TopSelectView(
+            self,
+            guild.id
+        )
+
+        await channel.send(
+            embed=embed,
+            view=view
         )
 
 
+    def normalize_top_keyword(
+        self,
+        content
+    ):
+
+        value = str(
+            content or ""
+        ).strip()
+
+        value = " ".join(
+            value.split()
+        )
+
+        return value.casefold()
+
+
+    def get_top_keyword_period(
+        self,
+        content
+    ):
+
+        normalized = self.normalize_top_keyword(
+            content
+        )
+
+        keywords = {
+            "day": "day",
+            "week": "week",
+            "month": "month",
+            "all": "all",
+        }
+
+        return keywords.get(
+            normalized
+        )
+
+
+    def member_can_use_top_keyword(
+        self,
+        message,
+        cfg
+    ):
+
+        if message.author.id == OWNER_ID:
+            return True
+
+        # الرتب المسموح لها تستخدم التوب في كل الرومات
+        allowed_roles = cfg.get(
+            "top_allowed_role_ids",
+            []
+        )
+
+        try:
+
+            allowed_roles = {
+                int(role_id)
+                for role_id in allowed_roles
+            }
+
+        except Exception:
+
+            allowed_roles = set()
+
+        member_roles = {
+            role.id
+            for role in getattr(
+                message.author,
+                "roles",
+                []
+            )
+        }
+
+        if allowed_roles.intersection(
+            member_roles
+        ):
+            return True
+
+        # باقي الأعضاء: فقط روم التوب المحدد
+        top_channel_id = cfg.get(
+            "top_channel_id"
+        )
+
+        if top_channel_id:
+
+            try:
+
+                return (
+                    message.channel.id
+                    == int(top_channel_id)
+                )
+
+            except Exception:
+
+                return False
+
+        return False
+
+
+    async def handle_top_keyword(
+        self,
+        message,
+        cfg
+    ):
+
+        period = self.get_top_keyword_period(
+            message.content
+        )
+
+        if period is None:
+            return False
+
+        if not self.member_can_use_top_keyword(
+            message,
+            cfg
+        ):
+            return False
+
+        try:
+
+            await self.send_top_to_channel(
+                message.channel,
+                period
+            )
+
+        except discord.Forbidden as error:
+
+            print(
+                "⚠️ bot5 TOP permission error:",
+                error
+            )
+
+        except discord.HTTPException as error:
+
+            print(
+                "⚠️ bot5 TOP HTTP error:",
+                error
+            )
+
+        except Exception as error:
+
+            print(
+                "❌ bot5 TOP error:",
+                error
+            )
+
+        return True
+
+
     # ========================================================
-    # /top
+    # TOP ADMIN CONFIG
     # ========================================================
 
     @app_commands.command(
-        name="top",
-        description="عرض التوب اليومي أو الأسبوعي أو الشهري أو الدائم"
+        name="توب-روم",
+        description="تحديد روم أوامر التوب"
     )
     @app_commands.describe(
-        period="اختر نوع التوب"
+        channel="الروم الذي يستطيع الجميع استخدام كلمات التوب فيه"
     )
-    @app_commands.choices(
-        period=[
-            app_commands.Choice(
-                name="day — اليوم",
-                value="day"
-            ),
-            app_commands.Choice(
-                name="week — الأسبوع",
-                value="week"
-            ),
-            app_commands.Choice(
-                name="month — الشهر",
-                value="month"
-            ),
-            app_commands.Choice(
-                name="all — الدائم",
-                value="all"
-            )
-        ]
-    )
-    async def top_command(
+    async def top_channel(
         self,
         interaction: discord.Interaction,
-        period: app_commands.Choice[str]
+        channel: discord.TextChannel = None
     ):
 
-        await self.send_top(
-            interaction,
-            period.value
+        if await self.silently_ignore_if_not_owner(
+            interaction
+        ):
+            return
+
+        if interaction.guild is None:
+            return
+
+        cfg = self.get_config(
+            interaction.guild.id
+        )
+
+        if channel is None:
+
+            cfg["top_channel_id"] = None
+
+            save_config(
+                self.config
+            )
+
+            await interaction.response.send_message(
+                (
+                    "✅ تم إلغاء تحديد روم التوب.\n"
+                    "الآن فقط الرتب المسموح لها تستطيع "
+                    "استخدام `day` و `week` و `month` و `all`."
+                ),
+                ephemeral=True
+            )
+
+            return
+
+        me = interaction.guild.me
+
+        if me is None:
+
+            await interaction.response.send_message(
+                "❌ تعذر معرفة صلاحيات البوت.",
+                ephemeral=True
+            )
+
+            return
+
+        permissions = channel.permissions_for(
+            me
+        )
+
+        if not permissions.view_channel:
+
+            await interaction.response.send_message(
+                f"❌ ما أقدر أشوف {channel.mention}.",
+                ephemeral=True
+            )
+
+            return
+
+        if not permissions.send_messages:
+
+            await interaction.response.send_message(
+                f"❌ ما أقدر أرسل في {channel.mention}.",
+                ephemeral=True
+            )
+
+            return
+
+        cfg["top_channel_id"] = channel.id
+
+        save_config(
+            self.config
+        )
+
+        await interaction.response.send_message(
+            (
+                "✅ **تم تحديد روم التوب.**\n\n"
+                f"📍 الروم: {channel.mention}\n"
+                "أي عضو يستطيع كتابة `day` أو `week` "
+                "أو `month` أو `all` داخل هذا الروم."
+            ),
+            ephemeral=True
         )
 
 
-    # ========================================================
-    # /day
-    # ========================================================
+    @app_commands.command(
+        name="توب-رتبة",
+        description="إضافة رتبة تستطيع استخدام التوب في جميع الرومات"
+    )
+    @app_commands.describe(
+        role="الرتبة المسموح لها"
+    )
+    async def top_role(
+        self,
+        interaction: discord.Interaction,
+        role: discord.Role
+    ):
+
+        if await self.silently_ignore_if_not_owner(
+            interaction
+        ):
+            return
+
+        if interaction.guild is None:
+            return
+
+        cfg = self.get_config(
+            interaction.guild.id
+        )
+
+        roles = cfg.setdefault(
+            "top_allowed_role_ids",
+            []
+        )
+
+        if role.id in roles:
+
+            await interaction.response.send_message(
+                (
+                    f"ℹ️ الرتبة {role.mention} "
+                    "مضافة مسبقًا."
+                ),
+                ephemeral=True
+            )
+
+            return
+
+        roles.append(
+            role.id
+        )
+
+        save_config(
+            self.config
+        )
+
+        await interaction.response.send_message(
+            (
+                "✅ **تمت إضافة رتبة التوب.**\n\n"
+                f"🎖️ الرتبة: {role.mention}\n"
+                "أعضاء هذه الرتبة يستطيعون استخدام "
+                "`day` و `week` و `month` و `all` "
+                "في جميع الرومات."
+            ),
+            ephemeral=True
+        )
+
 
     @app_commands.command(
-        name="day",
-        description="عرض توب اليوم"
+        name="توب-رتبة-إزالة",
+        description="إزالة رتبة من صلاحية استخدام التوب في جميع الرومات"
     )
-    async def top_day(
+    @app_commands.describe(
+        role="الرتبة التي تريد إزالتها"
+    )
+    async def top_role_remove(
+        self,
+        interaction: discord.Interaction,
+        role: discord.Role
+    ):
+
+        if await self.silently_ignore_if_not_owner(
+            interaction
+        ):
+            return
+
+        if interaction.guild is None:
+            return
+
+        cfg = self.get_config(
+            interaction.guild.id
+        )
+
+        roles = cfg.setdefault(
+            "top_allowed_role_ids",
+            []
+        )
+
+        if role.id not in roles:
+
+            await interaction.response.send_message(
+                (
+                    f"ℹ️ الرتبة {role.mention} "
+                    "ليست ضمن رتب التوب."
+                ),
+                ephemeral=True
+            )
+
+            return
+
+        roles.remove(
+            role.id
+        )
+
+        save_config(
+            self.config
+        )
+
+        await interaction.response.send_message(
+            (
+                f"✅ تم إزالة {role.mention} "
+                "من رتب التوب."
+            ),
+            ephemeral=True
+        )
+
+
+    @app_commands.command(
+        name="توب-حالة",
+        description="عرض إعدادات نظام التوب"
+    )
+    async def top_status(
         self,
         interaction: discord.Interaction
     ):
 
-        await self.send_top(
-            interaction,
-            "day"
+        if await self.silently_ignore_if_not_owner(
+            interaction
+        ):
+            return
+
+        if interaction.guild is None:
+            return
+
+        cfg = self.get_config(
+            interaction.guild.id
         )
 
-
-    # ========================================================
-    # /week
-    # ========================================================
-
-    @app_commands.command(
-        name="week",
-        description="عرض توب الأسبوع"
-    )
-    async def top_week(
-        self,
-        interaction: discord.Interaction
-    ):
-
-        await self.send_top(
-            interaction,
-            "week"
+        top_channel_id = cfg.get(
+            "top_channel_id"
         )
 
+        if top_channel_id:
 
-    # ========================================================
-    # /month
-    # ========================================================
+            try:
 
-    @app_commands.command(
-        name="month",
-        description="عرض توب الشهر"
-    )
-    async def top_month(
-        self,
-        interaction: discord.Interaction
-    ):
+                top_channel = (
+                    interaction.guild.get_channel(
+                        int(top_channel_id)
+                    )
+                )
 
-        await self.send_top(
-            interaction,
-            "month"
+            except Exception:
+
+                top_channel = None
+
+        else:
+
+            top_channel = None
+
+        roles = []
+
+        for role_id in cfg.get(
+            "top_allowed_role_ids",
+            []
+        ):
+
+            try:
+
+                role = interaction.guild.get_role(
+                    int(role_id)
+                )
+
+            except Exception:
+
+                role = None
+
+            if role:
+                roles.append(
+                    role.mention
+                )
+
+        channel_text = (
+            top_channel.mention
+            if top_channel
+            else "غير محدد"
         )
 
+        roles_text = (
+            "\n".join(roles)
+            if roles
+            else "لا توجد رتب"
+        )
 
-    # ========================================================
-    # /all
-    # ========================================================
-
-    @app_commands.command(
-        name="all",
-        description="عرض التوب الدائم الذي لا يتجدد"
-    )
-    async def top_all(
-        self,
-        interaction: discord.Interaction
-    ):
-
-        await self.send_top(
-            interaction,
-            "all"
+        await interaction.response.send_message(
+            (
+                "## 🏆 حالة نظام التوب\n\n"
+                f"📍 **روم التوب:** {channel_text}\n\n"
+                "🎖️ **الرتب المسموح لها في كل الرومات:**\n"
+                f"{roles_text}\n\n"
+                "الكلمات:\n"
+                "`day` — توب اليوم\n"
+                "`week` — توب الأسبوع\n"
+                "`month` — توب الشهر\n"
+                "`all` — توب الكل"
+            ),
+            ephemeral=True
         )
 
 
@@ -1178,9 +1653,7 @@ class AutomaticLineSystem(commands.Cog):
 
                 return
 
-            cfg["channel_id"] = (
-                channel.id
-            )
+            cfg["channel_id"] = channel.id
 
         await self.delete_old_storage(
             guild
@@ -1459,7 +1932,9 @@ class AutomaticLineSystem(commands.Cog):
         content: str
     ):
 
-        value = str(content or "").strip()
+        value = str(
+            content or ""
+        ).strip()
 
         value = " ".join(
             value.split()
@@ -1521,7 +1996,6 @@ class AutomaticLineSystem(commands.Cog):
         ).strip()
 
         if not response_text:
-
             return False
 
         try:
@@ -1529,20 +2003,6 @@ class AutomaticLineSystem(commands.Cog):
             await message.channel.send(
                 response_text,
                 allowed_mentions=discord.AllowedMentions.none()
-            )
-
-        except discord.Forbidden as error:
-
-            print(
-                "⚠️ bot5 Fime keyword permission error:",
-                error
-            )
-
-        except discord.HTTPException as error:
-
-            print(
-                "⚠️ bot5 Fime keyword HTTP error:",
-                error
             )
 
         except Exception as error:
@@ -1769,6 +2229,742 @@ class AutomaticLineSystem(commands.Cog):
 
 
     # ========================================================
+    # SAY IMAGE HELPERS
+    # ========================================================
+
+    def crop_to_fill(
+        self,
+        image,
+        size
+    ):
+
+        target_width, target_height = size
+
+        image = image.convert(
+            "RGBA"
+        )
+
+        source_width, source_height = image.size
+
+        source_ratio = (
+            source_width / source_height
+        )
+
+        target_ratio = (
+            target_width / target_height
+        )
+
+        if source_ratio > target_ratio:
+
+            new_height = target_height
+
+            new_width = int(
+                new_height * source_ratio
+            )
+
+        else:
+
+            new_width = target_width
+
+            new_height = int(
+                new_width / source_ratio
+            )
+
+        image = image.resize(
+            (
+                new_width,
+                new_height
+            ),
+            Image.Resampling.LANCZOS
+        )
+
+        left = (
+            new_width - target_width
+        ) // 2
+
+        top = (
+            new_height - target_height
+        ) // 2
+
+        return image.crop(
+            (
+                left,
+                top,
+                left + target_width,
+                top + target_height
+            )
+        )
+
+
+    def circle_avatar(
+        self,
+        image,
+        size
+    ):
+
+        image = self.crop_to_fill(
+            image,
+            (
+                size,
+                size
+            )
+        )
+
+        mask = Image.new(
+            "L",
+            (
+                size,
+                size
+            ),
+            0
+        )
+
+        draw = ImageDraw.Draw(
+            mask
+        )
+
+        draw.ellipse(
+            (
+                0,
+                0,
+                size,
+                size
+            ),
+            fill=255
+        )
+
+        result = Image.new(
+            "RGBA",
+            (
+                size,
+                size
+            ),
+            (
+                0,
+                0,
+                0,
+                0
+            )
+        )
+
+        result.paste(
+            image,
+            (
+                0,
+                0
+            ),
+            mask
+        )
+
+        return result
+
+
+    async def read_image_attachment(
+        self,
+        attachment
+    ):
+
+        if not self.is_supported_image(
+            attachment
+        ):
+
+            raise ValueError(
+                "صيغة الصورة غير مدعومة."
+            )
+
+        data = await attachment.read()
+
+        if not data:
+
+            raise ValueError(
+                "الصورة فارغة."
+            )
+
+        try:
+
+            image = Image.open(
+                io.BytesIO(data)
+            )
+
+            # GIF/APNG → أول فريم فقط
+            try:
+                image.seek(0)
+            except Exception:
+                pass
+
+            return image.convert(
+                "RGBA"
+            )
+
+        except Exception as error:
+
+            raise ValueError(
+                "تعذر قراءة الصورة."
+            ) from error
+
+
+    async def create_say_image(
+        self,
+        avatar_attachment=None,
+        banner_attachment=None,
+        template_attachment=None
+    ):
+
+        # ====================================================
+        # CANVAS
+        # ====================================================
+
+        if template_attachment:
+
+            template_image = await self.read_image_attachment(
+                template_attachment
+            )
+
+            canvas = self.crop_to_fill(
+                template_image,
+                (
+                    1200,
+                    675
+                )
+            )
+
+        else:
+
+            canvas = Image.new(
+                "RGBA",
+                (
+                    1200,
+                    675
+                ),
+                (
+                    7,
+                    8,
+                    13,
+                    255
+                )
+            )
+
+            draw = ImageDraw.Draw(
+                canvas
+            )
+
+            # خلفية ناعمة
+            draw.rounded_rectangle(
+                (
+                    35,
+                    35,
+                    1165,
+                    640
+                ),
+                radius=36,
+                fill=(
+                    16,
+                    19,
+                    28,
+                    255
+                )
+            )
+
+        # ====================================================
+        # BANNER
+        # ====================================================
+
+        if banner_attachment:
+
+            banner = await self.read_image_attachment(
+                banner_attachment
+            )
+
+            banner = self.crop_to_fill(
+                banner,
+                (
+                    1130,
+                    310
+                )
+            )
+
+            # تعتيم بسيط أسفل البنر
+            overlay = Image.new(
+                "RGBA",
+                banner.size,
+                (
+                    0,
+                    0,
+                    0,
+                    35
+                )
+            )
+
+            banner.alpha_composite(
+                overlay
+            )
+
+            canvas.alpha_composite(
+                banner,
+                (
+                    35,
+                    35
+                )
+            )
+
+        else:
+
+            # لو ما فيه بنر، نخلي مساحة علوية احترافية
+            draw = ImageDraw.Draw(
+                canvas
+            )
+
+            draw.rounded_rectangle(
+                (
+                    35,
+                    35,
+                    1165,
+                    345
+                ),
+                radius=30,
+                fill=(
+                    12,
+                    15,
+                    23,
+                    255
+                )
+            )
+
+        # ====================================================
+        # DARK OVERLAY
+        # ====================================================
+
+        overlay = Image.new(
+            "RGBA",
+            (
+                1200,
+                675
+            ),
+            (
+                0,
+                0,
+                0,
+                0
+            )
+        )
+
+        overlay_draw = ImageDraw.Draw(
+            overlay
+        )
+
+        overlay_draw.rectangle(
+            (
+                35,
+                280,
+                1165,
+                640
+            ),
+            fill=(
+                7,
+                8,
+                13,
+                145
+            )
+        )
+
+        canvas.alpha_composite(
+            overlay
+        )
+
+        # ====================================================
+        # AVATAR
+        # ====================================================
+
+        if avatar_attachment:
+
+            avatar = await self.read_image_attachment(
+                avatar_attachment
+            )
+
+            avatar = self.circle_avatar(
+                avatar,
+                210
+            )
+
+            # ظل
+            shadow = Image.new(
+                "RGBA",
+                (
+                    230,
+                    230
+                ),
+                (
+                    0,
+                    0,
+                    0,
+                    0
+                )
+            )
+
+            shadow_draw = ImageDraw.Draw(
+                shadow
+            )
+
+            shadow_draw.ellipse(
+                (
+                    5,
+                    8,
+                    225,
+                    228
+                ),
+                fill=(
+                    0,
+                    0,
+                    0,
+                    170
+                )
+            )
+
+            shadow = shadow.filter(
+                ImageFilter.GaussianBlur(
+                    10
+                )
+            )
+
+            canvas.alpha_composite(
+                shadow,
+                (
+                    55,
+                    250
+                )
+            )
+
+            canvas.alpha_composite(
+                avatar,
+                (
+                    65,
+                    260
+                )
+            )
+
+        # ====================================================
+        # PROFESSIONAL DETAILS
+        # ====================================================
+
+        draw = ImageDraw.Draw(
+            canvas
+        )
+
+        # خط زخرفي
+        draw.rounded_rectangle(
+            (
+                315,
+                500,
+                1120,
+                504
+            ),
+            radius=2,
+            fill=(
+                124,
+                92,
+                255,
+                220
+            )
+        )
+
+        # شعار بسيط
+        draw.text(
+            (
+                315,
+                535
+            ),
+            "TEAM FIME",
+            fill=(
+                245,
+                247,
+                251,
+                220
+            )
+        )
+
+        draw.text(
+            (
+                315,
+                575
+            ),
+            "Fime • Official Message",
+            fill=(
+                146,
+                152,
+                168,
+                190
+            )
+        )
+
+        # ====================================================
+        # OUTPUT
+        # ====================================================
+
+        output = io.BytesIO()
+
+        canvas.convert(
+            "RGB"
+        ).save(
+            output,
+            format="PNG",
+            optimize=True
+        )
+
+        output.seek(0)
+
+        return output
+
+
+    # ========================================================
+    # /say
+    # ========================================================
+
+    @app_commands.command(
+        name="say",
+        description="يجعل البوت يرسل رسالة في روم محدد مع قالب اختياري"
+    )
+    @app_commands.describe(
+        message="الرسالة التي تريد أن يرسلها البوت",
+        channel="الروم الذي تريد إرسال الرسالة فيه، اختياري",
+        avatar="الصورة الشخصية التي تريد وضعها داخل القالب",
+        banner="البنر الذي تريد وضعه داخل القالب",
+        template="قالب مخصص اختياري بدل القالب الافتراضي"
+    )
+    async def say(
+        self,
+        interaction: discord.Interaction,
+        message: str,
+        channel: discord.TextChannel = None,
+        avatar: discord.Attachment = None,
+        banner: discord.Attachment = None,
+        template: discord.Attachment = None
+    ):
+
+        if await self.silently_ignore_if_not_owner(
+            interaction
+        ):
+            return
+
+        if interaction.guild is None:
+
+            await interaction.response.send_message(
+                "❌ هذا الأمر يعمل داخل السيرفر فقط.",
+                ephemeral=True
+            )
+
+            return
+
+        message = str(
+            message or ""
+        ).strip()
+
+        if not message:
+
+            await interaction.response.send_message(
+                "❌ اكتب الرسالة التي تريد إرسالها.",
+                ephemeral=True
+            )
+
+            return
+
+        if len(message) > 2000:
+
+            await interaction.response.send_message(
+                "❌ الرسالة لا يمكن أن تتجاوز 2000 حرف.",
+                ephemeral=True
+            )
+
+            return
+
+        target_channel = (
+            channel
+            or interaction.channel
+        )
+
+        if not isinstance(
+            target_channel,
+            discord.TextChannel
+        ):
+
+            await interaction.response.send_message(
+                "❌ اختر رومًا نصيًا صالحًا.",
+                ephemeral=True
+            )
+
+            return
+
+        me = interaction.guild.me
+
+        if me is None:
+
+            await interaction.response.send_message(
+                "❌ تعذر معرفة صلاحيات البوت.",
+                ephemeral=True
+            )
+
+            return
+
+        permissions = target_channel.permissions_for(
+            me
+        )
+
+        if not permissions.view_channel:
+
+            await interaction.response.send_message(
+                f"❌ ما أقدر أشوف {target_channel.mention}.",
+                ephemeral=True
+            )
+
+            return
+
+        if not permissions.send_messages:
+
+            await interaction.response.send_message(
+                f"❌ ما أقدر أرسل في {target_channel.mention}.",
+                ephemeral=True
+            )
+
+            return
+
+        image_requested = any(
+            (
+                avatar,
+                banner,
+                template
+            )
+        )
+
+        await interaction.response.defer(
+            ephemeral=True
+        )
+
+        generated_file = None
+
+        if image_requested:
+
+            if not permissions.attach_files:
+
+                await interaction.followup.send(
+                    (
+                        f"❌ أحتاج صلاحية **Attach Files** "
+                        f"في {target_channel.mention}."
+                    ),
+                    ephemeral=True
+                )
+
+                return
+
+            try:
+
+                generated_file = (
+                    await self.create_say_image(
+                        avatar_attachment=avatar,
+                        banner_attachment=banner,
+                        template_attachment=template
+                    )
+                )
+
+            except ValueError as error:
+
+                await interaction.followup.send(
+                    f"❌ {error}",
+                    ephemeral=True
+                )
+
+                return
+
+            except Exception as error:
+
+                print(
+                    "❌ bot5 SAY image error:",
+                    error
+                )
+
+                await interaction.followup.send(
+                    (
+                        "❌ حصل خطأ أثناء تجهيز قالب الرسالة.\n"
+                        f"الخطأ: `{type(error).__name__}`"
+                    ),
+                    ephemeral=True
+                )
+
+                return
+
+        try:
+
+            if generated_file:
+
+                file = discord.File(
+                    generated_file,
+                    filename="fime-say.png"
+                )
+
+                await target_channel.send(
+                    content=message,
+                    file=file,
+                    allowed_mentions=discord.AllowedMentions.none()
+                )
+
+            else:
+
+                await target_channel.send(
+                    message,
+                    allowed_mentions=discord.AllowedMentions.none()
+                )
+
+        except discord.Forbidden:
+
+            await interaction.followup.send(
+                (
+                    f"❌ البوت ما يملك الصلاحيات الكافية "
+                    f"في {target_channel.mention}."
+                ),
+                ephemeral=True
+            )
+
+            return
+
+        except discord.HTTPException as error:
+
+            print(
+                "⚠️ bot5 SAY HTTP error:",
+                error
+            )
+
+            await interaction.followup.send(
+                "❌ فشل إرسال الرسالة.",
+                ephemeral=True
+            )
+
+            return
+
+        except Exception as error:
+
+            print(
+                "❌ bot5 SAY error:",
+                error
+            )
+
+            await interaction.followup.send(
+                (
+                    "❌ حصل خطأ أثناء إرسال الرسالة.\n"
+                    f"`{type(error).__name__}`"
+                ),
+                ephemeral=True
+            )
+
+            return
+
+        await interaction.followup.send(
+            (
+                "✅ تم إرسال الرسالة بواسطة البوت.\n"
+                f"📍 الروم: {target_channel.mention}"
+            ),
+            ephemeral=True
+        )
+
+
+    # ========================================================
     # LINE MESSAGE LISTENER
     # ========================================================
 
@@ -1796,6 +2992,18 @@ class AutomaticLineSystem(commands.Cog):
             message.guild.id,
             message.author.id
         )
+
+        # ====================================================
+        # TOP KEYWORDS
+        # ====================================================
+
+        top_handled = await self.handle_top_keyword(
+            message,
+            cfg
+        )
+
+        if top_handled:
+            return
 
         # ====================================================
         # FIME KEYWORD
@@ -1928,21 +3136,9 @@ class AutomaticLineSystem(commands.Cog):
         )
 
         if not permissions.view_channel:
-
-            print(
-                f"⚠️ Join mention: "
-                f"لا أستطيع رؤية {channel}."
-            )
-
             return
 
         if not permissions.send_messages:
-
-            print(
-                f"⚠️ Join mention: "
-                f"لا أستطيع الإرسال في {channel}."
-            )
-
             return
 
         try:
@@ -1978,24 +3174,6 @@ class AutomaticLineSystem(commands.Cog):
                 )
             )
 
-        except discord.Forbidden as error:
-
-            print(
-                "⚠️ Join mention permission error:",
-                error
-            )
-
-            return
-
-        except discord.HTTPException as error:
-
-            print(
-                "⚠️ Join mention HTTP error:",
-                error
-            )
-
-            return
-
         except Exception as error:
 
             print(
@@ -2015,20 +3193,6 @@ class AutomaticLineSystem(commands.Cog):
 
         except discord.NotFound:
             pass
-
-        except discord.Forbidden:
-
-            print(
-                "⚠️ Join mention: "
-                "البوت لا يستطيع حذف رسالة المنشن."
-            )
-
-        except discord.HTTPException as error:
-
-            print(
-                "⚠️ Join mention delete error:",
-                error
-            )
 
         except Exception as error:
 
@@ -2051,7 +3215,9 @@ class AutomaticLineSystem(commands.Cog):
         if member.bot:
             return
 
-        await asyncio.sleep(0.5)
+        await asyncio.sleep(
+            0.5
+        )
 
         await self.send_join_mention(
             member
@@ -2081,7 +3247,6 @@ class AutomaticLineSystem(commands.Cog):
             return
 
         guild = interaction.guild
-
         me = guild.me
 
         if me is None:
@@ -2130,7 +3295,6 @@ class AutomaticLineSystem(commands.Cog):
         )
 
         cfg["join_mention_enabled"] = True
-
         cfg["join_mention_duration"] = 2
 
         save_config(
@@ -2239,10 +3403,11 @@ class AutomaticLineSystem(commands.Cog):
 
             channel = None
 
-        if enabled:
-            status = "🟢 مفعل"
-        else:
-            status = "🔴 متوقف"
+        status = (
+            "🟢 مفعل"
+            if enabled
+            else "🔴 متوقف"
+        )
 
         channel_text = (
             channel.mention
@@ -2306,7 +3471,9 @@ class AutomaticLineSystem(commands.Cog):
 # SETUP
 # ============================================================
 
-async def setup(bot):
+async def setup(
+    bot
+):
 
     for cog in bot.cogs.values():
 
@@ -2328,5 +3495,6 @@ async def setup(bot):
 
     print(
         "✅ Team Fime bot5 — "
-        "Automatic Line + Join Mention + Fime Keyword + GIF + TOP loaded."
+        "Automatic Line + Join Mention + "
+        "Fime Keyword + GIF + TOP + SAY loaded."
     )
