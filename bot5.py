@@ -9,13 +9,17 @@
 # +
 # TOP SYSTEM — DAY / WEEK / MONTH / ALL
 # +
-# SAY SYSTEM — PROFESSIONAL PROFILE + FAST DOWNLOADS
+# SAY SYSTEM — PROFESSIONAL PROFILE + PERSISTENT BUTTONS
 # +
 # SERVER INFORMATION SYSTEM
 # +
 # BOT MESSAGE EDIT SYSTEM
 # +
 # SMART SUGGESTIONS SYSTEM
+# +
+# AUTO TRIGGER RESPONSES
+# +
+# MODERATION SHORTCUTS
 # ============================================================
 
 from __future__ import annotations
@@ -51,6 +55,8 @@ OWNER_ID = 1388514481444880549
 CONFIG_FILE = Path("bot5_config.json")
 TOP_FILE = Path("bot5_top.json")
 SUGGESTIONS_FILE = Path("bot5_suggestions.json")
+WARNINGS_FILE = Path("bot5_warnings.json")
+SAY_MESSAGES_FILE = Path("bot5_say_messages.json")
 
 SAUDI_TZ = timezone(timedelta(hours=3))
 
@@ -80,15 +86,23 @@ DEFAULT_GUILD_CONFIG = {
 
     # SAY
     "say_room_definition": "",
+    "say_storage_channel_id": None,
 
     # SUGGESTIONS
     "suggestions_channel_id": None,
     "suggestions_log_channel_id": None,
+    "suggestions_allowed_role_ids": [],
+
+    # AUTO TRIGGERS
+    "auto_triggers": {},
+
+    # MODERATION
+    "moderation_enabled": True,
 }
 
 
 # ============================================================
-# JSON HELPERS
+# JSON
 # ============================================================
 
 def load_json(path):
@@ -152,6 +166,22 @@ def load_suggestions():
 
 def save_suggestions(data):
     save_json(SUGGESTIONS_FILE, data)
+
+
+def load_warnings():
+    return load_json(WARNINGS_FILE)
+
+
+def save_warnings(data):
+    save_json(WARNINGS_FILE, data)
+
+
+def load_say_messages():
+    return load_json(SAY_MESSAGES_FILE)
+
+
+def save_say_messages(data):
+    save_json(SAY_MESSAGES_FILE, data)
 
 
 # ============================================================
@@ -219,7 +249,7 @@ class TopSelectView(discord.ui.View):
 
     def __init__(self, cog, guild_id):
 
-        super().__init__(timeout=900)
+        super().__init__(timeout=None)
 
         self.add_item(
             TopSelect(
@@ -230,53 +260,60 @@ class TopSelectView(discord.ui.View):
 
 
 # ============================================================
-# SAY PROFILE MENU
+# SAY PROFILE VIEW
 # ============================================================
 
 class SayProfileSelect(discord.ui.Select):
 
     def __init__(
         self,
-        avatar_bytes=None,
-        banner_bytes=None,
-        full_profile_bytes=None,
+        cog,
+        say_message_id,
         avatar_url=None,
         banner_url=None,
-        username=None
+        profile_url=None,
+        username=None,
+        room_definition=None
     ):
 
-        self.avatar_bytes = avatar_bytes
-        self.banner_bytes = banner_bytes
-        self.full_profile_bytes = full_profile_bytes
-
+        self.cog = cog
+        self.say_message_id = str(say_message_id)
         self.avatar_url = avatar_url
         self.banner_url = banner_url
+        self.profile_url = profile_url
         self.username = username or "Unknown"
+        self.room_definition = room_definition or ""
 
         options = [
             discord.SelectOption(
-                label="أخذ الافتار",
-                value="avatar",
-                emoji="👤",
-                description="إرسال صورة الافتار"
+                label="معلومات الحساب",
+                value="info",
+                emoji="📋",
+                description="عرض معلومات الحساب"
             ),
             discord.SelectOption(
-                label="أخذ البنر",
+                label="رابط الافتار",
+                value="avatar",
+                emoji="👤",
+                description="إرسال رابط الافتار"
+            ),
+            discord.SelectOption(
+                label="رابط البنر",
                 value="banner",
                 emoji="🎨",
-                description="إرسال صورة البنر"
+                description="إرسال رابط البنر"
             ),
             discord.SelectOption(
                 label="البروفايل الكامل",
                 value="profile",
                 emoji="🪪",
-                description="البنر والافتار معًا"
+                description="عرض صورة البروفايل"
             ),
             discord.SelectOption(
-                label="معلومات البروفايل",
-                value="info",
-                emoji="📊",
-                description="عرض معلومات البروفايل"
+                label="إعادة توليد البروفايل",
+                value="regenerate",
+                emoji="🔄",
+                description="إعادة إنشاء صورة البروفايل"
             ),
         ]
 
@@ -285,262 +322,200 @@ class SayProfileSelect(discord.ui.Select):
             min_values=1,
             max_values=1,
             options=options,
-            custom_id=f"fime_profile_menu_{id(self)}"
+            custom_id=f"fime_profile_select_{say_message_id}"
         )
 
     async def callback(self, interaction):
 
         choice = self.values[0]
 
-        # ====================================================
-        # AVATAR
-        # ====================================================
+        if choice == "info":
+            await self.cog.send_say_profile_info(
+                interaction,
+                self.say_message_id
+            )
+            return
 
         if choice == "avatar":
 
-            if not self.avatar_bytes:
+            if not self.avatar_url:
                 await interaction.response.send_message(
-                    "❌ ما فيه افتار متوفر لهذا الـ /say.",
+                    "❌ ما فيه افتار محفوظ لهذا البروفايل.",
                     ephemeral=True
                 )
                 return
 
             await interaction.response.send_message(
-                "👤 **الافتار**",
-                file=discord.File(
-                    io.BytesIO(self.avatar_bytes),
-                    filename="fime-avatar.jpg"
-                ),
+                f"👤 **رابط الافتار:**\n{self.avatar_url}",
                 ephemeral=True
             )
             return
-
-        # ====================================================
-        # BANNER
-        # ====================================================
 
         if choice == "banner":
 
-            if not self.banner_bytes:
+            if not self.banner_url:
                 await interaction.response.send_message(
-                    "❌ ما فيه بنر متوفر لهذا الـ /say.",
+                    "❌ ما فيه بنر محفوظ لهذا البروفايل.",
                     ephemeral=True
                 )
                 return
 
             await interaction.response.send_message(
-                "🎨 **البنر**",
-                file=discord.File(
-                    io.BytesIO(self.banner_bytes),
-                    filename="fime-banner.jpg"
-                ),
+                f"🎨 **رابط البنر:**\n{self.banner_url}",
                 ephemeral=True
             )
             return
-
-        # ====================================================
-        # FULL PROFILE
-        # ====================================================
 
         if choice == "profile":
 
-            if not self.full_profile_bytes:
+            if not self.profile_url:
                 await interaction.response.send_message(
-                    "❌ تعذر تجهيز البروفايل الكامل.",
+                    "❌ صورة البروفايل غير متوفرة.",
                     ephemeral=True
                 )
                 return
 
             await interaction.response.send_message(
-                "🪪 **البروفايل الكامل**",
-                file=discord.File(
-                    io.BytesIO(self.full_profile_bytes),
-                    filename="fime-full-profile.jpg"
-                ),
+                self.profile_url,
                 ephemeral=True
             )
             return
 
-        # ====================================================
-        # PROFILE INFO
-        # ====================================================
-
-        if choice == "info":
-
-            embed = discord.Embed(
-                title="📊 معلومات البروفايل",
-                color=discord.Color.blurple()
-            )
-
-            embed.add_field(
-                name="👤 المستخدم",
-                value=f"`{self.username}`",
-                inline=False
-            )
-
-            embed.add_field(
-                name="🖼️ الافتار",
-                value="متوفر ✅" if self.avatar_bytes else "غير متوفر ❌",
-                inline=True
-            )
-
-            embed.add_field(
-                name="🎨 البنر",
-                value="متوفر ✅" if self.banner_bytes else "غير متوفر ❌",
-                inline=True
-            )
-
-            embed.add_field(
-                name="🪪 البروفايل",
-                value="جاهز ✅" if self.full_profile_bytes else "غير متوفر ❌",
-                inline=True
-            )
-
-            embed.set_footer(
-                text="Team Fime • Profile System"
-            )
-
-            await interaction.response.send_message(
-                embed=embed,
-                ephemeral=True
+        if choice == "regenerate":
+            await self.cog.regenerate_say_profile(
+                interaction,
+                self.say_message_id
             )
 
 
-# ============================================================
-# PROFILE BUTTON
-# ============================================================
-
-class ProfileURLButton(discord.ui.Button):
+class SayProfileButton(discord.ui.Button):
 
     def __init__(
         self,
+        cog,
+        say_message_id,
         label,
         emoji,
-        url,
-        custom_id
+        action,
+        row=1
     ):
 
-        self.target_url = url
+        self.cog = cog
+        self.say_message_id = str(say_message_id)
+        self.action = action
 
         super().__init__(
             label=label,
             emoji=emoji,
-            style=discord.ButtonStyle.link,
-            url=url
-        )
-
-
-# ============================================================
-# ROOM DEFINITION BUTTON
-# ============================================================
-
-class SayRoomDefinitionButton(discord.ui.Button):
-
-    def __init__(self, room_definition):
-
-        self.room_definition = str(
-            room_definition or ""
-        ).strip()
-
-        super().__init__(
-            label="تعريف الروم",
-            emoji="📖",
             style=discord.ButtonStyle.secondary,
-            custom_id=f"fime_room_definition_{id(self)}",
-            disabled=not bool(self.room_definition)
+            custom_id=f"fime_say_button_{action}_{say_message_id}",
+            row=row
         )
 
     async def callback(self, interaction):
 
-        if not self.room_definition:
-            await interaction.response.send_message(
-                "❌ ما فيه تعريف محفوظ لهذا الروم.",
-                ephemeral=True
+        if self.action == "info":
+            await self.cog.send_say_profile_info(
+                interaction,
+                self.say_message_id
             )
-            return
 
-        embed = discord.Embed(
-            title="📖 تعريف الروم",
-            description=self.room_definition,
-            color=discord.Color.blurple()
-        )
+        elif self.action == "room":
+            await self.cog.send_say_room_definition(
+                interaction,
+                self.say_message_id
+            )
 
-        embed.set_footer(
-            text="Team Fime • Room Information"
-        )
+        elif self.action == "regenerate":
+            await self.cog.regenerate_say_profile(
+                interaction,
+                self.say_message_id
+            )
 
-        await interaction.response.send_message(
-            embed=embed,
-            ephemeral=True
-        )
-
-
-# ============================================================
-# SAY VIEW
-# ============================================================
 
 class SayProfileView(discord.ui.View):
 
     def __init__(
         self,
-        avatar_bytes=None,
-        banner_bytes=None,
-        full_profile_bytes=None,
-        room_definition=None,
+        cog,
+        say_message_id,
         avatar_url=None,
         banner_url=None,
-        username=None
+        profile_url=None,
+        username=None,
+        room_definition=None
     ):
 
-        super().__init__(timeout=1800)
+        super().__init__(timeout=None)
 
         self.add_item(
             SayProfileSelect(
-                avatar_bytes=avatar_bytes,
-                banner_bytes=banner_bytes,
-                full_profile_bytes=full_profile_bytes,
+                cog,
+                say_message_id,
                 avatar_url=avatar_url,
                 banner_url=banner_url,
-                username=username
+                profile_url=profile_url,
+                username=username,
+                room_definition=room_definition
             )
+        )
+
+        self.add_item(
+            SayProfileButton(
+                cog,
+                say_message_id,
+                "معلومات",
+                "📋",
+                "info",
+                row=1
+            )
+        )
+
+        self.add_item(
+            SayProfileButton(
+                cog,
+                say_message_id,
+                "تعريف الروم",
+                "📖",
+                "room",
+                row=1
+            )
+        )
+
+        self.add_item(
+            SayProfileButton(
+                cog,
+                say_message_id,
+                "إعادة توليد",
+                "🔄",
+                "regenerate",
+                row=2
+            )
+
+
         )
 
         if avatar_url:
             self.add_item(
-                ProfileURLButton(
-                    "رابط الافتار",
-                    "🔗",
-                    avatar_url,
-                    f"fime_avatar_link_{id(self)}"
+                discord.ui.Button(
+                    label="رابط الافتار",
+                    emoji="👤",
+                    style=discord.ButtonStyle.link,
+                    url=avatar_url,
+                    row=2
                 )
             )
 
         if banner_url:
             self.add_item(
-                ProfileURLButton(
-                    "رابط البنر",
-                    "🖼️",
-                    banner_url,
-                    f"fime_banner_link_{id(self)}"
+                discord.ui.Button(
+                    label="رابط البنر",
+                    emoji="🎨",
+                    style=discord.ButtonStyle.link,
+                    url=banner_url,
+                    row=2
                 )
             )
-
-        self.add_item(
-            SayRoomDefinitionButton(
-                room_definition
-            )
-        )
-
-    async def on_timeout(self):
-
-        for item in self.children:
-
-            if not isinstance(
-                item,
-                discord.ui.Button
-            ) or item.style != discord.ButtonStyle.link:
-
-                item.disabled = True
 
 
 # ============================================================
@@ -558,9 +533,7 @@ class SuggestionView(discord.ui.View):
         super().__init__(timeout=None)
 
         self.cog = cog
-        self.suggestion_id = str(
-            suggestion_id
-        )
+        self.suggestion_id = str(suggestion_id)
 
         approve = discord.ui.Button(
             label="قبول",
@@ -612,10 +585,13 @@ class AutomaticLineSystem(commands.Cog):
         self.config = load_config()
         self.top_data = load_top()
         self.suggestions = load_suggestions()
+        self.warnings = load_warnings()
+        self.say_messages = load_say_messages()
 
         print(
             "✅ bot5 — Line + Join + Fime + TOP + SAY "
-            "+ Server + Edit + Suggestions loaded."
+            "+ Server + Edit + Suggestions + Triggers "
+            "+ Moderation loaded."
         )
 
     # ========================================================
@@ -624,50 +600,48 @@ class AutomaticLineSystem(commands.Cog):
 
     def get_config(self, guild_id):
 
-        key = str(guild_id)
+        guild_key = str(guild_id)
 
-        if key not in self.config:
-
-            self.config[key] = deepcopy(
+        if guild_key not in self.config:
+            self.config[guild_key] = deepcopy(
                 DEFAULT_GUILD_CONFIG
             )
 
-        current = self.config[key]
+        current = self.config[guild_key]
 
         if not isinstance(current, dict):
-
             current = deepcopy(
                 DEFAULT_GUILD_CONFIG
             )
-
-            self.config[key] = current
+            self.config[guild_key] = current
 
         changed = False
 
-        for key_name, default in DEFAULT_GUILD_CONFIG.items():
+        for key, default in DEFAULT_GUILD_CONFIG.items():
 
-            if key_name not in current:
-
-                current[key_name] = deepcopy(
-                    default
-                )
-
+            if key not in current:
+                current[key] = deepcopy(default)
                 changed = True
 
         if not isinstance(
             current.get("top_allowed_role_ids"),
             list
         ):
-
             current["top_allowed_role_ids"] = []
             changed = True
 
         if not isinstance(
-            current.get("say_room_definition"),
-            str
+            current.get("suggestions_allowed_role_ids"),
+            list
         ):
+            current["suggestions_allowed_role_ids"] = []
+            changed = True
 
-            current["say_room_definition"] = ""
+        if not isinstance(
+            current.get("auto_triggers"),
+            dict
+        ):
+            current["auto_triggers"] = {}
             changed = True
 
         if changed:
@@ -680,14 +654,17 @@ class AutomaticLineSystem(commands.Cog):
     # ========================================================
 
     def is_owner(self, interaction):
-
         return interaction.user.id == OWNER_ID
 
     async def owner_only(self, interaction):
+        if not self.is_owner(interaction):
+            await interaction.response.send_message(
+                "❌ هذا الأمر للمالك فقط.",
+                ephemeral=True
+            )
+            return True
 
-        return not self.is_owner(
-            interaction
-        )
+        return False
 
     # ========================================================
     # IMAGE
@@ -729,71 +706,53 @@ class AutomaticLineSystem(commands.Cog):
 
     async def read_image_attachment(self, attachment):
 
-        if not self.is_supported_image(
-            attachment
-        ):
-            raise ValueError(
-                "صيغة الصورة غير مدعومة."
-            )
+        if not self.is_supported_image(attachment):
+            raise ValueError("صيغة الصورة غير مدعومة.")
 
         data = await attachment.read()
 
         if not data:
-            raise ValueError(
-                "الصورة فارغة."
-            )
+            raise ValueError("الصورة فارغة.")
 
         try:
-
             image = Image.open(
                 io.BytesIO(data)
             )
 
             image.seek(0)
 
-            return image.convert(
-                "RGBA"
-            )
+            return image.convert("RGBA")
 
         except Exception as error:
-
             raise ValueError(
                 "تعذر قراءة الصورة."
             ) from error
 
-    def get_font(
-        self,
-        size,
-        bold=False
-    ):
+    def get_font(self, size, bold=False):
 
-        if bold:
-
-            paths = [
+        paths = (
+            [
                 "/usr/share/fonts/truetype/noto/NotoSansArabic-Bold.ttf",
                 "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf",
                 "/usr/share/fonts/truetype/lato/Lato-Bold.ttf",
             ]
-
-        else:
-
-            paths = [
+            if bold
+            else
+            [
                 "/usr/share/fonts/truetype/noto/NotoSansArabic-Regular.ttf",
                 "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
                 "/usr/share/fonts/truetype/lato/Lato-Regular.ttf",
             ]
+        )
 
         for path in paths:
 
             try:
-
                 if os.path.exists(path):
-
                     return ImageFont.truetype(
                         path,
                         size
                     )
-
             except Exception:
                 pass
 
@@ -801,87 +760,49 @@ class AutomaticLineSystem(commands.Cog):
 
     def prepare_text(self, text):
 
-        text = str(
-            text or ""
-        )
+        text = str(text or "")
 
         if ARABIC_SUPPORT:
 
             try:
-
                 return get_display(
-                    arabic_reshaper.reshape(
-                        text
-                    )
+                    arabic_reshaper.reshape(text)
                 )
-
             except Exception:
                 pass
 
         return text
 
-    def crop_to_fill(
-        self,
-        image,
-        size
-    ):
+    def crop_to_fill(self, image, size):
 
         width, height = size
 
-        image = image.convert(
-            "RGBA"
-        )
+        image = image.convert("RGBA")
 
         if image.width <= 0 or image.height <= 0:
-
             return Image.new(
                 "RGBA",
                 size,
                 (10, 12, 18, 255)
             )
 
-        source_ratio = (
-            image.width /
-            image.height
-        )
-
-        target_ratio = (
-            width /
-            height
-        )
+        source_ratio = image.width / image.height
+        target_ratio = width / height
 
         if source_ratio > target_ratio:
-
             new_height = height
-
-            new_width = int(
-                new_height *
-                source_ratio
-            )
-
+            new_width = int(new_height * source_ratio)
         else:
-
             new_width = width
-
-            new_height = int(
-                new_width /
-                source_ratio
-            )
+            new_height = int(new_width / source_ratio)
 
         image = image.resize(
             (new_width, new_height),
             Image.Resampling.LANCZOS
         )
 
-        left = (
-            new_width -
-            width
-        ) // 2
-
-        top = (
-            new_height -
-            height
-        ) // 2
+        left = (new_width - width) // 2
+        top = (new_height - height) // 2
 
         return image.crop(
             (
@@ -896,11 +817,10 @@ class AutomaticLineSystem(commands.Cog):
         self,
         image,
         size=None,
-        quality=84
+        quality=88
     ):
 
         if size:
-
             image = self.crop_to_fill(
                 image,
                 size
@@ -908,9 +828,7 @@ class AutomaticLineSystem(commands.Cog):
 
         output = io.BytesIO()
 
-        image.convert(
-            "RGB"
-        ).save(
+        image.convert("RGB").save(
             output,
             format="JPEG",
             quality=quality,
@@ -919,10 +837,6 @@ class AutomaticLineSystem(commands.Cog):
         )
 
         return output.getvalue()
-
-    # ========================================================
-    # DRAW CENTER
-    # ========================================================
 
     def draw_center(
         self,
@@ -940,15 +854,11 @@ class AutomaticLineSystem(commands.Cog):
             font=font
         )
 
-        width = (
-            bbox[2] -
-            bbox[0]
-        )
+        width = bbox[2] - bbox[0]
 
         draw.text(
             (
-                x -
-                width / 2,
+                x - width / 2,
                 y
             ),
             text,
@@ -957,7 +867,418 @@ class AutomaticLineSystem(commands.Cog):
         )
 
     # ========================================================
-    # FAST FULL PROFILE
+    # SAY IMAGE
+    # ========================================================
+
+    def create_say_image_sync(
+        self,
+        avatar_image,
+        banner_image,
+        template_image,
+        room_definition,
+        message_text,
+        username
+    ):
+
+        WIDTH = 1600
+        HEIGHT = 900
+
+        if template_image:
+
+            canvas = self.crop_to_fill(
+                template_image,
+                (WIDTH, HEIGHT)
+            )
+
+            overlay = Image.new(
+                "RGBA",
+                canvas.size,
+                (3, 5, 10, 85)
+            )
+
+            canvas.alpha_composite(overlay)
+
+        else:
+
+            canvas = Image.new(
+                "RGBA",
+                (WIDTH, HEIGHT),
+                (5, 7, 13, 255)
+            )
+
+            glow = Image.new(
+                "RGBA",
+                canvas.size,
+                (0, 0, 0, 0)
+            )
+
+            gd = ImageDraw.Draw(glow)
+
+            gd.ellipse(
+                (900, -350, 1800, 550),
+                fill=(124, 92, 255, 75)
+            )
+
+            gd.ellipse(
+                (-500, 560, 650, 1250),
+                fill=(35, 110, 255, 42)
+            )
+
+            glow = glow.filter(
+                ImageFilter.GaussianBlur(110)
+            )
+
+            canvas.alpha_composite(glow)
+
+            draw = ImageDraw.Draw(canvas)
+
+            draw.rounded_rectangle(
+                (35, 35, WIDTH - 35, HEIGHT - 35),
+                radius=48,
+                fill=(10, 13, 22, 247),
+                outline=(55, 61, 82),
+                width=2
+            )
+
+        draw = ImageDraw.Draw(canvas)
+
+        # ----------------------------------------------------
+        # HEADER
+        # ----------------------------------------------------
+
+        draw.text(
+            (90, 70),
+            "TEAM FIME",
+            font=self.get_font(35, True),
+            fill=(248, 249, 252)
+        )
+
+        draw.text(
+            (92, 117),
+            "OFFICIAL COMMUNITY",
+            font=self.get_font(16, True),
+            fill=(154, 132, 255)
+        )
+
+        draw.rounded_rectangle(
+            (1320, 75, 1505, 122),
+            radius=22,
+            fill=(124, 92, 255, 35),
+            outline=(124, 92, 255, 90),
+            width=1
+        )
+
+        draw.ellipse(
+            (1335, 91, 1351, 107),
+            fill=(76, 220, 130)
+        )
+
+        draw.text(
+            (1365, 87),
+            "FIME",
+            font=self.get_font(15, True),
+            fill=(220, 221, 230)
+        )
+
+        # ----------------------------------------------------
+        # BANNER
+        # ----------------------------------------------------
+
+        if banner_image:
+
+            banner = self.crop_to_fill(
+                banner_image,
+                (1410, 320)
+            )
+
+            canvas.paste(
+                banner,
+                (95, 170)
+            )
+
+            dark = Image.new(
+                "RGBA",
+                (1410, 320),
+                (0, 0, 0, 0)
+            )
+
+            dd = ImageDraw.Draw(dark)
+
+            dd.rectangle(
+                (0, 185, 1410, 320),
+                fill=(3, 4, 8, 165)
+            )
+
+            canvas.alpha_composite(
+                dark,
+                (95, 170)
+            )
+
+        else:
+
+            draw.rounded_rectangle(
+                (95, 170, 1505, 490),
+                radius=32,
+                fill=(15, 18, 29),
+                outline=(124, 92, 255, 60),
+                width=2
+            )
+
+            draw.text(
+                (145, 255),
+                "FIME",
+                font=self.get_font(105, True),
+                fill=(124, 92, 255, 65)
+            )
+
+            draw.text(
+                (150, 390),
+                "TEAM FIME COMMUNITY",
+                font=self.get_font(18, True),
+                fill=(140, 147, 165)
+            )
+
+        # ----------------------------------------------------
+        # AVATAR
+        # ----------------------------------------------------
+
+        if avatar_image:
+
+            avatar = self.crop_to_fill(
+                avatar_image,
+                (250, 250)
+            )
+
+            mask = Image.new(
+                "L",
+                (250, 250),
+                0
+            )
+
+            ImageDraw.Draw(mask).ellipse(
+                (0, 0, 250, 250),
+                fill=255
+            )
+
+            avatar_rgba = Image.new(
+                "RGBA",
+                (250, 250),
+                (0, 0, 0, 0)
+            )
+
+            avatar_rgba.paste(
+                avatar,
+                (0, 0),
+                mask
+            )
+
+            canvas.paste(
+                avatar_rgba,
+                (125, 380),
+                avatar_rgba
+            )
+
+            draw.ellipse(
+                (115, 370, 385, 640),
+                outline=(6, 8, 14),
+                width=14
+            )
+
+            draw.ellipse(
+                (115, 370, 385, 640),
+                outline=(124, 92, 255),
+                width=5
+            )
+
+        else:
+
+            draw.ellipse(
+                (125, 380, 375, 630),
+                fill=(24, 28, 40),
+                outline=(124, 92, 255),
+                width=5
+            )
+
+            self.draw_center(
+                draw,
+                250,
+                450,
+                "F",
+                self.get_font(80, True),
+                (154, 132, 255)
+            )
+
+        # ----------------------------------------------------
+        # USER
+        # ----------------------------------------------------
+
+        username_text = str(username or "Fime")
+
+        draw.text(
+            (435, 395),
+            self.prepare_text(username_text[:28]),
+            font=self.get_font(46, True),
+            fill=(247, 248, 252)
+        )
+
+        draw.text(
+            (438, 455),
+            "Official Community Message",
+            font=self.get_font(21),
+            fill=(151, 158, 176)
+        )
+
+        # ----------------------------------------------------
+        # MESSAGE CARD
+        # ----------------------------------------------------
+
+        draw.rounded_rectangle(
+            (435, 505, 1505, 690),
+            radius=28,
+            fill=(14, 17, 27, 245),
+            outline=(124, 92, 255, 75),
+            width=2
+        )
+
+        draw.text(
+            (470, 530),
+            "MESSAGE",
+            font=self.get_font(17, True),
+            fill=(154, 132, 255)
+        )
+
+        text = self.prepare_text(message_text)
+
+        font = self.get_font(24)
+
+        words = text.split()
+        lines = []
+        current = ""
+
+        for word in words:
+
+            candidate = (
+                f"{current} {word}".strip()
+            )
+
+            bbox = draw.textbbox(
+                (0, 0),
+                candidate,
+                font=font
+            )
+
+            if bbox[2] - bbox[0] <= 980:
+                current = candidate
+            else:
+
+                if current:
+                    lines.append(current)
+
+                current = word
+
+        if current:
+            lines.append(current)
+
+        lines = lines[:4]
+
+        for index, line in enumerate(lines):
+
+            draw.text(
+                (470, 575 + index * 34),
+                line,
+                font=font,
+                fill=(225, 228, 236)
+            )
+
+        # ----------------------------------------------------
+        # ROOM DEFINITION
+        # ----------------------------------------------------
+
+        if room_definition:
+
+            definition = self.prepare_text(
+                room_definition
+            )
+
+            draw.rounded_rectangle(
+                (435, 710, 1505, 785),
+                radius=22,
+                fill=(14, 17, 27, 235),
+                outline=(48, 53, 70),
+                width=2
+            )
+
+            draw.text(
+                (470, 730),
+                self.prepare_text(
+                    "📖 تعريف الروم"
+                ),
+                font=self.get_font(16, True),
+                fill=(154, 132, 255)
+            )
+
+            draw.text(
+                (680, 730),
+                definition[:85],
+                font=self.get_font(17),
+                fill=(190, 195, 207)
+            )
+
+        else:
+
+            draw.rounded_rectangle(
+                (435, 710, 1505, 785),
+                radius=22,
+                fill=(14, 17, 27, 235),
+                outline=(48, 53, 70),
+                width=2
+            )
+
+            draw.text(
+                (470, 730),
+                "FIME COMMUNITY",
+                font=self.get_font(16, True),
+                fill=(124, 92, 255)
+            )
+
+            draw.text(
+                (680, 730),
+                "Official message • Team Fime",
+                font=self.get_font(17),
+                fill=(175, 181, 194)
+            )
+
+        # ----------------------------------------------------
+        # FOOTER
+        # ----------------------------------------------------
+
+        draw.rounded_rectangle(
+            (95, 820, 1505, 850),
+            radius=15,
+            fill=(124, 92, 255)
+        )
+
+        draw.text(
+            (115, 826),
+            "FIME",
+            font=self.get_font(13, True),
+            fill="white"
+        )
+
+        draw.text(
+            (1370, 826),
+            "TEAM FIME",
+            font=self.get_font(13, True),
+            fill=(235, 236, 242)
+        )
+
+        return self.image_to_jpeg(
+            canvas,
+            quality=88
+        )
+
+    # ========================================================
+    # FAST PROFILE
     # ========================================================
 
     def create_fast_profile(
@@ -975,15 +1296,13 @@ class AutomaticLineSystem(commands.Cog):
             (7, 8, 13)
         )
 
-        draw = ImageDraw.Draw(
-            canvas
-        )
+        draw = ImageDraw.Draw(canvas)
 
         if banner_image:
 
             banner = self.crop_to_fill(
                 banner_image,
-                (width - 70, 360)
+                (1130, 340)
             )
 
             canvas.paste(
@@ -993,21 +1312,14 @@ class AutomaticLineSystem(commands.Cog):
 
             overlay = Image.new(
                 "RGBA",
-                (width - 70, 360),
+                (1130, 340),
                 (0, 0, 0, 0)
             )
 
-            overlay_draw = ImageDraw.Draw(
-                overlay
-            )
+            od = ImageDraw.Draw(overlay)
 
-            overlay_draw.rectangle(
-                (
-                    0,
-                    230,
-                    width,
-                    360
-                ),
+            od.rectangle(
+                (0, 210, 1130, 340),
                 fill=(4, 5, 9, 150)
             )
 
@@ -1020,12 +1332,7 @@ class AutomaticLineSystem(commands.Cog):
         else:
 
             draw.rounded_rectangle(
-                (
-                    35,
-                    35,
-                    width - 35,
-                    395
-                ),
+                (35, 35, width - 35, 375),
                 radius=30,
                 fill=(15, 18, 28)
             )
@@ -1043,9 +1350,7 @@ class AutomaticLineSystem(commands.Cog):
                 0
             )
 
-            ImageDraw.Draw(
-                mask
-            ).ellipse(
+            ImageDraw.Draw(mask).ellipse(
                 (0, 0, 300, 300),
                 fill=255
             )
@@ -1064,12 +1369,12 @@ class AutomaticLineSystem(commands.Cog):
 
             canvas.paste(
                 avatar_rgba,
-                (75, 310),
+                (75, 300),
                 avatar_rgba
             )
 
             draw.ellipse(
-                (68, 303, 382, 617),
+                (68, 293, 382, 607),
                 outline=(124, 92, 255),
                 width=7
             )
@@ -1077,7 +1382,7 @@ class AutomaticLineSystem(commands.Cog):
         else:
 
             draw.ellipse(
-                (75, 310, 375, 610),
+                (75, 300, 375, 600),
                 fill=(25, 29, 42),
                 outline=(124, 92, 255),
                 width=6
@@ -1086,624 +1391,44 @@ class AutomaticLineSystem(commands.Cog):
             self.draw_center(
                 draw,
                 225,
-                395,
+                385,
                 "F",
-                self.get_font(
-                    100,
-                    True
-                ),
+                self.get_font(100, True),
                 (154, 132, 255)
             )
 
         draw.text(
-            (440, 425),
+            (440, 420),
             "TEAM FIME",
-            font=self.get_font(
-                32,
-                True
-            ),
+            font=self.get_font(32, True),
             fill=(245, 247, 251)
         )
 
         draw.text(
-            (440, 475),
+            (440, 468),
             "Fime • Community Profile",
-            font=self.get_font(
-                22
-            ),
+            font=self.get_font(22),
             fill=(150, 157, 175)
         )
 
         draw.rounded_rectangle(
-            (
-                440,
-                530,
-                750,
-                575
-            ),
+            (440, 525, 760, 570),
             radius=20,
             fill=(124, 92, 255)
         )
 
         draw.text(
-            (468, 541),
+            (468, 536),
             "FULL PROFILE",
-            font=self.get_font(
-                16,
-                True
-            ),
+            font=self.get_font(16, True),
             fill="white"
         )
 
         draw.text(
             (850, 610),
             "TEAM FIME",
-            font=self.get_font(
-                17,
-                True
-            ),
+            font=self.get_font(17, True),
             fill=(130, 137, 155)
-        )
-
-        return self.image_to_jpeg(
-            canvas,
-            quality=86
-        )
-
-    # ========================================================
-    # NEW PROFESSIONAL SAY TEMPLATE
-    # ========================================================
-
-    async def create_say_image(
-        self,
-        avatar_image=None,
-        banner_image=None,
-        template_image=None,
-        room_definition=None
-    ):
-
-        WIDTH = 1600
-        HEIGHT = 900
-
-        # ====================================================
-        # CUSTOM TEMPLATE
-        # ====================================================
-
-        if template_image:
-
-            canvas = self.crop_to_fill(
-                template_image,
-                (WIDTH, HEIGHT)
-            )
-
-            overlay = Image.new(
-                "RGBA",
-                canvas.size,
-                (3, 5, 10, 90)
-            )
-
-            canvas.alpha_composite(
-                overlay
-            )
-
-        else:
-
-            canvas = Image.new(
-                "RGBA",
-                (
-                    WIDTH,
-                    HEIGHT
-                ),
-                (5, 7, 13, 255)
-            )
-
-            glow = Image.new(
-                "RGBA",
-                canvas.size,
-                (0, 0, 0, 0)
-            )
-
-            gd = ImageDraw.Draw(
-                glow
-            )
-
-            gd.ellipse(
-                (
-                    950,
-                    -300,
-                    1800,
-                    520
-                ),
-                fill=(124, 92, 255, 75)
-            )
-
-            gd.ellipse(
-                (
-                    -450,
-                    580,
-                    650,
-                    1250
-                ),
-                fill=(35, 110, 255, 42)
-            )
-
-            glow = glow.filter(
-                ImageFilter.GaussianBlur(
-                    110
-                )
-            )
-
-            canvas.alpha_composite(
-                glow
-            )
-
-            draw = ImageDraw.Draw(
-                canvas
-            )
-
-            # Main frame
-            draw.rounded_rectangle(
-                (
-                    35,
-                    35,
-                    WIDTH - 35,
-                    HEIGHT - 35
-                ),
-                radius=48,
-                fill=(10, 13, 22, 247),
-                outline=(55, 61, 82),
-                width=2
-            )
-
-        draw = ImageDraw.Draw(
-            canvas
-        )
-
-        # ====================================================
-        # HEADER
-        # ====================================================
-
-        draw.text(
-            (90, 72),
-            "TEAM FIME",
-            font=self.get_font(
-                35,
-                True
-            ),
-            fill=(248, 249, 252)
-        )
-
-        draw.text(
-            (92, 118),
-            "OFFICIAL COMMUNITY",
-            font=self.get_font(
-                16,
-                True
-            ),
-            fill=(154, 132, 255)
-        )
-
-        # Small status pill
-        draw.rounded_rectangle(
-            (
-                1310,
-                78,
-                1505,
-                122
-            ),
-            radius=22,
-            fill=(124, 92, 255, 35),
-            outline=(124, 92, 255, 90),
-            width=1
-        )
-
-        draw.ellipse(
-            (
-                1330,
-                91,
-                1346,
-                107
-            ),
-            fill=(76, 220, 130)
-        )
-
-        draw.text(
-            (1360, 88),
-            "FIME",
-            font=self.get_font(
-                15,
-                True
-            ),
-            fill=(220, 221, 230)
-        )
-
-        # ====================================================
-        # BANNER
-        # ====================================================
-
-        if banner_image:
-
-            banner = self.crop_to_fill(
-                banner_image,
-                (1410, 330)
-            )
-
-            canvas.paste(
-                banner,
-                (95, 170)
-            )
-
-            dark = Image.new(
-                "RGBA",
-                (
-                    1410,
-                    330
-                ),
-                (0, 0, 0, 0)
-            )
-
-            dd = ImageDraw.Draw(
-                dark
-            )
-
-            dd.rectangle(
-                (
-                    0,
-                    205,
-                    1410,
-                    330
-                ),
-                fill=(3, 4, 8, 155)
-            )
-
-            canvas.alpha_composite(
-                dark,
-                (95, 170)
-            )
-
-        else:
-
-            draw.rounded_rectangle(
-                (
-                    95,
-                    170,
-                    1505,
-                    500
-                ),
-                radius=32,
-                fill=(15, 18, 29),
-                outline=(124, 92, 255, 60),
-                width=2
-            )
-
-            draw.text(
-                (145, 280),
-                "FIME",
-                font=self.get_font(
-                    110,
-                    True
-                ),
-                fill=(124, 92, 255, 65)
-            )
-
-            draw.text(
-                (148, 405),
-                "TEAM FIME COMMUNITY",
-                font=self.get_font(
-                    18,
-                    True
-                ),
-                fill=(140, 147, 165)
-            )
-
-        # ====================================================
-        # AVATAR
-        # ====================================================
-
-        if avatar_image:
-
-            avatar = self.crop_to_fill(
-                avatar_image,
-                (250, 250)
-            )
-
-            mask = Image.new(
-                "L",
-                (
-                    250,
-                    250
-                ),
-                0
-            )
-
-            ImageDraw.Draw(
-                mask
-            ).ellipse(
-                (
-                    0,
-                    0,
-                    250,
-                    250
-                ),
-                fill=255
-            )
-
-            avatar_rgba = Image.new(
-                "RGBA",
-                (
-                    250,
-                    250
-                ),
-                (0, 0, 0, 0)
-            )
-
-            avatar_rgba.paste(
-                avatar,
-                (0, 0),
-                mask
-            )
-
-            canvas.paste(
-                avatar_rgba,
-                (125, 390),
-                avatar_rgba
-            )
-
-            draw.ellipse(
-                (
-                    115,
-                    380,
-                    385,
-                    650
-                ),
-                outline=(6, 8, 14),
-                width=14
-            )
-
-            draw.ellipse(
-                (
-                    115,
-                    380,
-                    385,
-                    650
-                ),
-                outline=(124, 92, 255),
-                width=5
-            )
-
-        else:
-
-            draw.ellipse(
-                (
-                    125,
-                    390,
-                    375,
-                    640
-                ),
-                fill=(24, 28, 40),
-                outline=(124, 92, 255),
-                width=5
-            )
-
-            self.draw_center(
-                draw,
-                250,
-                460,
-                "F",
-                self.get_font(
-                    80,
-                    True
-                ),
-                (154, 132, 255)
-            )
-
-        # ====================================================
-        # PROFILE AREA
-        # ====================================================
-
-        draw.text(
-            (435, 405),
-            "FIME",
-            font=self.get_font(
-                52,
-                True
-            ),
-            fill=(247, 248, 252)
-        )
-
-        draw.text(
-            (438, 472),
-            "Official Community Message",
-            font=self.get_font(
-                23
-            ),
-            fill=(151, 158, 176)
-        )
-
-        draw.rounded_rectangle(
-            (
-                435,
-                520,
-                735,
-                565
-            ),
-            radius=22,
-            fill=(124, 92, 255, 35),
-            outline=(124, 92, 255, 100)
-        )
-
-        draw.text(
-            (460, 532),
-            "OFFICIAL PROFILE",
-            font=self.get_font(
-                15,
-                True
-            ),
-            fill=(166, 147, 255)
-        )
-
-        # ====================================================
-        # ROOM DEFINITION
-        # ====================================================
-
-        if room_definition:
-
-            text = self.prepare_text(
-                room_definition
-            )
-
-            words = text.split()
-
-            lines = []
-
-            current = ""
-
-            font = self.get_font(
-                20
-            )
-
-            for word in words:
-
-                candidate = (
-                    f"{current} {word}".strip()
-                )
-
-                bbox = draw.textbbox(
-                    (0, 0),
-                    candidate,
-                    font=font
-                )
-
-                if (
-                    bbox[2] -
-                    bbox[0]
-                ) <= 830:
-
-                    current = candidate
-
-                else:
-
-                    if current:
-                        lines.append(
-                            current
-                        )
-
-                    current = word
-
-            if current:
-                lines.append(
-                    current
-                )
-
-            lines = lines[:3]
-
-            draw.rounded_rectangle(
-                (
-                    435,
-                    595,
-                    1500,
-                    770
-                ),
-                radius=28,
-                fill=(14, 17, 27, 240),
-                outline=(124, 92, 255, 70),
-                width=2
-            )
-
-            draw.text(
-                (470, 620),
-                self.prepare_text(
-                    "📖 تعريف الروم"
-                ),
-                font=self.get_font(
-                    18,
-                    True
-                ),
-                fill=(154, 132, 255)
-            )
-
-            for index, line in enumerate(
-                lines
-            ):
-
-                draw.text(
-                    (
-                        470,
-                        658 +
-                        index * 31
-                    ),
-                    line,
-                    font=font,
-                    fill=(190, 195, 207)
-                )
-
-        else:
-
-            draw.rounded_rectangle(
-                (
-                    435,
-                    595,
-                    1500,
-                    735
-                ),
-                radius=28,
-                fill=(14, 17, 27, 240),
-                outline=(48, 53, 70),
-                width=2
-            )
-
-            draw.text(
-                (470, 630),
-                "FIME COMMUNITY",
-                font=self.get_font(
-                    18,
-                    True
-                ),
-                fill=(124, 92, 255)
-            )
-
-            draw.text(
-                (470, 670),
-                "Official message • Team Fime",
-                font=self.get_font(
-                    22
-                ),
-                fill=(175, 181, 194)
-            )
-
-        # ====================================================
-        # FOOTER
-        # ====================================================
-
-        draw.rounded_rectangle(
-            (
-                95,
-                815,
-                1505,
-                848
-            ),
-            radius=16,
-            fill=(124, 92, 255)
-        )
-
-        draw.text(
-            (115, 821),
-            "FIME",
-            font=self.get_font(
-                14,
-                True
-            ),
-            fill="white"
-        )
-
-        draw.text(
-            (1335, 821),
-            "TEAM FIME",
-            font=self.get_font(
-                14,
-                True
-            ),
-            fill=(235, 236, 242)
         )
 
         return self.image_to_jpeg(
@@ -1712,57 +1437,40 @@ class AutomaticLineSystem(commands.Cog):
         )
 
     # ========================================================
-    # TOP SYSTEM
+    # TOP
     # ========================================================
 
     def get_now(self):
-
-        return datetime.now(
-            SAUDI_TZ
-        )
+        return datetime.now(SAUDI_TZ)
 
     def get_period_keys(self):
 
         now = self.get_now()
 
-        if now.hour >= 22:
-            daily_date = now.date()
-        else:
-            daily_date = (
-                now.date() -
-                timedelta(days=1)
-            )
+        daily_date = (
+            now.date()
+            if now.hour >= 22
+            else now.date() - timedelta(days=1)
+        )
 
         daily = daily_date.isoformat()
 
         week_start = (
-            now.date() -
-            timedelta(
-                days=(now.weekday() + 2) % 7
-            )
+            now.date()
+            - timedelta(days=(now.weekday() + 2) % 7)
         )
 
         weekly = week_start.isoformat()
 
-        monthly = (
-            f"{now.year}-{now.month:02d}"
-        )
+        monthly = f"{now.year}-{now.month:02d}"
 
-        return (
-            daily,
-            weekly,
-            monthly
-        )
+        return daily, weekly, monthly
 
-    def ensure_top_guild(
-        self,
-        guild_id
-    ):
+    def ensure_top_guild(self, guild_id):
 
         key = str(guild_id)
 
         if key not in self.top_data:
-
             self.top_data[key] = {
                 "day": {},
                 "week": {},
@@ -1776,7 +1484,6 @@ class AutomaticLineSystem(commands.Cog):
             "month",
             "all"
         ):
-
             self.top_data[key].setdefault(
                 period,
                 {}
@@ -1784,53 +1491,22 @@ class AutomaticLineSystem(commands.Cog):
 
         return self.top_data[key]
 
-    def add_top_point(
-        self,
-        guild_id,
-        user_id
-    ):
+    def add_top_point(self, guild_id, user_id):
 
-        guild_data = self.ensure_top_guild(
-            guild_id
-        )
+        guild_data = self.ensure_top_guild(guild_id)
 
-        daily, weekly, monthly = (
-            self.get_period_keys()
-        )
+        daily, weekly, monthly = self.get_period_keys()
 
-        if (
-            guild_data["day"].get(
-                "_period"
-            ) != daily
-        ):
+        if guild_data["day"].get("_period") != daily:
+            guild_data["day"] = {"_period": daily}
 
-            guild_data["day"] = {
-                "_period": daily
-            }
+        if guild_data["week"].get("_period") != weekly:
+            guild_data["week"] = {"_period": weekly}
 
-        if (
-            guild_data["week"].get(
-                "_period"
-            ) != weekly
-        ):
+        if guild_data["month"].get("_period") != monthly:
+            guild_data["month"] = {"_period": monthly}
 
-            guild_data["week"] = {
-                "_period": weekly
-            }
-
-        if (
-            guild_data["month"].get(
-                "_period"
-            ) != monthly
-        ):
-
-            guild_data["month"] = {
-                "_period": monthly
-            }
-
-        uid = str(
-            user_id
-        )
+        uid = str(user_id)
 
         for period in (
             "day",
@@ -1838,77 +1514,40 @@ class AutomaticLineSystem(commands.Cog):
             "month",
             "all"
         ):
-
             guild_data[period][uid] = (
-                guild_data[period].get(
-                    uid,
-                    0
-                ) + 1
+                guild_data[period].get(uid, 0) + 1
             )
 
-        save_top(
-            self.top_data
-        )
+        save_top(self.top_data)
 
-    def get_top_users(
-        self,
-        guild,
-        period,
-        limit=10
-    ):
+    def get_top_users(self, guild, period, limit=10):
 
-        guild_data = self.ensure_top_guild(
-            guild.id
-        )
+        guild_data = self.ensure_top_guild(guild.id)
 
-        daily, weekly, monthly = (
-            self.get_period_keys()
-        )
+        daily, weekly, monthly = self.get_period_keys()
 
         if period == "day":
 
-            if (
-                guild_data["day"].get(
-                    "_period"
-                ) != daily
-            ):
-
-                guild_data["day"] = {
-                    "_period": daily
-                }
+            if guild_data["day"].get("_period") != daily:
+                guild_data["day"] = {"_period": daily}
 
             source = guild_data["day"]
 
         elif period == "week":
 
-            if (
-                guild_data["week"].get(
-                    "_period"
-                ) != weekly
-            ):
-
-                guild_data["week"] = {
-                    "_period": weekly
-                }
+            if guild_data["week"].get("_period") != weekly:
+                guild_data["week"] = {"_period": weekly}
 
             source = guild_data["week"]
 
         elif period == "month":
 
-            if (
-                guild_data["month"].get(
-                    "_period"
-                ) != monthly
-            ):
-
-                guild_data["month"] = {
-                    "_period": monthly
-                }
+            if guild_data["month"].get("_period") != monthly:
+                guild_data["month"] = {"_period": monthly}
 
             source = guild_data["month"]
 
         else:
-
             source = guild_data["all"]
 
         results = []
@@ -1919,21 +1558,13 @@ class AutomaticLineSystem(commands.Cog):
                 continue
 
             try:
-
-                member = guild.get_member(
-                    int(uid)
-                )
-
+                member = guild.get_member(int(uid))
             except Exception:
                 member = None
 
             if member:
-
                 results.append(
-                    (
-                        member,
-                        int(points)
-                    )
+                    (member, int(points))
                 )
 
         results.sort(
@@ -1943,11 +1574,7 @@ class AutomaticLineSystem(commands.Cog):
 
         return results[:limit]
 
-    def build_top_embed(
-        self,
-        guild,
-        period
-    ):
+    def build_top_embed(self, guild, period):
 
         names = {
             "day": "توب اليوم",
@@ -1962,7 +1589,6 @@ class AutomaticLineSystem(commands.Cog):
         )
 
         if not results:
-
             return discord.Embed(
                 title=f"🏆 {names[period]}",
                 description="ما فيه بيانات كافية للحين.",
@@ -1977,10 +1603,7 @@ class AutomaticLineSystem(commands.Cog):
 
         lines = []
 
-        for index, (
-            member,
-            points
-        ) in enumerate(
+        for index, (member, points) in enumerate(
             results,
             1
         ):
@@ -1996,9 +1619,7 @@ class AutomaticLineSystem(commands.Cog):
 
         embed = discord.Embed(
             title=f"🏆 {names[period]}",
-            description="\n".join(
-                lines
-            ),
+            description="\n".join(lines),
             color=discord.Color.blurple()
         )
 
@@ -2008,19 +1629,12 @@ class AutomaticLineSystem(commands.Cog):
 
         return embed
 
-    def normalize_top(
-        self,
-        content
-    ):
-
+    def normalize_top(self, content):
         return " ".join(
             str(content or "").split()
         ).casefold()
 
-    def top_period(
-        self,
-        content
-    ):
+    def top_period(self, content):
 
         return {
             "day": "day",
@@ -2028,16 +1642,10 @@ class AutomaticLineSystem(commands.Cog):
             "month": "month",
             "all": "all"
         }.get(
-            self.normalize_top(
-                content
-            )
+            self.normalize_top(content)
         )
 
-    def can_use_top(
-        self,
-        message,
-        cfg
-    ):
+    def can_use_top(self, message, cfg):
 
         if message.author.id == OWNER_ID:
             return True
@@ -2061,15 +1669,11 @@ class AutomaticLineSystem(commands.Cog):
         ):
             return True
 
-        channel_id = cfg.get(
-            "top_channel_id"
-        )
+        channel_id = cfg.get("top_channel_id")
 
         return (
             channel_id
-            and
-            message.channel.id ==
-            int(channel_id)
+            and message.channel.id == int(channel_id)
         )
 
     # ========================================================
@@ -2086,9 +1690,7 @@ class AutomaticLineSystem(commands.Cog):
         channel: discord.TextChannel = None
     ):
 
-        if await self.owner_only(
-            interaction
-        ):
+        if await self.owner_only(interaction):
             return
 
         if not interaction.guild:
@@ -2099,14 +1701,10 @@ class AutomaticLineSystem(commands.Cog):
         )
 
         cfg["top_channel_id"] = (
-            channel.id
-            if channel
-            else None
+            channel.id if channel else None
         )
 
-        save_config(
-            self.config
-        )
+        save_config(self.config)
 
         await interaction.response.send_message(
             (
@@ -2128,9 +1726,7 @@ class AutomaticLineSystem(commands.Cog):
         role: discord.Role
     ):
 
-        if await self.owner_only(
-            interaction
-        ):
+        if await self.owner_only(interaction):
             return
 
         if not interaction.guild:
@@ -2140,18 +1736,12 @@ class AutomaticLineSystem(commands.Cog):
             interaction.guild.id
         )
 
-        roles = cfg[
-            "top_allowed_role_ids"
-        ]
+        roles = cfg["top_allowed_role_ids"]
 
         if role.id not in roles:
-            roles.append(
-                role.id
-            )
+            roles.append(role.id)
 
-        save_config(
-            self.config
-        )
+        save_config(self.config)
 
         await interaction.response.send_message(
             f"✅ تمت إضافة {role.mention} للتوب.",
@@ -2168,9 +1758,7 @@ class AutomaticLineSystem(commands.Cog):
         role: discord.Role
     ):
 
-        if await self.owner_only(
-            interaction
-        ):
+        if await self.owner_only(interaction):
             return
 
         if not interaction.guild:
@@ -2180,19 +1768,10 @@ class AutomaticLineSystem(commands.Cog):
             interaction.guild.id
         )
 
-        if role.id in cfg[
-            "top_allowed_role_ids"
-        ]:
+        if role.id in cfg["top_allowed_role_ids"]:
+            cfg["top_allowed_role_ids"].remove(role.id)
 
-            cfg[
-                "top_allowed_role_ids"
-            ].remove(
-                role.id
-            )
-
-        save_config(
-            self.config
-        )
+        save_config(self.config)
 
         await interaction.response.send_message(
             f"✅ تمت إزالة {role.mention}.",
@@ -2203,14 +1782,9 @@ class AutomaticLineSystem(commands.Cog):
         name="توب-حالة",
         description="عرض حالة التوب"
     )
-    async def top_status(
-        self,
-        interaction
-    ):
+    async def top_status(self, interaction):
 
-        if await self.owner_only(
-            interaction
-        ):
+        if await self.owner_only(interaction):
             return
 
         if not interaction.guild:
@@ -2222,32 +1796,21 @@ class AutomaticLineSystem(commands.Cog):
 
         channel = None
 
-        if cfg.get(
-            "top_channel_id"
-        ):
-
+        if cfg.get("top_channel_id"):
             channel = interaction.guild.get_channel(
-                int(
-                    cfg[
-                        "top_channel_id"
-                    ]
-                )
+                int(cfg["top_channel_id"])
             )
 
         roles = []
 
-        for rid in cfg[
-            "top_allowed_role_ids"
-        ]:
+        for rid in cfg["top_allowed_role_ids"]:
 
             role = interaction.guild.get_role(
                 int(rid)
             )
 
             if role:
-                roles.append(
-                    role.mention
-                )
+                roles.append(role.mention)
 
         await interaction.response.send_message(
             (
@@ -2261,7 +1824,7 @@ class AutomaticLineSystem(commands.Cog):
         )
 
     # ========================================================
-    # LINE SYSTEM
+    # LINE
     # ========================================================
 
     @app_commands.command(
@@ -2275,17 +1838,13 @@ class AutomaticLineSystem(commands.Cog):
         channel: discord.TextChannel = None
     ):
 
-        if await self.owner_only(
-            interaction
-        ):
+        if await self.owner_only(interaction):
             return
 
         if not interaction.guild:
             return
 
-        if not self.is_supported_image(
-            image
-        ):
+        if not self.is_supported_image(image):
 
             await interaction.response.send_message(
                 "❌ صيغة الصورة غير مدعومة.",
@@ -2305,51 +1864,34 @@ class AutomaticLineSystem(commands.Cog):
 
             data = await image.read()
 
-            storage = (
-                channel
-                or
-                interaction.channel
-            )
+            storage = channel or interaction.channel
 
             if not isinstance(
                 storage,
                 discord.TextChannel
             ):
-
                 raise RuntimeError(
                     "ما لقيت روم تخزين."
                 )
 
             old_channel = None
 
-            if cfg.get(
-                "storage_channel_id"
-            ):
+            if cfg.get("storage_channel_id"):
 
                 old_channel = interaction.guild.get_channel(
-                    int(
-                        cfg[
-                            "storage_channel_id"
-                        ]
-                    )
+                    int(cfg["storage_channel_id"])
                 )
 
             if (
                 old_channel
                 and
-                cfg.get(
-                    "storage_message_id"
-                )
+                cfg.get("storage_message_id")
             ):
 
                 try:
 
                     old = await old_channel.fetch_message(
-                        int(
-                            cfg[
-                                "storage_message_id"
-                            ]
-                        )
+                        int(cfg["storage_message_id"])
                     )
 
                     await old.delete()
@@ -2365,29 +1907,15 @@ class AutomaticLineSystem(commands.Cog):
                 )
             )
 
-            cfg["image_url"] = (
-                stored.attachments[0].url
-            )
-
-            cfg[
-                "storage_channel_id"
-            ] = storage.id
-
-            cfg[
-                "storage_message_id"
-            ] = stored.id
-
+            cfg["image_url"] = stored.attachments[0].url
+            cfg["storage_channel_id"] = storage.id
+            cfg["storage_message_id"] = stored.id
             cfg["channel_id"] = (
-                channel.id
-                if channel
-                else None
+                channel.id if channel else None
             )
-
             cfg["enabled"] = True
 
-            save_config(
-                self.config
-            )
+            save_config(self.config)
 
             await interaction.followup.send(
                 "✅ **تم تشغيل نظام الخط.**",
@@ -2396,10 +1924,7 @@ class AutomaticLineSystem(commands.Cog):
 
         except Exception as error:
 
-            print(
-                "❌ Line error:",
-                error
-            )
+            print("❌ Line error:", error)
 
             await interaction.followup.send(
                 f"❌ فشل تشغيل الخط: `{type(error).__name__}`",
@@ -2410,14 +1935,9 @@ class AutomaticLineSystem(commands.Cog):
         name="خط-إيقاف",
         description="إيقاف نظام الخط"
     )
-    async def line_off(
-        self,
-        interaction
-    ):
+    async def line_off(self, interaction):
 
-        if await self.owner_only(
-            interaction
-        ):
+        if await self.owner_only(interaction):
             return
 
         if not interaction.guild:
@@ -2429,9 +1949,7 @@ class AutomaticLineSystem(commands.Cog):
 
         cfg["enabled"] = False
 
-        save_config(
-            self.config
-        )
+        save_config(self.config)
 
         await interaction.response.send_message(
             "🛑 تم إيقاف الخط.",
@@ -2442,14 +1960,9 @@ class AutomaticLineSystem(commands.Cog):
         name="خط-حالة",
         description="حالة الخط"
     )
-    async def line_status(
-        self,
-        interaction
-    ):
+    async def line_status(self, interaction):
 
-        if await self.owner_only(
-            interaction
-        ):
+        if await self.owner_only(interaction):
             return
 
         if not interaction.guild:
@@ -2461,16 +1974,9 @@ class AutomaticLineSystem(commands.Cog):
 
         channel = None
 
-        if cfg.get(
-            "channel_id"
-        ):
-
+        if cfg.get("channel_id"):
             channel = interaction.guild.get_channel(
-                int(
-                    cfg[
-                        "channel_id"
-                    ]
-                )
+                int(cfg["channel_id"])
             )
 
         await interaction.response.send_message(
@@ -2495,9 +2001,7 @@ class AutomaticLineSystem(commands.Cog):
         channel: discord.TextChannel = None
     ):
 
-        if await self.owner_only(
-            interaction
-        ):
+        if await self.owner_only(interaction):
             return
 
         if not interaction.guild:
@@ -2508,14 +2012,10 @@ class AutomaticLineSystem(commands.Cog):
         )
 
         cfg["channel_id"] = (
-            channel.id
-            if channel
-            else None
+            channel.id if channel else None
         )
 
-        save_config(
-            self.config
-        )
+        save_config(self.config)
 
         await interaction.response.send_message(
             (
@@ -2541,9 +2041,7 @@ class AutomaticLineSystem(commands.Cog):
         message: str
     ):
 
-        if await self.owner_only(
-            interaction
-        ):
+        if await self.owner_only(interaction):
             return
 
         if not interaction.guild:
@@ -2561,17 +2059,10 @@ class AutomaticLineSystem(commands.Cog):
             interaction.guild.id
         )
 
-        cfg[
-            "fime_word_response"
-        ] = message
+        cfg["fime_word_response"] = message
+        cfg["fime_word_enabled"] = True
 
-        cfg[
-            "fime_word_enabled"
-        ] = True
-
-        save_config(
-            self.config
-        )
+        save_config(self.config)
 
         await interaction.response.send_message(
             "✅ تم تحديث رد فيم.",
@@ -2582,14 +2073,9 @@ class AutomaticLineSystem(commands.Cog):
         name="فيم-تشغيل",
         description="تشغيل نظام فيم"
     )
-    async def fime_enable(
-        self,
-        interaction
-    ):
+    async def fime_enable(self, interaction):
 
-        if await self.owner_only(
-            interaction
-        ):
+        if await self.owner_only(interaction):
             return
 
         if not interaction.guild:
@@ -2599,13 +2085,9 @@ class AutomaticLineSystem(commands.Cog):
             interaction.guild.id
         )
 
-        cfg[
-            "fime_word_enabled"
-        ] = True
+        cfg["fime_word_enabled"] = True
 
-        save_config(
-            self.config
-        )
+        save_config(self.config)
 
         await interaction.response.send_message(
             "🟢 تم تشغيل نظام فيم.",
@@ -2616,14 +2098,9 @@ class AutomaticLineSystem(commands.Cog):
         name="فيم-إيقاف",
         description="إيقاف نظام فيم"
     )
-    async def fime_disable(
-        self,
-        interaction
-    ):
+    async def fime_disable(self, interaction):
 
-        if await self.owner_only(
-            interaction
-        ):
+        if await self.owner_only(interaction):
             return
 
         if not interaction.guild:
@@ -2633,13 +2110,9 @@ class AutomaticLineSystem(commands.Cog):
             interaction.guild.id
         )
 
-        cfg[
-            "fime_word_enabled"
-        ] = False
+        cfg["fime_word_enabled"] = False
 
-        save_config(
-            self.config
-        )
+        save_config(self.config)
 
         await interaction.response.send_message(
             "🔴 تم إيقاف نظام فيم.",
@@ -2650,14 +2123,9 @@ class AutomaticLineSystem(commands.Cog):
         name="فيم-حالة",
         description="حالة نظام فيم"
     )
-    async def fime_status(
-        self,
-        interaction
-    ):
+    async def fime_status(self, interaction):
 
-        if await self.owner_only(
-            interaction
-        ):
+        if await self.owner_only(interaction):
             return
 
         if not interaction.guild:
@@ -2693,9 +2161,7 @@ class AutomaticLineSystem(commands.Cog):
         definition: str
     ):
 
-        if await self.owner_only(
-            interaction
-        ):
+        if await self.owner_only(interaction):
             return
 
         if not interaction.guild:
@@ -2713,13 +2179,9 @@ class AutomaticLineSystem(commands.Cog):
             interaction.guild.id
         )
 
-        cfg[
-            "say_room_definition"
-        ] = definition
+        cfg["say_room_definition"] = definition
 
-        save_config(
-            self.config
-        )
+        save_config(self.config)
 
         await interaction.response.send_message(
             "✅ تم حفظ تعريف الروم.",
@@ -2735,9 +2197,7 @@ class AutomaticLineSystem(commands.Cog):
         interaction
     ):
 
-        if await self.owner_only(
-            interaction
-        ):
+        if await self.owner_only(interaction):
             return
 
         if not interaction.guild:
@@ -2747,16 +2207,215 @@ class AutomaticLineSystem(commands.Cog):
             interaction.guild.id
         )
 
-        cfg[
-            "say_room_definition"
-        ] = ""
+        cfg["say_room_definition"] = ""
 
-        save_config(
-            self.config
-        )
+        save_config(self.config)
 
         await interaction.response.send_message(
             "🗑️ تم حذف تعريف الروم.",
+            ephemeral=True
+        )
+
+    # ========================================================
+    # SAY STORAGE
+    # ========================================================
+
+    async def ensure_say_storage(
+        self,
+        guild,
+        source_bytes,
+        filename
+    ):
+
+        cfg = self.get_config(guild.id)
+
+        channel = None
+
+        if cfg.get("say_storage_channel_id"):
+            channel = guild.get_channel(
+                int(cfg["say_storage_channel_id"])
+            )
+
+        if not channel:
+            return None
+
+        try:
+
+            stored = await channel.send(
+                "🗃️ Fime Say Storage",
+                file=discord.File(
+                    io.BytesIO(source_bytes),
+                    filename=filename
+                )
+            )
+
+            return stored.attachments[0].url
+
+        except Exception as error:
+
+            print(
+                "⚠️ Say storage error:",
+                error
+            )
+            return None
+
+    # ========================================================
+    # SAY PROFILE HELPERS
+    # ========================================================
+
+    async def send_say_profile_info(
+        self,
+        interaction,
+        say_message_id
+    ):
+
+        data = self.say_messages.get(
+            str(say_message_id)
+        )
+
+        if not data:
+
+            await interaction.response.send_message(
+                "❌ بيانات هذا الـ /say غير موجودة.",
+                ephemeral=True
+            )
+            return
+
+        embed = discord.Embed(
+            title="📋 معلومات الحساب",
+            color=discord.Color.blurple()
+        )
+
+        embed.add_field(
+            name="👤 المستخدم",
+            value=f"`{data.get('username', 'Unknown')}`",
+            inline=False
+        )
+
+        embed.add_field(
+            name="🖼️ الافتار",
+            value=(
+                "متوفر ✅"
+                if data.get("avatar_url")
+                else "غير متوفر ❌"
+            ),
+            inline=True
+        )
+
+        embed.add_field(
+            name="🎨 البنر",
+            value=(
+                "متوفر ✅"
+                if data.get("banner_url")
+                else "غير متوفر ❌"
+            ),
+            inline=True
+        )
+
+        embed.add_field(
+            name="🪪 البروفايل",
+            value=(
+                "متوفر ✅"
+                if data.get("profile_url")
+                else "غير متوفر ❌"
+            ),
+            inline=True
+        )
+
+        embed.set_footer(
+            text="Team Fime • Say Profile"
+        )
+
+        await interaction.response.send_message(
+            embed=embed,
+            ephemeral=True
+        )
+
+    async def send_say_room_definition(
+        self,
+        interaction,
+        say_message_id
+    ):
+
+        data = self.say_messages.get(
+            str(say_message_id)
+        )
+
+        if not data:
+
+            await interaction.response.send_message(
+                "❌ بيانات هذا الـ /say غير موجودة.",
+                ephemeral=True
+            )
+            return
+
+        definition = str(
+            data.get(
+                "room_definition",
+                ""
+            )
+        ).strip()
+
+        if not definition:
+
+            await interaction.response.send_message(
+                "❌ ما فيه تعريف محفوظ لهذا الـ /say.",
+                ephemeral=True
+            )
+            return
+
+        embed = discord.Embed(
+            title="📖 تعريف الروم",
+            description=definition,
+            color=discord.Color.blurple()
+        )
+
+        embed.set_footer(
+            text="Team Fime • Room Information"
+        )
+
+        await interaction.response.send_message(
+            embed=embed,
+            ephemeral=True
+        )
+
+    async def regenerate_say_profile(
+        self,
+        interaction,
+        say_message_id
+    ):
+
+        data = self.say_messages.get(
+            str(say_message_id)
+        )
+
+        if not data:
+
+            await interaction.response.send_message(
+                "❌ بيانات هذا الـ /say غير موجودة.",
+                ephemeral=True
+            )
+            return
+
+        await interaction.response.defer(
+            ephemeral=True
+        )
+
+        profile_url = data.get("profile_url")
+
+        if profile_url:
+
+            await interaction.followup.send(
+                (
+                    "🔄 **البروفايل محفوظ بالفعل.**\n"
+                    f"{profile_url}"
+                ),
+                ephemeral=True
+            )
+            return
+
+        await interaction.followup.send(
+            "❌ لا توجد نسخة مصدر كافية لإعادة التوليد.",
             ephemeral=True
         )
 
@@ -2766,13 +2425,13 @@ class AutomaticLineSystem(commands.Cog):
 
     @app_commands.command(
         name="say",
-        description="إرسال رسالة احترافية من البوت"
+        description="إرسال رسالة — والبروفايل اختياري"
     )
     @app_commands.describe(
         message="الرسالة",
         channel="الروم",
-        avatar="الافتار",
-        banner="البنر",
+        avatar="الافتار — اختياري",
+        banner="البنر — اختياري",
         template="قالب اختياري",
         room_definition="تعريف اختياري لهذا الـ /say"
     )
@@ -2787,9 +2446,7 @@ class AutomaticLineSystem(commands.Cog):
         room_definition: str = None
     ):
 
-        if await self.owner_only(
-            interaction
-        ):
+        if await self.owner_only(interaction):
             return
 
         if not interaction.guild:
@@ -2853,188 +2510,207 @@ class AutomaticLineSystem(commands.Cog):
             )
         ).strip()
 
+        # ====================================================
+        # NORMAL SAY
+        # لا صورة ولا قالب إذا لم يطلب البروفايل
+        # ====================================================
+
+        profile_requested = any(
+            (
+                avatar,
+                banner,
+                template
+            )
+        )
+
+        if not profile_requested:
+
+            try:
+
+                await target.send(
+                    content=message,
+                    allowed_mentions=discord.AllowedMentions.none()
+                )
+
+            except Exception as error:
+
+                await interaction.response.send_message(
+                    f"❌ فشل /say: `{type(error).__name__}`",
+                    ephemeral=True
+                )
+                return
+
+            await interaction.response.send_message(
+                (
+                    "✅ **تم إرسال الرسالة.**\n"
+                    f"📍 {target.mention}"
+                ),
+                ephemeral=True
+            )
+            return
+
         await interaction.response.defer(
             ephemeral=True
         )
 
-        has_media = any(
-            (
-                avatar,
-                banner,
-                template,
-                definition
-            )
-        )
-
         try:
 
-            if has_media:
+            # =================================================
+            # تحميل الصور مرة واحدة وبشكل متزامن
+            # =================================================
 
-                # ==================================================
-                # IMPORTANT:
-                # كل صورة تنقرأ مرة واحدة فقط.
-                # ==================================================
+            tasks = []
 
-                avatar_image = None
-                banner_image = None
-                template_image = None
-
-                tasks = []
-
-                if avatar:
-                    tasks.append(
-                        (
-                            "avatar",
-                            self.read_image_attachment(
-                                avatar
-                            )
+            if avatar:
+                tasks.append(
+                    (
+                        "avatar",
+                        self.read_image_attachment(
+                            avatar
                         )
                     )
+                )
 
-                if banner:
-                    tasks.append(
-                        (
-                            "banner",
-                            self.read_image_attachment(
-                                banner
-                            )
+            if banner:
+                tasks.append(
+                    (
+                        "banner",
+                        self.read_image_attachment(
+                            banner
                         )
                     )
+                )
 
-                if template:
-                    tasks.append(
-                        (
-                            "template",
-                            self.read_image_attachment(
-                                template
-                            )
+            if template:
+                tasks.append(
+                    (
+                        "template",
+                        self.read_image_attachment(
+                            template
                         )
                     )
-
-                if tasks:
-
-                    results = await asyncio.gather(
-                        *[
-                            task
-                            for _, task in tasks
-                        ]
-                    )
-
-                    for (
-                        index,
-                        (
-                            name,
-                            _
-                        )
-                    ) in enumerate(
-                        tasks
-                    ):
-
-                        if name == "avatar":
-                            avatar_image = results[index]
-
-                        elif name == "banner":
-                            banner_image = results[index]
-
-                        elif name == "template":
-                            template_image = results[index]
-
-                # ==================================================
-                # FAST DOWNLOAD FILES
-                # ==================================================
-
-                avatar_bytes = (
-                    self.image_to_jpeg(
-                        avatar_image,
-                        (700, 700),
-                        82
-                    )
-                    if avatar_image
-                    else None
                 )
 
-                banner_bytes = (
-                    self.image_to_jpeg(
-                        banner_image,
-                        (1400, 650),
-                        82
-                    )
-                    if banner_image
-                    else None
+            results = []
+
+            if tasks:
+                results = await asyncio.gather(
+                    *[
+                        task
+                        for _, task in tasks
+                    ]
                 )
 
-                # ==================================================
-                # FULL PROFILE
-                # ==================================================
+            avatar_image = None
+            banner_image = None
+            template_image = None
 
-                full_profile_bytes = (
-                    self.create_fast_profile(
-                        avatar_image,
-                        banner_image
-                    )
-                    if (
-                        avatar_image
-                        or
-                        banner_image
-                    )
-                    else None
-                )
+            for index, (
+                name,
+                _
+            ) in enumerate(tasks):
 
-                # ==================================================
-                # SAY IMAGE
-                # لا يعيد تحميل الصور من Discord
-                # ==================================================
+                if name == "avatar":
+                    avatar_image = results[index]
 
-                generated_bytes = (
-                    await asyncio.to_thread(
-                        self.create_say_image_sync,
-                        avatar_image,
-                        banner_image,
-                        template_image,
-                        definition
-                    )
-                )
+                elif name == "banner":
+                    banner_image = results[index]
 
-                avatar_url = (
-                    avatar.url
-                    if avatar
-                    else None
-                )
+                elif name == "template":
+                    template_image = results[index]
 
-                banner_url = (
-                    banner.url
-                    if banner
-                    else None
-                )
+            # =================================================
+            # الملفات تستخدم للروابط/المعلومات
+            # =================================================
 
-                view = SayProfileView(
-                    avatar_bytes=avatar_bytes,
-                    banner_bytes=banner_bytes,
-                    full_profile_bytes=full_profile_bytes,
-                    room_definition=definition,
-                    avatar_url=avatar_url,
-                    banner_url=banner_url,
-                    username=interaction.user.display_name
-                )
+            avatar_url = (
+                avatar.url
+                if avatar
+                else None
+            )
 
-                await target.send(
-                    content=message,
-                    file=discord.File(
-                        io.BytesIO(
-                            generated_bytes
-                        ),
-                        filename="fime-say.jpg"
-                    ),
-                    view=view,
-                    allowed_mentions=discord.AllowedMentions.none()
-                )
+            banner_url = (
+                banner.url
+                if banner
+                else None
+            )
 
-            else:
+            # =================================================
+            # توليد البروفايل
+            # =================================================
 
-                await target.send(
-                    content=message,
-                    allowed_mentions=discord.AllowedMentions.none()
-                )
+            generated_bytes = await asyncio.to_thread(
+                self.create_say_image_sync,
+                avatar_image,
+                banner_image,
+                template_image,
+                definition,
+                message,
+                interaction.user.display_name
+            )
+
+            # =================================================
+            # إرسال الصورة أولاً
+            # =================================================
+
+            sent = await target.send(
+                content=message,
+                file=discord.File(
+                    io.BytesIO(generated_bytes),
+                    filename="fime-say.jpg"
+                ),
+                allowed_mentions=discord.AllowedMentions.none()
+            )
+
+            profile_url = (
+                sent.attachments[0].url
+                if sent.attachments
+                else None
+            )
+
+            # =================================================
+            # حفظ بيانات الرسالة
+            # =================================================
+
+            say_id = str(sent.id)
+
+            self.say_messages[say_id] = {
+                "message_id": sent.id,
+                "guild_id": interaction.guild.id,
+                "channel_id": target.id,
+                "username": interaction.user.display_name,
+                "user_id": interaction.user.id,
+                "message": message,
+                "avatar_url": avatar_url,
+                "banner_url": banner_url,
+                "profile_url": profile_url,
+                "room_definition": definition,
+                "created_at": datetime.now(
+                    timezone.utc
+                ).isoformat()
+            }
+
+            save_say_messages(
+                self.say_messages
+            )
+
+            # =================================================
+            # إضافة الأزرار إلى الرسالة
+            # =================================================
+
+            view = SayProfileView(
+                self,
+                sent.id,
+                avatar_url=avatar_url,
+                banner_url=banner_url,
+                profile_url=profile_url,
+                username=interaction.user.display_name,
+                room_definition=definition
+            )
+
+            await sent.edit(
+                view=view
+            )
 
         except Exception as error:
 
@@ -3051,573 +2727,10 @@ class AutomaticLineSystem(commands.Cog):
 
         await interaction.followup.send(
             (
-                "✅ **تم إرسال الرسالة.**\n"
+                "✅ **تم إرسال الرسالة والبروفايل.**\n"
                 f"📍 {target.mention}"
             ),
             ephemeral=True
-        )
-
-    # ========================================================
-    # SYNC WRAPPER
-    # ========================================================
-
-    def create_say_image_sync(
-        self,
-        avatar_image,
-        banner_image,
-        template_image,
-        room_definition
-    ):
-
-        WIDTH = 1600
-        HEIGHT = 900
-
-        if template_image:
-
-            canvas = self.crop_to_fill(
-                template_image,
-                (
-                    WIDTH,
-                    HEIGHT
-                )
-            )
-
-            overlay = Image.new(
-                "RGBA",
-                canvas.size,
-                (3, 5, 10, 90)
-            )
-
-            canvas.alpha_composite(
-                overlay
-            )
-
-        else:
-
-            canvas = Image.new(
-                "RGBA",
-                (
-                    WIDTH,
-                    HEIGHT
-                ),
-                (5, 7, 13, 255)
-            )
-
-            glow = Image.new(
-                "RGBA",
-                canvas.size,
-                (0, 0, 0, 0)
-            )
-
-            gd = ImageDraw.Draw(
-                glow
-            )
-
-            gd.ellipse(
-                (
-                    950,
-                    -300,
-                    1800,
-                    520
-                ),
-                fill=(124, 92, 255, 75)
-            )
-
-            gd.ellipse(
-                (
-                    -450,
-                    580,
-                    650,
-                    1250
-                ),
-                fill=(35, 110, 255, 42)
-            )
-
-            glow = glow.filter(
-                ImageFilter.GaussianBlur(
-                    110
-                )
-            )
-
-            canvas.alpha_composite(
-                glow
-            )
-
-            draw = ImageDraw.Draw(
-                canvas
-            )
-
-            draw.rounded_rectangle(
-                (
-                    35,
-                    35,
-                    WIDTH - 35,
-                    HEIGHT - 35
-                ),
-                radius=48,
-                fill=(10, 13, 22, 247),
-                outline=(55, 61, 82),
-                width=2
-            )
-
-        draw = ImageDraw.Draw(
-            canvas
-        )
-
-        # ====================================================
-        # HEADER
-        # ====================================================
-
-        draw.text(
-            (90, 72),
-            "TEAM FIME",
-            font=self.get_font(
-                35,
-                True
-            ),
-            fill=(248, 249, 252)
-        )
-
-        draw.text(
-            (92, 118),
-            "OFFICIAL COMMUNITY",
-            font=self.get_font(
-                16,
-                True
-            ),
-            fill=(154, 132, 255)
-        )
-
-        draw.rounded_rectangle(
-            (
-                1310,
-                78,
-                1505,
-                122
-            ),
-            radius=22,
-            fill=(124, 92, 255, 35),
-            outline=(124, 92, 255, 90),
-            width=1
-        )
-
-        draw.ellipse(
-            (
-                1330,
-                91,
-                1346,
-                107
-            ),
-            fill=(76, 220, 130)
-        )
-
-        draw.text(
-            (1360, 88),
-            "FIME",
-            font=self.get_font(
-                15,
-                True
-            ),
-            fill=(220, 221, 230)
-        )
-
-        # ====================================================
-        # BANNER
-        # ====================================================
-
-        if banner_image:
-
-            banner = self.crop_to_fill(
-                banner_image,
-                (
-                    1410,
-                    330
-                )
-            )
-
-            canvas.paste(
-                banner,
-                (
-                    95,
-                    170
-                )
-            )
-
-            dark = Image.new(
-                "RGBA",
-                (
-                    1410,
-                    330
-                ),
-                (0, 0, 0, 0)
-            )
-
-            dd = ImageDraw.Draw(
-                dark
-            )
-
-            dd.rectangle(
-                (
-                    0,
-                    205,
-                    1410,
-                    330
-                ),
-                fill=(3, 4, 8, 155)
-            )
-
-            canvas.alpha_composite(
-                dark,
-                (
-                    95,
-                    170
-                )
-            )
-
-        else:
-
-            draw.rounded_rectangle(
-                (
-                    95,
-                    170,
-                    1505,
-                    500
-                ),
-                radius=32,
-                fill=(15, 18, 29),
-                outline=(124, 92, 255, 60),
-                width=2
-            )
-
-            draw.text(
-                (145, 280),
-                "FIME",
-                font=self.get_font(
-                    110,
-                    True
-                ),
-                fill=(124, 92, 255, 65)
-            )
-
-        # ====================================================
-        # AVATAR
-        # ====================================================
-
-        if avatar_image:
-
-            avatar = self.crop_to_fill(
-                avatar_image,
-                (
-                    250,
-                    250
-                )
-            )
-
-            mask = Image.new(
-                "L",
-                (
-                    250,
-                    250
-                ),
-                0
-            )
-
-            ImageDraw.Draw(
-                mask
-            ).ellipse(
-                (
-                    0,
-                    0,
-                    250,
-                    250
-                ),
-                fill=255
-            )
-
-            avatar_rgba = Image.new(
-                "RGBA",
-                (
-                    250,
-                    250
-                ),
-                (0, 0, 0, 0)
-            )
-
-            avatar_rgba.paste(
-                avatar,
-                (0, 0),
-                mask
-            )
-
-            canvas.paste(
-                avatar_rgba,
-                (
-                    125,
-                    390
-                ),
-                avatar_rgba
-            )
-
-            draw.ellipse(
-                (
-                    115,
-                    380,
-                    385,
-                    650
-                ),
-                outline=(6, 8, 14),
-                width=14
-            )
-
-            draw.ellipse(
-                (
-                    115,
-                    380,
-                    385,
-                    650
-                ),
-                outline=(124, 92, 255),
-                width=5
-            )
-
-        else:
-
-            draw.ellipse(
-                (
-                    125,
-                    390,
-                    375,
-                    640
-                ),
-                fill=(24, 28, 40),
-                outline=(124, 92, 255),
-                width=5
-            )
-
-            self.draw_center(
-                draw,
-                250,
-                460,
-                "F",
-                self.get_font(
-                    80,
-                    True
-                ),
-                (154, 132, 255)
-            )
-
-        # ====================================================
-        # PROFILE
-        # ====================================================
-
-        draw.text(
-            (435, 405),
-            "FIME",
-            font=self.get_font(
-                52,
-                True
-            ),
-            fill=(247, 248, 252)
-        )
-
-        draw.text(
-            (438, 472),
-            "Official Community Message",
-            font=self.get_font(
-                23
-            ),
-            fill=(151, 158, 176)
-        )
-
-        draw.rounded_rectangle(
-            (
-                435,
-                520,
-                735,
-                565
-            ),
-            radius=22,
-            fill=(124, 92, 255, 35),
-            outline=(124, 92, 255, 100)
-        )
-
-        draw.text(
-            (460, 532),
-            "OFFICIAL PROFILE",
-            font=self.get_font(
-                15,
-                True
-            ),
-            fill=(166, 147, 255)
-        )
-
-        # ====================================================
-        # DEFINITION
-        # ====================================================
-
-        if room_definition:
-
-            text = self.prepare_text(
-                room_definition
-            )
-
-            words = text.split()
-
-            lines = []
-
-            current = ""
-
-            font = self.get_font(
-                20
-            )
-
-            for word in words:
-
-                candidate = (
-                    f"{current} {word}".strip()
-                )
-
-                bbox = draw.textbbox(
-                    (0, 0),
-                    candidate,
-                    font=font
-                )
-
-                if (
-                    bbox[2] -
-                    bbox[0]
-                ) <= 830:
-
-                    current = candidate
-
-                else:
-
-                    if current:
-                        lines.append(
-                            current
-                        )
-
-                    current = word
-
-            if current:
-                lines.append(
-                    current
-                )
-
-            lines = lines[:3]
-
-            draw.rounded_rectangle(
-                (
-                    435,
-                    595,
-                    1500,
-                    770
-                ),
-                radius=28,
-                fill=(14, 17, 27, 240),
-                outline=(124, 92, 255, 70),
-                width=2
-            )
-
-            draw.text(
-                (470, 620),
-                self.prepare_text(
-                    "📖 تعريف الروم"
-                ),
-                font=self.get_font(
-                    18,
-                    True
-                ),
-                fill=(154, 132, 255)
-            )
-
-            for index, line in enumerate(
-                lines
-            ):
-
-                draw.text(
-                    (
-                        470,
-                        658 +
-                        index * 31
-                    ),
-                    line,
-                    font=font,
-                    fill=(190, 195, 207)
-                )
-
-        else:
-
-            draw.rounded_rectangle(
-                (
-                    435,
-                    595,
-                    1500,
-                    735
-                ),
-                radius=28,
-                fill=(14, 17, 27, 240),
-                outline=(48, 53, 70),
-                width=2
-            )
-
-            draw.text(
-                (470, 630),
-                "FIME COMMUNITY",
-                font=self.get_font(
-                    18,
-                    True
-                ),
-                fill=(124, 92, 255)
-            )
-
-            draw.text(
-                (470, 670),
-                "Official message • Team Fime",
-                font=self.get_font(
-                    22
-                ),
-                fill=(175, 181, 194)
-            )
-
-        # ====================================================
-        # FOOTER
-        # ====================================================
-
-        draw.rounded_rectangle(
-            (
-                95,
-                815,
-                1505,
-                848
-            ),
-            radius=16,
-            fill=(124, 92, 255)
-        )
-
-        draw.text(
-            (115, 821),
-            "FIME",
-            font=self.get_font(
-                14,
-                True
-            ),
-            fill="white"
-        )
-
-        draw.text(
-            (1335, 821),
-            "TEAM FIME",
-            font=self.get_font(
-                14,
-                True
-            ),
-            fill=(235, 236, 242)
-        )
-
-        return self.image_to_jpeg(
-            canvas,
-            quality=88
         )
 
     # ========================================================
@@ -3640,7 +2753,6 @@ class AutomaticLineSystem(commands.Cog):
         )
 
         if guild.icon:
-
             embed.set_thumbnail(
                 url=guild.icon.url
             )
@@ -3674,8 +2786,7 @@ class AutomaticLineSystem(commands.Cog):
             value=(
                 owner.mention
                 if owner
-                else
-                "غير معروف"
+                else "غير معروف"
             ),
             inline=True
         )
@@ -3698,32 +2809,29 @@ class AutomaticLineSystem(commands.Cog):
 
         return embed
 
-    @app_commands.command(
-        name="server",
-        description="معلومات السيرفرات التي يستخدم فيها البوت"
-    )
-    async def server_command(
+    async def send_server_panel(
         self,
         interaction
     ):
 
-        if await self.owner_only(
-            interaction
-        ):
+        if await self.owner_only(interaction):
+            return
+
+        if not interaction.guild:
             return
 
         current = interaction.guild
 
-        if not current:
-            return
+        total_members = sum(
+            guild.member_count or 0
+            for guild in self.bot.guilds
+        )
 
         embed = self.build_server_embed(
             current
         )
 
-        embed.title = (
-            "🛰️ معلومات البوت والسيرفر"
-        )
+        embed.title = "🛰️ معلومات البوت والسيرفر"
 
         embed.description = (
             f"**البوت موجود حاليًا في "
@@ -3737,21 +2845,45 @@ class AutomaticLineSystem(commands.Cog):
             inline=True
         )
 
-        total_members = sum(
-            guild.member_count or 0
-            for guild in self.bot.guilds
-        )
-
         embed.add_field(
             name="👥 إجمالي الأعضاء",
             value=f"`{total_members:,}`",
             inline=True
         )
 
+        options = []
+
+        for guild in self.bot.guilds[:25]:
+
+            options.append(
+                discord.SelectOption(
+                    label=guild.name[:100],
+                    value=str(guild.id),
+                    emoji="🛰️",
+                    description=f"ID: {guild.id}"
+                )
+            )
+
+        view = ServerSelectView(
+            self,
+            options
+        )
+
         await interaction.response.send_message(
             embed=embed,
+            view=view,
             ephemeral=True
         )
+
+    @app_commands.command(
+        name="server",
+        description="معلومات السيرفرات التي يستخدم فيها البوت"
+    )
+    async def server_command(
+        self,
+        interaction
+    ):
+        await self.send_server_panel(interaction)
 
     @app_commands.command(
         name="سيرفر",
@@ -3761,14 +2893,10 @@ class AutomaticLineSystem(commands.Cog):
         self,
         interaction
     ):
-
-        await self.server_command.callback(
-            self,
-            interaction
-        )
+        await self.send_server_panel(interaction)
 
     # ========================================================
-    # EDIT BOT MESSAGE
+    # BOT MESSAGE EDIT
     # ========================================================
 
     @app_commands.command(
@@ -3788,9 +2916,7 @@ class AutomaticLineSystem(commands.Cog):
         new_message: str
     ):
 
-        if await self.owner_only(
-            interaction
-        ):
+        if await self.owner_only(interaction):
             return
 
         if not message_id.isdigit():
@@ -3838,8 +2964,7 @@ class AutomaticLineSystem(commands.Cog):
         if (
             not self.bot.user
             or
-            message.author.id !=
-            self.bot.user.id
+            message.author.id != self.bot.user.id
         ):
 
             await interaction.followup.send(
@@ -3876,25 +3001,46 @@ class AutomaticLineSystem(commands.Cog):
     # SUGGESTIONS
     # ========================================================
 
-    def get_suggestion_id(
-        self
-    ):
+    def get_suggestion_id(self):
 
         numbers = []
 
         for key in self.suggestions.keys():
 
             if str(key).isdigit():
-
-                numbers.append(
-                    int(key)
-                )
+                numbers.append(int(key))
 
         return str(
-            max(
-                numbers,
-                default=0
-            ) + 1
+            max(numbers, default=0) + 1
+        )
+
+    def can_manage_suggestions(
+        self,
+        member,
+        cfg
+    ):
+
+        if member.id == OWNER_ID:
+            return True
+
+        allowed = {
+            int(role_id)
+            for role_id in cfg.get(
+                "suggestions_allowed_role_ids",
+                []
+            )
+            if str(role_id).isdigit()
+        }
+
+        return bool(
+            allowed.intersection(
+                role.id
+                for role in getattr(
+                    member,
+                    "roles",
+                    []
+                )
+            )
         )
 
     def suggestion_embed(
@@ -3924,12 +3070,8 @@ class AutomaticLineSystem(commands.Cog):
         }
 
         embed = discord.Embed(
-            title=(
-                f"💡 اقتراح #{suggestion['id']}"
-            ),
-            description=suggestion[
-                "text"
-            ],
+            title=f"💡 اقتراح #{suggestion['id']}",
+            description=suggestion["text"],
             color=colors.get(
                 status,
                 discord.Color.blurple()
@@ -3947,22 +3089,16 @@ class AutomaticLineSystem(commands.Cog):
 
         embed.add_field(
             name="👤 صاحب الاقتراح",
-            value=(
-                f"<@{suggestion['user_id']}>"
-            ),
+            value=f"<@{suggestion['user_id']}>",
             inline=True
         )
 
-        created_at = suggestion.get(
-            "created_at"
-        )
-
-        if created_at:
+        if suggestion.get("created_at"):
 
             try:
 
                 dt = datetime.fromisoformat(
-                    created_at
+                    suggestion["created_at"]
                 )
 
                 embed.add_field(
@@ -3977,22 +3113,26 @@ class AutomaticLineSystem(commands.Cog):
             except Exception:
                 pass
 
-        if suggestion.get(
-            "admin_reply"
-        ):
+        if suggestion.get("admin_reply"):
 
             embed.add_field(
                 name="💬 رد الإدارة",
-                value=suggestion[
-                    "admin_reply"
-                ][:1024],
+                value=suggestion["admin_reply"][:1024],
                 inline=False
+            )
+
+        if suggestion.get("action_by"):
+
+            embed.add_field(
+                name="🛡️ آخر إجراء بواسطة",
+                value=f"<@{suggestion['action_by']}>",
+                inline=True
             )
 
         embed.set_footer(
             text=(
                 "Team Fime • Suggestions "
-                "• استخدم الأزرار أسفل الرسالة"
+                "• أزرار الإدارة أسفل الرسالة"
             )
         )
 
@@ -4017,15 +3157,14 @@ class AutomaticLineSystem(commands.Cog):
             "text": text,
             "status": "قيد المراجعة",
             "admin_reply": "",
+            "action_by": None,
             "created_at": datetime.now(
                 timezone.utc
             ).isoformat()
         }
 
         message = await channel.send(
-            embed=self.suggestion_embed(
-                data
-            ),
+            embed=self.suggestion_embed(data),
             view=SuggestionView(
                 self,
                 sid
@@ -4033,9 +3172,7 @@ class AutomaticLineSystem(commands.Cog):
             allowed_mentions=discord.AllowedMentions.none()
         )
 
-        data[
-            "message_id"
-        ] = message.id
+        data["message_id"] = message.id
 
         self.suggestions[sid] = data
 
@@ -4045,7 +3182,8 @@ class AutomaticLineSystem(commands.Cog):
 
         await self.send_suggestion_log(
             data,
-            guild
+            guild,
+            "اقتراح جديد"
         )
 
         return data
@@ -4053,12 +3191,11 @@ class AutomaticLineSystem(commands.Cog):
     async def send_suggestion_log(
         self,
         data,
-        guild
+        guild,
+        action="إجراء"
     ):
 
-        cfg = self.get_config(
-            guild.id
-        )
+        cfg = self.get_config(guild.id)
 
         log_id = cfg.get(
             "suggestions_log_channel_id"
@@ -4075,7 +3212,7 @@ class AutomaticLineSystem(commands.Cog):
             return
 
         embed = discord.Embed(
-            title="📝 اقتراح جديد",
+            title=f"📝 {action}",
             description=data["text"],
             color=discord.Color.blurple()
         )
@@ -4091,6 +3228,22 @@ class AutomaticLineSystem(commands.Cog):
             value=f"<@{data['user_id']}>",
             inline=True
         )
+
+        embed.add_field(
+            name="📌 الحالة",
+            value=data.get(
+                "status",
+                "قيد المراجعة"
+            ),
+            inline=True
+        )
+
+        if data.get("action_by"):
+            embed.add_field(
+                name="🛡️ المنفذ",
+                value=f"<@{data['action_by']}>",
+                inline=True
+            )
 
         try:
 
@@ -4209,7 +3362,7 @@ class AutomaticLineSystem(commands.Cog):
             )
 
     # ========================================================
-    # AUTO SUGGESTION ROOM
+    # AUTO SUGGESTION
     # ========================================================
 
     async def handle_suggestion_message(
@@ -4225,10 +3378,7 @@ class AutomaticLineSystem(commands.Cog):
         if not channel_id:
             return False
 
-        if (
-            message.channel.id !=
-            int(channel_id)
-        ):
+        if message.channel.id != int(channel_id):
             return False
 
         text = (
@@ -4238,9 +3388,7 @@ class AutomaticLineSystem(commands.Cog):
         if not text and not message.attachments:
 
             try:
-
                 await message.delete()
-
             except Exception:
                 pass
 
@@ -4249,61 +3397,31 @@ class AutomaticLineSystem(commands.Cog):
         if len(text) < 5 and not message.attachments:
 
             try:
-
                 await message.delete()
-
             except Exception:
                 pass
 
             return True
 
         if len(text) > 1500:
-
             text = text[:1500] + "…"
-
-        # ====================================================
-        # ATTACHMENT SUPPORT
-        # ====================================================
 
         image_url = None
 
         for attachment in message.attachments:
 
-            if self.is_supported_image(
-                attachment
-            ):
-
+            if self.is_supported_image(attachment):
                 image_url = attachment.url
                 break
 
         if image_url:
 
-            if text:
-
-                text += (
-                    f"\n\n🖼️ [الصورة المرفقة]"
-                    f"({image_url})"
-                )
-
-            else:
-
-                text = (
-                    f"🖼️ [الصورة المرفقة]"
-                    f"({image_url})"
-                )
-
-        try:
-
-            await message.delete()
-
-        except discord.Forbidden:
-
-            print(
-                "❌ ما أقدر أحذف رسالة الاقتراح."
+            text += (
+                f"\n\n🖼️ [الصورة المرفقة]({image_url})"
             )
 
-            return True
-
+        try:
+            await message.delete()
         except Exception as error:
 
             print(
@@ -4328,22 +3446,17 @@ class AutomaticLineSystem(commands.Cog):
             )
 
             try:
-
                 await message.channel.send(
-                    (
-                        "❌ تعذر تحويل الاقتراح "
-                        "إلى رسالة البوت."
-                    ),
+                    "❌ تعذر تحويل الاقتراح إلى رسالة البوت.",
                     delete_after=6
                 )
-
             except Exception:
                 pass
 
         return True
 
     # ========================================================
-    # SET SUGGESTION CHANNEL
+    # SUGGESTION SETTINGS
     # ========================================================
 
     @app_commands.command(
@@ -4356,9 +3469,7 @@ class AutomaticLineSystem(commands.Cog):
         channel: discord.TextChannel
     ):
 
-        if await self.owner_only(
-            interaction
-        ):
+        if await self.owner_only(interaction):
             return
 
         if not interaction.guild:
@@ -4368,20 +3479,15 @@ class AutomaticLineSystem(commands.Cog):
             interaction.guild.id
         )
 
-        cfg[
-            "suggestions_channel_id"
-        ] = channel.id
+        cfg["suggestions_channel_id"] = channel.id
 
-        save_config(
-            self.config
-        )
+        save_config(self.config)
 
         await interaction.response.send_message(
             (
                 f"✅ تم تحديد روم الاقتراحات: "
                 f"{channel.mention}\n\n"
-                "💡 الآن أي عضو يكتب داخل الروم "
-                "سيتم تحويل رسالته تلقائيًا إلى اقتراح من البوت."
+                "أي رسالة عضو داخل الروم تتحول تلقائيًا إلى اقتراح."
             ),
             ephemeral=True
         )
@@ -4396,9 +3502,7 @@ class AutomaticLineSystem(commands.Cog):
         channel: discord.TextChannel
     ):
 
-        if await self.owner_only(
-            interaction
-        ):
+        if await self.owner_only(interaction):
             return
 
         if not interaction.guild:
@@ -4408,18 +3512,121 @@ class AutomaticLineSystem(commands.Cog):
             interaction.guild.id
         )
 
-        cfg[
-            "suggestions_log_channel_id"
-        ] = channel.id
+        cfg["suggestions_log_channel_id"] = channel.id
 
-        save_config(
-            self.config
-        )
+        save_config(self.config)
 
         await interaction.response.send_message(
             (
                 f"✅ روم سجل الاقتراحات: "
                 f"{channel.mention}"
+            ),
+            ephemeral=True
+        )
+
+    @app_commands.command(
+        name="اقتراح-رتبة",
+        description="إضافة رتبة مسموح لها قبول ورفض الاقتراحات"
+    )
+    async def suggestion_role(
+        self,
+        interaction,
+        role: discord.Role
+    ):
+
+        if await self.owner_only(interaction):
+            return
+
+        if not interaction.guild:
+            return
+
+        cfg = self.get_config(
+            interaction.guild.id
+        )
+
+        roles = cfg["suggestions_allowed_role_ids"]
+
+        if role.id not in roles:
+            roles.append(role.id)
+
+        save_config(self.config)
+
+        await interaction.response.send_message(
+            (
+                f"✅ تمت إضافة {role.mention} "
+                "لإدارة الاقتراحات."
+            ),
+            ephemeral=True
+        )
+
+    @app_commands.command(
+        name="اقتراح-رتبة-إزالة",
+        description="إزالة رتبة من إدارة الاقتراحات"
+    )
+    async def suggestion_role_remove(
+        self,
+        interaction,
+        role: discord.Role
+    ):
+
+        if await self.owner_only(interaction):
+            return
+
+        if not interaction.guild:
+            return
+
+        cfg = self.get_config(
+            interaction.guild.id
+        )
+
+        if role.id in cfg["suggestions_allowed_role_ids"]:
+            cfg["suggestions_allowed_role_ids"].remove(
+                role.id
+            )
+
+        save_config(self.config)
+
+        await interaction.response.send_message(
+            f"✅ تمت إزالة {role.mention}.",
+            ephemeral=True
+        )
+
+    @app_commands.command(
+        name="اقتراح-رتب",
+        description="عرض رتب إدارة الاقتراحات"
+    )
+    async def suggestion_roles(
+        self,
+        interaction
+    ):
+
+        if await self.owner_only(interaction):
+            return
+
+        if not interaction.guild:
+            return
+
+        cfg = self.get_config(
+            interaction.guild.id
+        )
+
+        roles = []
+
+        for role_id in cfg[
+            "suggestions_allowed_role_ids"
+        ]:
+
+            role = interaction.guild.get_role(
+                int(role_id)
+            )
+
+            if role:
+                roles.append(role.mention)
+
+        await interaction.response.send_message(
+            (
+                "## 🛡️ رتب إدارة الاقتراحات\n\n"
+                f"{', '.join(roles) if roles else 'لا توجد رتب محددة.'}"
             ),
             ephemeral=True
         )
@@ -4467,9 +3674,22 @@ class AutomaticLineSystem(commands.Cog):
         status: app_commands.Choice[str]
     ):
 
-        if await self.owner_only(
-            interaction
+        if not interaction.guild:
+            return
+
+        cfg = self.get_config(
+            interaction.guild.id
+        )
+
+        if not self.can_manage_suggestions(
+            interaction.user,
+            cfg
         ):
+
+            await interaction.response.send_message(
+                "❌ ما عندك رتبة مسموح لها بإدارة الاقتراحات.",
+                ephemeral=True
+            )
             return
 
         data = self.suggestions.get(
@@ -4484,16 +3704,25 @@ class AutomaticLineSystem(commands.Cog):
             )
             return
 
-        data[
-            "status"
-        ] = status.value
+        data["status"] = status.value
+        data["action_by"] = interaction.user.id
 
         save_suggestions(
             self.suggestions
         )
 
         await self.refresh_suggestion(
-            data
+            data,
+            disable_buttons=status.value in (
+                "مقبول",
+                "مرفوض"
+            )
+        )
+
+        await self.send_suggestion_log(
+            data,
+            interaction.guild,
+            f"تغيير حالة الاقتراح إلى {status.value}"
         )
 
         await interaction.response.send_message(
@@ -4519,9 +3748,22 @@ class AutomaticLineSystem(commands.Cog):
         reply: str
     ):
 
-        if await self.owner_only(
-            interaction
+        if not interaction.guild:
+            return
+
+        cfg = self.get_config(
+            interaction.guild.id
+        )
+
+        if not self.can_manage_suggestions(
+            interaction.user,
+            cfg
         ):
+
+            await interaction.response.send_message(
+                "❌ ما عندك رتبة مسموح لها بإدارة الاقتراحات.",
+                ephemeral=True
+            )
             return
 
         data = self.suggestions.get(
@@ -4536,16 +3778,19 @@ class AutomaticLineSystem(commands.Cog):
             )
             return
 
-        data[
-            "admin_reply"
-        ] = reply[:1024]
+        data["admin_reply"] = reply[:1024]
+        data["action_by"] = interaction.user.id
 
         save_suggestions(
             self.suggestions
         )
 
-        await self.refresh_suggestion(
-            data
+        await self.refresh_suggestion(data)
+
+        await self.send_suggestion_log(
+            data,
+            interaction.guild,
+            "تم تحديث رد الإدارة"
         )
 
         await interaction.response.send_message(
@@ -4564,10 +3809,20 @@ class AutomaticLineSystem(commands.Cog):
         status
     ):
 
-        if interaction.user.id != OWNER_ID:
+        if not interaction.guild:
+            return
+
+        cfg = self.get_config(
+            interaction.guild.id
+        )
+
+        if not self.can_manage_suggestions(
+            interaction.user,
+            cfg
+        ):
 
             await interaction.response.send_message(
-                "❌ هذا الزر للإدارة فقط.",
+                "❌ ما عندك رتبة مسموح لها بقبول أو رفض الاقتراحات.",
                 ephemeral=True
             )
             return
@@ -4584,25 +3839,19 @@ class AutomaticLineSystem(commands.Cog):
             )
             return
 
-        if data.get(
-            "status"
-        ) in (
-            "مقبول",
-            "مرفوض"
-        ):
+        if data.get("status") == status:
 
             await interaction.response.send_message(
                 (
                     f"ℹ️ الاقتراح بالفعل "
-                    f"**{data['status']}**."
+                    f"**{status}**."
                 ),
                 ephemeral=True
             )
             return
 
-        data[
-            "status"
-        ] = status
+        data["status"] = status
+        data["action_by"] = interaction.user.id
 
         save_suggestions(
             self.suggestions
@@ -4613,6 +3862,12 @@ class AutomaticLineSystem(commands.Cog):
             disable_buttons=True
         )
 
+        await self.send_suggestion_log(
+            data,
+            interaction.guild,
+            f"تم {status} الاقتراح"
+        )
+
         await interaction.response.send_message(
             (
                 f"{'✅' if status == 'مقبول' else '❌'} "
@@ -4621,10 +3876,6 @@ class AutomaticLineSystem(commands.Cog):
             ephemeral=True
         )
 
-    # ========================================================
-    # REFRESH SUGGESTION
-    # ========================================================
-
     async def refresh_suggestion(
         self,
         data,
@@ -4632,18 +3883,14 @@ class AutomaticLineSystem(commands.Cog):
     ):
 
         guild = self.bot.get_guild(
-            int(
-                data["guild_id"]
-            )
+            int(data["guild_id"])
         )
 
         if not guild:
             return
 
         channel = guild.get_channel(
-            int(
-                data["channel_id"]
-            )
+            int(data["channel_id"])
         )
 
         if not channel:
@@ -4652,9 +3899,7 @@ class AutomaticLineSystem(commands.Cog):
         try:
 
             message = await channel.fetch_message(
-                int(
-                    data["message_id"]
-                )
+                int(data["message_id"])
             )
 
             view = None
@@ -4667,9 +3912,7 @@ class AutomaticLineSystem(commands.Cog):
                 )
 
             await message.edit(
-                embed=self.suggestion_embed(
-                    data
-                ),
+                embed=self.suggestion_embed(data),
                 view=view,
                 allowed_mentions=discord.AllowedMentions.none()
             )
@@ -4682,7 +3925,853 @@ class AutomaticLineSystem(commands.Cog):
             )
 
     # ========================================================
-    # TOP / FIME / LINE / SUGGESTIONS LISTENER
+    # AUTO TRIGGERS
+    # ========================================================
+
+    def normalize_trigger(self, text):
+
+        return " ".join(
+            str(text or "").strip().casefold().split()
+        )
+
+    def get_triggers(self, cfg):
+
+        triggers = cfg.get(
+            "auto_triggers",
+            {}
+        )
+
+        return triggers if isinstance(
+            triggers,
+            dict
+        ) else {}
+
+    @app_commands.command(
+        name="محفز-إضافة",
+        description="إضافة رد تلقائي لمحفز"
+    )
+    @app_commands.describe(
+        trigger="الكلمة أو العبارة التي يكتبها العضو",
+        response="الرد الذي يرسله البوت"
+    )
+    async def trigger_add(
+        self,
+        interaction,
+        trigger: str,
+        response: str
+    ):
+
+        if await self.owner_only(interaction):
+            return
+
+        if not interaction.guild:
+            return
+
+        trigger = self.normalize_trigger(trigger)
+
+        if not trigger:
+            await interaction.response.send_message(
+                "❌ اكتب محفزًا صحيحًا.",
+                ephemeral=True
+            )
+            return
+
+        if len(response) > 2000:
+            await interaction.response.send_message(
+                "❌ الرد طويل جدًا.",
+                ephemeral=True
+            )
+            return
+
+        cfg = self.get_config(
+            interaction.guild.id
+        )
+
+        triggers = self.get_triggers(cfg)
+
+        triggers[trigger] = response
+
+        cfg["auto_triggers"] = triggers
+
+        save_config(self.config)
+
+        await interaction.response.send_message(
+            (
+                "✅ تم حفظ المحفز.\n\n"
+                f"**المحفز:** `{trigger}`\n"
+                f"**الرد:** {response}"
+            ),
+            ephemeral=True
+        )
+
+    @app_commands.command(
+        name="محفز-حذف",
+        description="حذف رد تلقائي"
+    )
+    async def trigger_remove(
+        self,
+        interaction,
+        trigger: str
+    ):
+
+        if await self.owner_only(interaction):
+            return
+
+        if not interaction.guild:
+            return
+
+        trigger = self.normalize_trigger(trigger)
+
+        cfg = self.get_config(
+            interaction.guild.id
+        )
+
+        triggers = self.get_triggers(cfg)
+
+        if trigger not in triggers:
+
+            await interaction.response.send_message(
+                "❌ هذا المحفز غير موجود.",
+                ephemeral=True
+            )
+            return
+
+        del triggers[trigger]
+
+        cfg["auto_triggers"] = triggers
+
+        save_config(self.config)
+
+        await interaction.response.send_message(
+            f"🗑️ تم حذف المحفز `{trigger}`.",
+            ephemeral=True
+        )
+
+    @app_commands.command(
+        name="محفز-تعديل",
+        description="تعديل رد محفز موجود"
+    )
+    async def trigger_edit(
+        self,
+        interaction,
+        trigger: str,
+        response: str
+    ):
+
+        if await self.owner_only(interaction):
+            return
+
+        if not interaction.guild:
+            return
+
+        trigger = self.normalize_trigger(trigger)
+
+        cfg = self.get_config(
+            interaction.guild.id
+        )
+
+        triggers = self.get_triggers(cfg)
+
+        if trigger not in triggers:
+
+            await interaction.response.send_message(
+                "❌ هذا المحفز غير موجود.",
+                ephemeral=True
+            )
+            return
+
+        if len(response) > 2000:
+
+            await interaction.response.send_message(
+                "❌ الرد طويل جدًا.",
+                ephemeral=True
+            )
+            return
+
+        triggers[trigger] = response
+
+        cfg["auto_triggers"] = triggers
+
+        save_config(self.config)
+
+        await interaction.response.send_message(
+            f"✅ تم تعديل رد `{trigger}`.",
+            ephemeral=True
+        )
+
+    @app_commands.command(
+        name="محفز-قائمة",
+        description="عرض المحفزات التلقائية"
+    )
+    async def trigger_list(
+        self,
+        interaction
+    ):
+
+        if await self.owner_only(interaction):
+            return
+
+        if not interaction.guild:
+            return
+
+        cfg = self.get_config(
+            interaction.guild.id
+        )
+
+        triggers = self.get_triggers(cfg)
+
+        if not triggers:
+
+            await interaction.response.send_message(
+                "📭 ما فيه محفزات محفوظة.",
+                ephemeral=True
+            )
+            return
+
+        lines = []
+
+        for trigger, response in list(
+            triggers.items()
+        )[:40]:
+
+            lines.append(
+                f"• `{trigger}` → {response[:150]}"
+            )
+
+        await interaction.response.send_message(
+            (
+                "## 🤖 المحفزات التلقائية\n\n"
+                + "\n".join(lines)
+            ),
+            ephemeral=True
+        )
+
+    # ========================================================
+    # MODERATION HELPERS
+    # ========================================================
+
+    def has_moderation_permission(
+        self,
+        member,
+        action
+    ):
+
+        if member.id == OWNER_ID:
+            return True
+
+        permissions = member.guild_permissions
+
+        if action == "ban":
+            return permissions.ban_members
+
+        if action == "kick":
+            return permissions.kick_members
+
+        if action == "warn":
+            return permissions.moderate_members or permissions.manage_messages
+
+        if action == "delete":
+            return permissions.manage_messages
+
+        return False
+
+    def can_act_on_member(
+        self,
+        actor,
+        target
+    ):
+
+        if target.id == actor.id:
+            return False
+
+        if target.id == OWNER_ID:
+            return False
+
+        if actor.id == OWNER_ID:
+            return True
+
+        if target.id == actor.guild.owner_id:
+            return False
+
+        return (
+            target.top_role < actor.top_role
+        )
+
+    def add_warning(
+        self,
+        guild_id,
+        user_id,
+        moderator_id,
+        reason
+    ):
+
+        guild_key = str(guild_id)
+        user_key = str(user_id)
+
+        if guild_key not in self.warnings:
+            self.warnings[guild_key] = {}
+
+        self.warnings[guild_key].setdefault(
+            user_key,
+            []
+        )
+
+        self.warnings[guild_key][user_key].append(
+            {
+                "moderator_id": moderator_id,
+                "reason": reason,
+                "created_at": datetime.now(
+                    timezone.utc
+                ).isoformat()
+            }
+        )
+
+        save_warnings(self.warnings)
+
+        return len(
+            self.warnings[guild_key][user_key]
+        )
+
+    # ========================================================
+    # MODERATION SHORTCUTS
+    # ========================================================
+
+    async def handle_moderation_shortcut(
+        self,
+        message
+    ):
+
+        content = (
+            message.content or ""
+        ).strip()
+
+        if not content:
+            return False
+
+        parts = content.split()
+
+        command = parts[0]
+
+        # ----------------------------------------------------
+        # BAN
+        # ----------------------------------------------------
+
+        if command == "حظر":
+
+            if len(parts) < 2:
+
+                try:
+                    await message.channel.send(
+                        (
+                            "🛡️ **طريقة الحظر:**\n"
+                            "`حظر @عضو السبب`\n\n"
+                            "يجب منشن العضو ثم كتابة السبب."
+                        ),
+                        delete_after=10
+                    )
+                except Exception:
+                    pass
+
+                return True
+
+            if not message.mentions:
+
+                try:
+                    await message.channel.send(
+                        (
+                            "❌ لازم تمنشن العضو.\n"
+                            "مثال: `حظر @عضو السبب`"
+                        ),
+                        delete_after=8
+                    )
+                except Exception:
+                    pass
+
+                return True
+
+            target = message.mentions[0]
+
+            if not isinstance(
+                target,
+                discord.Member
+            ):
+                return True
+
+            if not self.has_moderation_permission(
+                message.author,
+                "ban"
+            ):
+
+                await message.channel.send(
+                    "❌ ما عندك صلاحية الحظر.",
+                    delete_after=6
+                )
+                return True
+
+            if not self.can_act_on_member(
+                message.author,
+                target
+            ):
+
+                await message.channel.send(
+                    "❌ ما تقدر تحظر هذا العضو بسبب الرتبة أو الصلاحيات.",
+                    delete_after=6
+                )
+                return True
+
+            reason = (
+                " ".join(parts[2:]).strip()
+                or "بدون سبب محدد"
+            )
+
+            try:
+
+                await target.ban(
+                    reason=f"{message.author} — {reason}"
+                )
+
+                await message.channel.send(
+                    (
+                        f"🔨 تم حظر **{target}**.\n"
+                        f"السبب: **{reason}**"
+                    ),
+                    delete_after=8
+                )
+
+            except Exception as error:
+
+                await message.channel.send(
+                    f"❌ فشل الحظر: `{type(error).__name__}`",
+                    delete_after=8
+                )
+
+            return True
+
+        # ----------------------------------------------------
+        # KICK — روح
+        # ----------------------------------------------------
+
+        if command == "روح":
+
+            if len(parts) < 2 or not message.mentions:
+
+                await message.channel.send(
+                    (
+                        "🦶 **طريقة الكِك:**\n"
+                        "`روح @عضو السبب`"
+                    ),
+                    delete_after=8
+                )
+                return True
+
+            target = message.mentions[0]
+
+            if not isinstance(
+                target,
+                discord.Member
+            ):
+                return True
+
+            if not self.has_moderation_permission(
+                message.author,
+                "kick"
+            ):
+
+                await message.channel.send(
+                    "❌ ما عندك صلاحية الكِك.",
+                    delete_after=6
+                )
+                return True
+
+            if not self.can_act_on_member(
+                message.author,
+                target
+            ):
+
+                await message.channel.send(
+                    "❌ ما تقدر تطرد هذا العضو.",
+                    delete_after=6
+                )
+                return True
+
+            reason = (
+                " ".join(parts[2:]).strip()
+                or "بدون سبب محدد"
+            )
+
+            try:
+
+                await target.kick(
+                    reason=f"{message.author} — {reason}"
+                )
+
+                await message.channel.send(
+                    (
+                        f"🦶 تم طرد **{target}**.\n"
+                        f"السبب: **{reason}**"
+                    ),
+                    delete_after=8
+                )
+
+            except Exception as error:
+
+                await message.channel.send(
+                    f"❌ فشل الكِك: `{type(error).__name__}`",
+                    delete_after=8
+                )
+
+            return True
+
+        # ----------------------------------------------------
+        # WARN — ت
+        # ----------------------------------------------------
+
+        if command == "ت":
+
+            if len(parts) < 2 or not message.mentions:
+
+                await message.channel.send(
+                    (
+                        "⚠️ **طريقة التحذير:**\n"
+                        "`ت @عضو السبب`"
+                    ),
+                    delete_after=8
+                )
+                return True
+
+            target = message.mentions[0]
+
+            if not isinstance(
+                target,
+                discord.Member
+            ):
+                return True
+
+            if not self.has_moderation_permission(
+                message.author,
+                "warn"
+            ):
+
+                await message.channel.send(
+                    "❌ ما عندك صلاحية التحذير.",
+                    delete_after=6
+                )
+                return True
+
+            if not self.can_act_on_member(
+                message.author,
+                target
+            ):
+
+                await message.channel.send(
+                    "❌ ما تقدر تحذر هذا العضو.",
+                    delete_after=6
+                )
+                return True
+
+            reason = (
+                " ".join(parts[2:]).strip()
+                or "بدون سبب محدد"
+            )
+
+            count = self.add_warning(
+                message.guild.id,
+                target.id,
+                message.author.id,
+                reason
+            )
+
+            try:
+
+                await message.channel.send(
+                    (
+                        f"⚠️ تم تحذير **{target}**.\n"
+                        f"السبب: **{reason}**\n"
+                        f"عدد التحذيرات: **{count}**"
+                    ),
+                    delete_after=10
+                )
+
+            except Exception:
+                pass
+
+            return True
+
+        # ----------------------------------------------------
+        # PURGE MEMBER — مح
+        # ----------------------------------------------------
+
+        if command == "مح":
+
+            if len(parts) < 2 or not message.mentions:
+
+                await message.channel.send(
+                    (
+                        "🧹 **طريقة حذف رسائل العضو:**\n"
+                        "`مح @عضو`"
+                    ),
+                    delete_after=8
+                )
+                return True
+
+            target = message.mentions[0]
+
+            if not isinstance(
+                target,
+                discord.Member
+            ):
+                return True
+
+            if not self.has_moderation_permission(
+                message.author,
+                "delete"
+            ):
+
+                await message.channel.send(
+                    "❌ ما عندك صلاحية حذف الرسائل.",
+                    delete_after=6
+                )
+                return True
+
+            try:
+
+                deleted = await message.channel.purge(
+                    limit=100,
+                    check=lambda m: (
+                        m.author.id == target.id
+                    )
+                )
+
+                await message.channel.send(
+                    (
+                        f"🧹 تم حذف **{len(deleted)}** "
+                        f"رسالة من {target.mention}."
+                    ),
+                    delete_after=6
+                )
+
+            except Exception as error:
+
+                await message.channel.send(
+                    f"❌ فشل الحذف: `{type(error).__name__}`",
+                    delete_after=8
+                )
+
+            return True
+
+        return False
+
+    # ========================================================
+    # JOIN
+    # ========================================================
+
+    async def send_join_mention(
+        self,
+        member
+    ):
+
+        cfg = self.get_config(
+            member.guild.id
+        )
+
+        if not cfg.get(
+            "join_mention_enabled"
+        ):
+            return
+
+        channel_id = cfg.get(
+            "join_mention_channel_id"
+        )
+
+        if not channel_id:
+            return
+
+        channel = member.guild.get_channel(
+            int(channel_id)
+        )
+
+        if not channel:
+            return
+
+        try:
+
+            sent = await channel.send(
+                member.mention,
+                allowed_mentions=discord.AllowedMentions(
+                    users=True
+                )
+            )
+
+            duration = cfg.get(
+                "join_mention_duration",
+                2
+            )
+
+            try:
+                duration = float(duration)
+            except Exception:
+                duration = 2
+
+            await asyncio.sleep(
+                max(
+                    0.1,
+                    min(duration, 30)
+                )
+            )
+
+            await sent.delete()
+
+        except Exception as error:
+
+            print(
+                "❌ Join mention error:",
+                error
+            )
+
+    @commands.Cog.listener()
+    async def on_member_join(
+        self,
+        member
+    ):
+
+        if member.bot:
+            return
+
+        await asyncio.sleep(0.5)
+
+        await self.send_join_mention(member)
+
+    @app_commands.command(
+        name="منشن-روم",
+        description="تحديد روم منشن الأعضاء الجدد"
+    )
+    async def mention_channel(
+        self,
+        interaction,
+        channel: discord.TextChannel
+    ):
+
+        if await self.owner_only(interaction):
+            return
+
+        if not interaction.guild:
+            return
+
+        cfg = self.get_config(
+            interaction.guild.id
+        )
+
+        cfg["join_mention_channel_id"] = channel.id
+        cfg["join_mention_enabled"] = True
+
+        save_config(self.config)
+
+        await interaction.response.send_message(
+            (
+                f"✅ تم تشغيل منشن الدخول "
+                f"في {channel.mention}."
+            ),
+            ephemeral=True
+        )
+
+    @app_commands.command(
+        name="منشن-إيقاف",
+        description="إيقاف منشن الدخول"
+    )
+    async def mention_off(self, interaction):
+
+        if await self.owner_only(interaction):
+            return
+
+        if not interaction.guild:
+            return
+
+        cfg = self.get_config(
+            interaction.guild.id
+        )
+
+        cfg["join_mention_enabled"] = False
+
+        save_config(self.config)
+
+        await interaction.response.send_message(
+            "🛑 تم إيقاف منشن الدخول.",
+            ephemeral=True
+        )
+
+    @app_commands.command(
+        name="منشن-حالة",
+        description="حالة منشن الدخول"
+    )
+    async def mention_status(self, interaction):
+
+        if await self.owner_only(interaction):
+            return
+
+        if not interaction.guild:
+            return
+
+        cfg = self.get_config(
+            interaction.guild.id
+        )
+
+        channel = None
+
+        if cfg.get(
+            "join_mention_channel_id"
+        ):
+
+            channel = interaction.guild.get_channel(
+                int(
+                    cfg[
+                        "join_mention_channel_id"
+                    ]
+                )
+            )
+
+        await interaction.response.send_message(
+            (
+                "## 👋 حالة منشن الدخول\n\n"
+                f"الحالة: **"
+                f"{'🟢 مفعل' if cfg['join_mention_enabled'] else '🔴 متوقف'}"
+                f"**\n"
+                f"الروم: "
+                f"{channel.mention if channel else 'غير محدد'}"
+            ),
+            ephemeral=True
+        )
+
+    @app_commands.command(
+        name="منشن-روم-إلغاء",
+        description="إلغاء روم منشن الدخول"
+    )
+    async def mention_channel_clear(
+        self,
+        interaction
+    ):
+
+        if await self.owner_only(interaction):
+            return
+
+        if not interaction.guild:
+            return
+
+        cfg = self.get_config(
+            interaction.guild.id
+        )
+
+        cfg["join_mention_enabled"] = False
+        cfg["join_mention_channel_id"] = None
+
+        save_config(self.config)
+
+        await interaction.response.send_message(
+            "✅ تم إلغاء نظام منشن الدخول.",
+            ephemeral=True
+        )
+
+    # ========================================================
+    # MAIN MESSAGE LISTENER
     # ========================================================
 
     @commands.Cog.listener()
@@ -4714,6 +4803,25 @@ class AutomaticLineSystem(commands.Cog):
 
         if suggestion_handled:
             return
+
+        # ====================================================
+        # MODERATION SHORTCUTS
+        # قبل المحفزات والخط حتى لا تتعارض
+        # ====================================================
+
+        if cfg.get(
+            "moderation_enabled",
+            True
+        ):
+
+            moderation_handled = (
+                await self.handle_moderation_shortcut(
+                    message
+                )
+            )
+
+            if moderation_handled:
+                return
 
         # ====================================================
         # TOP
@@ -4755,6 +4863,36 @@ class AutomaticLineSystem(commands.Cog):
 
                 print(
                     "❌ TOP error:",
+                    error
+                )
+
+            return
+
+        # ====================================================
+        # AUTO TRIGGERS
+        # مثال:
+        # السلام عليكم -> وعليكم السلام
+        # ====================================================
+
+        normalized_message = self.normalize_trigger(
+            message.content
+        )
+
+        triggers = self.get_triggers(cfg)
+
+        if normalized_message in triggers:
+
+            try:
+
+                await message.channel.send(
+                    triggers[normalized_message],
+                    allowed_mentions=discord.AllowedMentions.none()
+                )
+
+            except Exception as error:
+
+                print(
+                    "❌ Auto trigger error:",
                     error
                 )
 
@@ -4805,31 +4943,26 @@ class AutomaticLineSystem(commands.Cog):
                         error
                     )
 
+                return
+
         # ====================================================
         # LINE
         # ====================================================
 
-        if not cfg.get(
-            "enabled"
-        ):
+        if not cfg.get("enabled"):
             return
 
-        image_url = cfg.get(
-            "image_url"
-        )
+        image_url = cfg.get("image_url")
 
         if not image_url:
             return
 
-        channel_id = cfg.get(
-            "channel_id"
-        )
+        channel_id = cfg.get("channel_id")
 
         if (
             channel_id
             and
-            message.channel.id !=
-            int(channel_id)
+            message.channel.id != int(channel_id)
         ):
             return
 
@@ -4839,9 +4972,7 @@ class AutomaticLineSystem(commands.Cog):
             return
 
         permissions = (
-            message.channel.permissions_for(
-                me
-            )
+            message.channel.permissions_for(me)
         )
 
         if not permissions.send_messages:
@@ -4861,255 +4992,77 @@ class AutomaticLineSystem(commands.Cog):
                 error
             )
 
-    # ========================================================
-    # JOIN
-    # ========================================================
 
-    async def send_join_mention(
+# ============================================================
+# SERVER SELECT
+# ============================================================
+
+class ServerSelect(discord.ui.Select):
+
+    def __init__(
         self,
-        member
+        cog,
+        options
     ):
 
-        cfg = self.get_config(
-            member.guild.id
+        self.cog = cog
+
+        super().__init__(
+            placeholder="اختر سيرفرًا...",
+            min_values=1,
+            max_values=1,
+            options=options,
+            custom_id="fime_server_selector"
         )
 
-        if not cfg.get(
-            "join_mention_enabled"
-        ):
-            return
-
-        channel_id = cfg.get(
-            "join_mention_channel_id"
-        )
-
-        if not channel_id:
-            return
-
-        channel = member.guild.get_channel(
-            int(channel_id)
-        )
-
-        if not channel:
-            return
+    async def callback(self, interaction):
 
         try:
 
-            sent = await channel.send(
-                member.mention,
-                allowed_mentions=discord.AllowedMentions(
-                    users=True
+            guild = self.cog.bot.get_guild(
+                int(self.values[0])
+            )
+
+        except Exception:
+
+            guild = None
+
+        if not guild:
+
+            await interaction.response.send_message(
+                "❌ ما لقيت السيرفر.",
+                ephemeral=True
+            )
+            return
+
+        embed = self.cog.build_server_embed(
+            guild
+        )
+
+        await interaction.response.edit_message(
+            embed=embed,
+            view=self.view
+        )
+
+
+class ServerSelectView(discord.ui.View):
+
+    def __init__(
+        self,
+        cog,
+        options
+    ):
+
+        super().__init__(timeout=None)
+
+        if options:
+
+            self.add_item(
+                ServerSelect(
+                    cog,
+                    options
                 )
             )
-
-            duration = cfg.get(
-                "join_mention_duration",
-                2
-            )
-
-            try:
-                duration = float(
-                    duration
-                )
-            except Exception:
-                duration = 2
-
-            await asyncio.sleep(
-                max(
-                    0.1,
-                    min(
-                        duration,
-                        30
-                    )
-                )
-            )
-
-            await sent.delete()
-
-        except Exception as error:
-
-            print(
-                "❌ Join mention error:",
-                error
-            )
-
-    @commands.Cog.listener()
-    async def on_member_join(
-        self,
-        member
-    ):
-
-        if member.bot:
-            return
-
-        await asyncio.sleep(
-            0.5
-        )
-
-        await self.send_join_mention(
-            member
-        )
-
-    @app_commands.command(
-        name="منشن-روم",
-        description="تحديد روم منشن الأعضاء الجدد"
-    )
-    async def mention_channel(
-        self,
-        interaction,
-        channel: discord.TextChannel
-    ):
-
-        if await self.owner_only(
-            interaction
-        ):
-            return
-
-        if not interaction.guild:
-            return
-
-        cfg = self.get_config(
-            interaction.guild.id
-        )
-
-        cfg[
-            "join_mention_channel_id"
-        ] = channel.id
-
-        cfg[
-            "join_mention_enabled"
-        ] = True
-
-        save_config(
-            self.config
-        )
-
-        await interaction.response.send_message(
-            (
-                f"✅ تم تشغيل منشن الدخول "
-                f"في {channel.mention}."
-            ),
-            ephemeral=True
-        )
-
-    @app_commands.command(
-        name="منشن-إيقاف",
-        description="إيقاف منشن الدخول"
-    )
-    async def mention_off(
-        self,
-        interaction
-    ):
-
-        if await self.owner_only(
-            interaction
-        ):
-            return
-
-        if not interaction.guild:
-            return
-
-        cfg = self.get_config(
-            interaction.guild.id
-        )
-
-        cfg[
-            "join_mention_enabled"
-        ] = False
-
-        save_config(
-            self.config
-        )
-
-        await interaction.response.send_message(
-            "🛑 تم إيقاف منشن الدخول.",
-            ephemeral=True
-        )
-
-    @app_commands.command(
-        name="منشن-حالة",
-        description="حالة منشن الدخول"
-    )
-    async def mention_status(
-        self,
-        interaction
-    ):
-
-        if await self.owner_only(
-            interaction
-        ):
-            return
-
-        if not interaction.guild:
-            return
-
-        cfg = self.get_config(
-            interaction.guild.id
-        )
-
-        channel = None
-
-        if cfg.get(
-            "join_mention_channel_id"
-        ):
-
-            channel = interaction.guild.get_channel(
-                int(
-                    cfg[
-                        "join_mention_channel_id"
-                    ]
-                )
-            )
-
-        await interaction.response.send_message(
-            (
-                "## 👋 حالة منشن الدخول\n\n"
-                f"الحالة: **"
-                f"{'🟢 مفعل' if cfg['join_mention_enabled'] else '🔴 متوقف'}"
-                f"**\n"
-                f"الروم: "
-                f"{channel.mention if channel else 'غير محدد'}"
-            ),
-            ephemeral=True
-        )
-
-    @app_commands.command(
-        name="منشن-روم-إلغاء",
-        description="إلغاء روم منشن الدخول"
-    )
-    async def mention_channel_clear(
-        self,
-        interaction
-    ):
-
-        if await self.owner_only(
-            interaction
-        ):
-            return
-
-        if not interaction.guild:
-            return
-
-        cfg = self.get_config(
-            interaction.guild.id
-        )
-
-        cfg[
-            "join_mention_enabled"
-        ] = False
-
-        cfg[
-            "join_mention_channel_id"
-        ] = None
-
-        save_config(
-            self.config
-        )
-
-        await interaction.response.send_message(
-            "✅ تم إلغاء نظام منشن الدخول.",
-            ephemeral=True
-        )
 
 
 # ============================================================
@@ -5130,28 +5083,19 @@ async def setup(bot):
 
         return
 
-    cog = AutomaticLineSystem(
-        bot
-    )
+    cog = AutomaticLineSystem(bot)
 
-    await bot.add_cog(
-        cog
-    )
+    await bot.add_cog(cog)
 
     # ========================================================
-    # RESTORE PERSISTENT SUGGESTION BUTTONS
+    # RESTORE SUGGESTION BUTTONS
     # ========================================================
 
-    for suggestion in (
-        cog.suggestions.values()
-    ):
+    for suggestion in cog.suggestions.values():
 
         try:
 
-            # الاقتراح المقبول/المرفوض لا يحتاج أزرار
-            if suggestion.get(
-                "status"
-            ) in (
+            if suggestion.get("status") in (
                 "مقبول",
                 "مرفوض"
             ):
@@ -5168,6 +5112,43 @@ async def setup(bot):
 
             print(
                 "⚠️ Suggestion persistent view error:",
+                error
+            )
+
+    # ========================================================
+    # RESTORE SAY BUTTONS
+    # ========================================================
+
+    for say_data in cog.say_messages.values():
+
+        try:
+
+            bot.add_view(
+                SayProfileView(
+                    cog,
+                    say_data["message_id"],
+                    avatar_url=say_data.get(
+                        "avatar_url"
+                    ),
+                    banner_url=say_data.get(
+                        "banner_url"
+                    ),
+                    profile_url=say_data.get(
+                        "profile_url"
+                    ),
+                    username=say_data.get(
+                        "username"
+                    ),
+                    room_definition=say_data.get(
+                        "room_definition"
+                    )
+                )
+            )
+
+        except Exception as error:
+
+            print(
+                "⚠️ SAY persistent view error:",
                 error
             )
 
