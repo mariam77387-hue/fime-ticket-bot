@@ -559,6 +559,53 @@ class ModerationShortcutView(discord.ui.View):
 
 class AutomaticLineSystem(commands.Cog):
 
+    # --------------------------------------------------------
+    # SLASH COMMAND GROUPS
+    # كل مجموعة هنا = أمر واحد فقط عند Discord (top-level),
+    # وكل ما بداخلها Subcommands لا تُحسب ضمن حد الـ100 أمر
+    # العالمي. هذا هو سبب الدمج.
+    # --------------------------------------------------------
+    top_group = app_commands.Group(
+        name="توب",
+        description="أوامر نظام التوب (الأكثر تفاعلاً)"
+    )
+    line_group = app_commands.Group(
+        name="خط",
+        description="أوامر نظام الخط (الصورة التلقائية)"
+    )
+    fime_group = app_commands.Group(
+        name="فيم",
+        description="أوامر نظام رد كلمة فيم"
+    )
+    room_group = app_commands.Group(
+        name="روم",
+        description="أوامر تعريف الروم ورسالة بروفايل /say"
+    )
+    bot_group = app_commands.Group(
+        name="بوت",
+        description="أوامر معلومات البوت والتحكم برسائله"
+    )
+    suggest_group = app_commands.Group(
+        name="اقتراحات",
+        description="أوامر نظام الاقتراحات"
+    )
+    trigger_group = app_commands.Group(
+        name="محفزات",
+        description="أوامر المحفزات التلقائية (رد تلقائي على كلمة)"
+    )
+    shortcut_group = app_commands.Group(
+        name="اختصارات",
+        description="أوامر اختصارات أوامر الإدارة النصية"
+    )
+    filter_group = app_commands.Group(
+        name="فلتر",
+        description="أوامر فلتر الكلمات المحظورة"
+    )
+    mention_group = app_commands.Group(
+        name="منشن",
+        description="أوامر منشن الأعضاء الجدد"
+    )
+
     def __init__(self, bot):
 
         self.bot = bot
@@ -1612,8 +1659,8 @@ class AutomaticLineSystem(commands.Cog):
     # TOP COMMANDS
     # ========================================================
 
-    @app_commands.command(
-        name="توب-روم",
+    @top_group.command(
+        name="روم",
         description="تحديد روم التوب"
     )
     async def top_channel(
@@ -1648,8 +1695,8 @@ class AutomaticLineSystem(commands.Cog):
             ephemeral=True
         )
 
-    @app_commands.command(
-        name="توب-رتبة",
+    @top_group.command(
+        name="رتبة-اضافة",
         description="إضافة رتبة للتوب"
     )
     async def top_role(
@@ -1680,8 +1727,8 @@ class AutomaticLineSystem(commands.Cog):
             ephemeral=True
         )
 
-    @app_commands.command(
-        name="توب-رتبة-إزالة",
+    @top_group.command(
+        name="رتبة-حذف",
         description="إزالة رتبة من التوب"
     )
     async def top_role_remove(
@@ -1710,8 +1757,8 @@ class AutomaticLineSystem(commands.Cog):
             ephemeral=True
         )
 
-    @app_commands.command(
-        name="توب-حالة",
+    @top_group.command(
+        name="حالة",
         description="عرض حالة التوب"
     )
     async def top_status(self, interaction):
@@ -1759,8 +1806,8 @@ class AutomaticLineSystem(commands.Cog):
     # LINE
     # ========================================================
 
-    @app_commands.command(
-        name="خط",
+    @line_group.command(
+        name="تشغيل",
         description="تشغيل نظام الخط"
     )
     async def line_setup(
@@ -1863,8 +1910,8 @@ class AutomaticLineSystem(commands.Cog):
                 ephemeral=True
             )
 
-    @app_commands.command(
-        name="خط-إيقاف",
+    @line_group.command(
+        name="ايقاف",
         description="إيقاف نظام الخط"
     )
     async def line_off(self, interaction):
@@ -1888,8 +1935,8 @@ class AutomaticLineSystem(commands.Cog):
             ephemeral=True
         )
 
-    @app_commands.command(
-        name="خط-حالة",
+    @line_group.command(
+        name="حالة",
         description="حالة الخط"
     )
     async def line_status(self, interaction):
@@ -1923,8 +1970,8 @@ class AutomaticLineSystem(commands.Cog):
             ephemeral=True
         )
 
-    @app_commands.command(
-        name="خط-روم",
+    @line_group.command(
+        name="روم",
         description="تغيير روم الخط"
     )
     async def line_channel(
@@ -1963,8 +2010,8 @@ class AutomaticLineSystem(commands.Cog):
     # FIME
     # ========================================================
 
-    @app_commands.command(
-        name="فيم-رسالة",
+    @fime_group.command(
+        name="رسالة",
         description="تغيير رد كلمة فيم"
     )
     async def fime_message(
@@ -2001,8 +2048,8 @@ class AutomaticLineSystem(commands.Cog):
             ephemeral=True
         )
 
-    @app_commands.command(
-        name="فيم-تشغيل",
+    @fime_group.command(
+        name="تشغيل",
         description="تشغيل نظام فيم"
     )
     async def fime_enable(self, interaction):
@@ -2026,8 +2073,8 @@ class AutomaticLineSystem(commands.Cog):
             ephemeral=True
         )
 
-    @app_commands.command(
-        name="فيم-إيقاف",
+    @fime_group.command(
+        name="ايقاف",
         description="إيقاف نظام فيم"
     )
     async def fime_disable(self, interaction):
@@ -2051,8 +2098,8 @@ class AutomaticLineSystem(commands.Cog):
             ephemeral=True
         )
 
-    @app_commands.command(
-        name="فيم-حالة",
+    @fime_group.command(
+        name="حالة",
         description="حالة نظام فيم"
     )
     async def fime_status(self, interaction):
@@ -2083,8 +2130,8 @@ class AutomaticLineSystem(commands.Cog):
     # ROOM DEFINITION
     # ========================================================
 
-    @app_commands.command(
-        name="تعريف-الروم",
+    @room_group.command(
+        name="تعريف",
         description="حفظ تعريف الروم"
     )
     async def set_room_definition(
@@ -2120,8 +2167,8 @@ class AutomaticLineSystem(commands.Cog):
             ephemeral=True
         )
 
-    @app_commands.command(
-        name="تعريف-الروم-حذف",
+    @room_group.command(
+        name="تعريف-حذف",
         description="حذف تعريف الروم"
     )
     async def delete_room_definition(
@@ -2148,7 +2195,7 @@ class AutomaticLineSystem(commands.Cog):
             ephemeral=True
         )
 
-    @app_commands.command(
+    @room_group.command(
         name="بروفايل-رسالة",
         description="تحديد الرسالة التي تظهر مع صور البروفايل"
     )
@@ -2182,8 +2229,8 @@ class AutomaticLineSystem(commands.Cog):
             ephemeral=True
         )
 
-    @app_commands.command(
-        name="بروفايل-رسالة-إيقاف",
+    @room_group.command(
+        name="بروفايل-رسالة-ايقاف",
         description="إيقاف الرسالة التي تظهر مع صور البروفايل"
     )
     async def disable_say_media_response(
@@ -2204,7 +2251,7 @@ class AutomaticLineSystem(commands.Cog):
             ephemeral=True
         )
 
-    @app_commands.command(
+    @room_group.command(
         name="بروفايل-رسالة-تشغيل",
         description="تشغيل رسالة البروفايل المحفوظة"
     )
@@ -3007,21 +3054,11 @@ class AutomaticLineSystem(commands.Cog):
             ephemeral=True
         )
 
-    @app_commands.command(
-        name="server",
+    @bot_group.command(
+        name="معلومات",
         description="معلومات السيرفرات التي يستخدم فيها البوت"
     )
     async def server_command(
-        self,
-        interaction
-    ):
-        await self.send_server_panel(interaction)
-
-    @app_commands.command(
-        name="سيرفر",
-        description="معلومات السيرفرات التي يستخدم فيها البوت"
-    )
-    async def arabic_server_command(
         self,
         interaction
     ):
@@ -3031,7 +3068,7 @@ class AutomaticLineSystem(commands.Cog):
     # BOT MESSAGE EDIT
     # ========================================================
 
-    @app_commands.command(
+    @bot_group.command(
         name="تعديل-رسالة",
         description="تعديل رسالة أرسلها البوت"
     )
@@ -3420,8 +3457,8 @@ class AutomaticLineSystem(commands.Cog):
     # MANUAL SUGGESTION
     # ========================================================
 
-    @app_commands.command(
-        name="اقتراح",
+    @suggest_group.command(
+        name="ارسال",
         description="إرسال اقتراح للسيرفر"
     )
     @app_commands.describe(
@@ -3617,8 +3654,8 @@ class AutomaticLineSystem(commands.Cog):
     # SUGGESTION SETTINGS
     # ========================================================
 
-    @app_commands.command(
-        name="اقتراح-روم",
+    @suggest_group.command(
+        name="روم",
         description="تحديد روم الاقتراحات"
     )
     async def suggestion_channel(
@@ -3650,8 +3687,8 @@ class AutomaticLineSystem(commands.Cog):
             ephemeral=True
         )
 
-    @app_commands.command(
-        name="اقتراح-سجل",
+    @suggest_group.command(
+        name="سجل",
         description="تحديد روم سجل الاقتراحات"
     )
     async def suggestion_log_channel(
@@ -3682,8 +3719,8 @@ class AutomaticLineSystem(commands.Cog):
             ephemeral=True
         )
 
-    @app_commands.command(
-        name="اقتراح-رتبة",
+    @suggest_group.command(
+        name="رتبة-اضافة",
         description="إضافة رتبة مسموح لها قبول ورفض الاقتراحات"
     )
     async def suggestion_role(
@@ -3717,8 +3754,8 @@ class AutomaticLineSystem(commands.Cog):
             ephemeral=True
         )
 
-    @app_commands.command(
-        name="اقتراح-رتبة-إزالة",
+    @suggest_group.command(
+        name="رتبة-حذف",
         description="إزالة رتبة من إدارة الاقتراحات"
     )
     async def suggestion_role_remove(
@@ -3749,8 +3786,8 @@ class AutomaticLineSystem(commands.Cog):
             ephemeral=True
         )
 
-    @app_commands.command(
-        name="اقتراح-رتب",
+    @suggest_group.command(
+        name="رتب",
         description="عرض رتب إدارة الاقتراحات"
     )
     async def suggestion_roles(
@@ -3793,8 +3830,8 @@ class AutomaticLineSystem(commands.Cog):
     # SUGGESTION STATUS
     # ========================================================
 
-    @app_commands.command(
-        name="اقتراح-حالة",
+    @suggest_group.command(
+        name="حالة",
         description="تغيير حالة اقتراح"
     )
     @app_commands.describe(
@@ -3895,8 +3932,8 @@ class AutomaticLineSystem(commands.Cog):
     # ADMIN REPLY
     # ========================================================
 
-    @app_commands.command(
-        name="اقتراح-رد",
+    @suggest_group.command(
+        name="رد",
         description="إضافة رد الإدارة على اقتراح"
     )
     async def suggestion_reply(
@@ -4156,8 +4193,8 @@ class AutomaticLineSystem(commands.Cog):
             dict
         ) else {}
 
-    @app_commands.command(
-        name="محفز-إضافة",
+    @trigger_group.command(
+        name="اضافة",
         description="إضافة رد تلقائي لمحفز"
     )
     @app_commands.describe(
@@ -4214,8 +4251,8 @@ class AutomaticLineSystem(commands.Cog):
             ephemeral=True
         )
 
-    @app_commands.command(
-        name="محفز-حذف",
+    @trigger_group.command(
+        name="حذف",
         description="حذف رد تلقائي"
     )
     async def trigger_remove(
@@ -4257,8 +4294,8 @@ class AutomaticLineSystem(commands.Cog):
             ephemeral=True
         )
 
-    @app_commands.command(
-        name="محفز-تعديل",
+    @trigger_group.command(
+        name="تعديل",
         description="تعديل رد محفز موجود"
     )
     async def trigger_edit(
@@ -4309,8 +4346,8 @@ class AutomaticLineSystem(commands.Cog):
             ephemeral=True
         )
 
-    @app_commands.command(
-        name="محفز-قائمة",
+    @trigger_group.command(
+        name="قائمة",
         description="عرض المحفزات التلقائية"
     )
     async def trigger_list(
@@ -4442,7 +4479,7 @@ class AutomaticLineSystem(commands.Cog):
 
     def normalize_filter_text(self, text):
         text = str(text or "").casefold()
-        for char in "ًٌٍَُِّْـ":
+        for char in "ًٌٍَُِّْـ":
             text = text.replace(char, "")
         return " ".join(text.split())
 
@@ -4616,8 +4653,8 @@ class AutomaticLineSystem(commands.Cog):
     # MODERATION SETTINGS — ALIASES
     # ========================================================
 
-    @app_commands.command(
-        name="اختصار-إضافة",
+    @shortcut_group.command(
+        name="اضافة",
         description="إضافة اختصار مخصص لأوامر الإدارة"
     )
     @app_commands.describe(
@@ -4663,8 +4700,8 @@ class AutomaticLineSystem(commands.Cog):
             ephemeral=True
         )
 
-    @app_commands.command(
-        name="اختصار-حذف",
+    @shortcut_group.command(
+        name="حذف",
         description="حذف اختصار مخصص"
     )
     @app_commands.describe(shortcut="الاختصار")
@@ -4697,8 +4734,8 @@ class AutomaticLineSystem(commands.Cog):
             ephemeral=True
         )
 
-    @app_commands.command(
-        name="اختصارات",
+    @shortcut_group.command(
+        name="قائمة",
         description="عرض اختصارات الإدارة المخصصة"
     )
     async def moderation_alias_list(self, interaction):
@@ -4725,8 +4762,8 @@ class AutomaticLineSystem(commands.Cog):
     # BLOCKED WORDS
     # ========================================================
 
-    @app_commands.command(
-        name="حظر-كلمة-إضافة",
+    @filter_group.command(
+        name="اضافة",
         description="إضافة كلمة إلى فلتر الكلمات المحظورة"
     )
     @app_commands.describe(word="الكلمة أو العبارة")
@@ -4758,8 +4795,8 @@ class AutomaticLineSystem(commands.Cog):
             ephemeral=True
         )
 
-    @app_commands.command(
-        name="حظر-كلمة-حذف",
+    @filter_group.command(
+        name="حذف",
         description="حذف كلمة من فلتر الكلمات المحظورة"
     )
     @app_commands.describe(word="الكلمة أو العبارة")
@@ -4789,8 +4826,8 @@ class AutomaticLineSystem(commands.Cog):
             ephemeral=True
         )
 
-    @app_commands.command(
-        name="حظر-كلمات",
+    @filter_group.command(
+        name="قائمة",
         description="عرض الكلمات المحظورة"
     )
     async def blocked_word_list(self, interaction):
@@ -5223,8 +5260,8 @@ class AutomaticLineSystem(commands.Cog):
 
         await self.send_join_mention(member)
 
-    @app_commands.command(
-        name="منشن-روم",
+    @mention_group.command(
+        name="روم",
         description="تحديد روم منشن الأعضاء الجدد"
     )
     async def mention_channel(
@@ -5256,8 +5293,8 @@ class AutomaticLineSystem(commands.Cog):
             ephemeral=True
         )
 
-    @app_commands.command(
-        name="منشن-إيقاف",
+    @mention_group.command(
+        name="ايقاف",
         description="إيقاف منشن الدخول"
     )
     async def mention_off(self, interaction):
@@ -5281,8 +5318,8 @@ class AutomaticLineSystem(commands.Cog):
             ephemeral=True
         )
 
-    @app_commands.command(
-        name="منشن-حالة",
+    @mention_group.command(
+        name="حالة",
         description="حالة منشن الدخول"
     )
     async def mention_status(self, interaction):
@@ -5323,8 +5360,8 @@ class AutomaticLineSystem(commands.Cog):
             ephemeral=True
         )
 
-    @app_commands.command(
-        name="منشن-روم-إلغاء",
+    @mention_group.command(
+        name="الغاء",
         description="إلغاء روم منشن الدخول"
     )
     async def mention_channel_clear(
