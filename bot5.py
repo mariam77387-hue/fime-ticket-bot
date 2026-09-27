@@ -581,7 +581,7 @@ class AutomaticLineSystem(commands.Cog):
         name="روم",
         description="أوامر تعريف الروم ورسالة بروفايل /say"
     )
-    bot_group = app_commands.Group(
+    control_group = app_commands.Group(
         name="بوت",
         description="أوامر معلومات البوت والتحكم برسائله"
     )
@@ -3054,7 +3054,7 @@ class AutomaticLineSystem(commands.Cog):
             ephemeral=True
         )
 
-    @bot_group.command(
+    @control_group.command(
         name="معلومات",
         description="معلومات السيرفرات التي يستخدم فيها البوت"
     )
@@ -3068,7 +3068,7 @@ class AutomaticLineSystem(commands.Cog):
     # BOT MESSAGE EDIT
     # ========================================================
 
-    @bot_group.command(
+    @control_group.command(
         name="تعديل-رسالة",
         description="تعديل رسالة أرسلها البوت"
     )
