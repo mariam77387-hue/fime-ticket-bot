@@ -2567,7 +2567,7 @@ class AutomaticLineSystem(commands.Cog):
     # SAY
     # ========================================================
 
-    @app_commands.command(
+        @app_commands.command(
         name="say",
         description="إرسال رسالة مع بروفايل كلاسيكي وطقم افتارات"
     )
@@ -2588,7 +2588,7 @@ class AutomaticLineSystem(commands.Cog):
         banner="البنر — اختياري",
         room_definition="تعريف اختياري لهذا الـ /say"
     )
-            @app_commands.choices(
+    @app_commands.choices(
         layout=[
             app_commands.Choice(name="كلاسيك — افتار واحد", value="1"),
             app_commands.Choice(name="طقم شخصين", value="2"),
@@ -2602,6 +2602,7 @@ class AutomaticLineSystem(commands.Cog):
             app_commands.Choice(name="طقم 10", value="10"),
         ]
     )
+
     async def say(self, interaction: discord.Interaction, message: str = None, channel: discord.TextChannel = None):
         if await self.owner_only(interaction):
             return
