@@ -3,7 +3,7 @@ from discord.ext import commands
 import aiohttp
 from urllib.parse import urlparse, parse_qs
 
-# المتغيرات الأساسية (يمكنك ربطها بملف التكوين أو ملف التشغيل الرئيسي)
+# المتغيرات الأساسية (يمكنك ربطها بملف التكوين أو ملف التشغيلالرئيسي)
 ENDPOINT = "http://45.90.13.151:6041"
 MADE_BY = "wmnd"  # ضع اسم المبرمج هنا أو استدعِه من bot.py
 
