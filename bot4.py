@@ -22,6 +22,12 @@ import validators
 import urllib.parse
 import time
 import aiohttp
+import ipaddress
+
+try:
+    from playwright.sync_api import sync_playwright
+except Exception:
+    sync_playwright = None
 
 load_dotenv()
 TOKEN = os.getenv("BOT_TOKEN")
@@ -5387,6 +5393,150 @@ async def slash_rscripts_by_user(
         temp_msg,
         scripts,
         api="rscripts"
+    )
+
+
+
+# ============================================================
+# KEY FETCH SYSTEM
+# /مفتاح
+# ============================================================
+
+KEY_FETCH_TIMEOUT_MS = 20000
+KEY_PATTERN = re.compile(r"FREE_[a-fA-F0-9]{32}")
+
+
+def _is_public_http_url(raw_url):
+    """منع الروابط المحلية/الخاصة حتى لا يتحول الأمر إلى SSRF."""
+    try:
+        parsed = urllib.parse.urlparse(str(raw_url).strip())
+
+        if parsed.scheme not in {"http", "https"}:
+            return False
+
+        if not parsed.hostname:
+            return False
+
+        host = parsed.hostname.strip().lower()
+
+        if host in {"localhost", "localhost.localdomain"}:
+            return False
+
+        try:
+            ip = ipaddress.ip_address(host)
+            return not (
+                ip.is_private
+                or ip.is_loopback
+                or ip.is_link_local
+                or ip.is_reserved
+                or ip.is_multicast
+                or ip.is_unspecified
+            )
+        except ValueError:
+            # اسم نطاق عادي.
+            return True
+
+    except Exception:
+        return False
+
+
+def fetch_free_key_sync(raw_url):
+    """
+    نفس فكرة bypass_api المرسلة من المستخدم، لكن مدمجة داخل bot4
+    بدل تشغيل Flask منفصل.
+    """
+    if sync_playwright is None:
+        return None, "playwright غير مثبت في البيئة."
+
+    url = str(raw_url or "").strip()
+
+    if not _is_public_http_url(url):
+        return None, "الرابط غير صالح أو غير مسموح."
+
+    browser = None
+
+    try:
+        with sync_playwright() as p:
+            browser = p.chromium.launch(
+                headless=True,
+                args=[
+                    "--no-sandbox",
+                    "--disable-setuid-sandbox",
+                ]
+            )
+
+            page = browser.new_page()
+
+            page.goto(
+                url,
+                timeout=KEY_FETCH_TIMEOUT_MS,
+                wait_until="networkidle"
+            )
+
+            page.wait_for_timeout(2000)
+
+            content = page.content()
+            final_url = page.url
+
+            match = KEY_PATTERN.search(content)
+
+            if match:
+                return match.group(0), None
+
+            query = urllib.parse.parse_qs(
+                urllib.parse.urlparse(final_url).query
+            )
+
+            for values in query.values():
+                for value in values:
+                    match = KEY_PATTERN.search(str(value))
+                    if match:
+                        return match.group(0), None
+
+            return None, "ما لقيت مفتاح في الصفحة."
+
+    except Exception as error:
+        return None, f"تعذر جلب المفتاح: {type(error).__name__}"
+
+    finally:
+        try:
+            if browser:
+                browser.close()
+        except Exception:
+            pass
+
+
+@bot.tree.command(
+    name="مفتاح",
+    description="جلب المفتاح من رابط يدخله العضو"
+)
+@app_commands.describe(
+    url="رابط المفتاح"
+)
+async def slash_key(
+    interaction: discord.Interaction,
+    url: str
+):
+    await interaction.response.defer(ephemeral=True)
+
+    key, error = await asyncio.to_thread(
+        fetch_free_key_sync,
+        url
+    )
+
+    if key:
+        await interaction.followup.send(
+            (
+                "🔑 **تم العثور على المفتاح:**\n"
+                f"```{key}```"
+            ),
+            ephemeral=True
+        )
+        return
+
+    await interaction.followup.send(
+        f"❌ {error or 'ما قدرت أجيب المفتاح.'}",
+        ephemeral=True
     )
 
 
