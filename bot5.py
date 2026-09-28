@@ -2588,7 +2588,7 @@ class AutomaticLineSystem(commands.Cog):
         banner="البنر — اختياري",
         room_definition="تعريف اختياري لهذا الـ /say"
     )
-    @app_commands.choices(
+        @app_commands.choices(
         layout=[
             app_commands.Choice(name="كلاسيك — افتار واحد", value="1"),
             app_commands.Choice(name="طقم شخصين", value="2"),
@@ -2604,7 +2604,7 @@ class AutomaticLineSystem(commands.Cog):
     )
     async def say(
         self,
-        interaction,
+        interaction: discord.Interaction,
         message: str = None,
         channel: discord.TextChannel = None,
         layout: app_commands.Choice[str] = None,
@@ -2620,7 +2620,8 @@ class AutomaticLineSystem(commands.Cog):
         avatar10: discord.Attachment = None,
         banner: discord.Attachment = None,
         room_definition: str = None
-            if await self.owner_only(interaction):
+    ):
+        if await self.owner_only(interaction):
             return
 
         if not interaction.guild:
@@ -2632,6 +2633,16 @@ class AutomaticLineSystem(commands.Cog):
                 ephemeral=True
             )
             return
+
+        target = channel or interaction.channel
+
+        if not isinstance(target, discord.TextChannel):
+            await interaction.response.send_message(
+                "❌ اختر رومًا نصيًا.",
+                ephemeral=True
+            )
+            return
+
 
         target = channel or interaction.channel
 
