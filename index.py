@@ -3,9 +3,9 @@ from discord.ext import commands
 import aiohttp
 from urllib.parse import urlparse, parse_qs
 
-# المتغيرات الأساسية (يمكنك ربطها بملف التكوين أو ملف التشغيل الرئيسي)
+# المتغيرات الأساسية
 ENDPOINT = "http://45.90.13.151:6041"
-MADE_BY = "wmnd"  # ضع اسم المبرمج هنا أو استدعِه من bot.py
+MADE_BY = "wmnd"
 
 class BypassCog(commands.Cog):
     def __init__(self, bot):
@@ -171,7 +171,7 @@ class BypassCog(commands.Cog):
                     if data.get("status") == 'online':
                         embed = discord.Embed(title="API Status", color=0x2ECC71, timestamp=discord.utils.utcnow())
                         embed.add_field(name='Ping:', value=f"`{data.get('ping')} ms`", inline=True)
-                        embed.add_field(name='Uptime:', value=`{data.get('uptime')}` if False else f"`{data.get('uptime')}`", inline=True)
+                        embed.add_field(name='Uptime:', value=f"`{data.get('uptime')}`", inline=True)
                     else:
                         embed = discord.Embed(title="API Status", color=0xE74C3C)
                         embed.add_field(name='Status:', value='The API is currently offline.')
@@ -185,4 +185,3 @@ class BypassCog(commands.Cog):
 
 async def setup(bot):
     await bot.add_cog(BypassCog(bot))
-    
