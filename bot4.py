@@ -25,9 +25,15 @@ import aiohttp
 import ipaddress
 
 try:
-    from playwright.sync_api import sync_playwright
+    from playwright.async_api import (
+        async_playwright,
+        TimeoutError as PlaywrightTimeoutError,
+    )
 except Exception:
-    sync_playwright = None
+    async_playwright = None
+
+    class PlaywrightTimeoutError(Exception):
+        pass
 
 load_dotenv()
 TOKEN = os.getenv("BOT_TOKEN")
@@ -5398,125 +5404,661 @@ async def slash_rscripts_by_user(
 
 
 # ============================================================
-# KEY FETCH SYSTEM
+# KEY FETCH SYSTEM v2
 # /مفتاح
+#
+# الخطة:
+#   1) مسار سريع بدون متصفح: aiohttp مع متابعة Redirect يدويًا
+#      والتأكد من الدومين في كل خطوة.
+#   2) إذا الصفحة تحتاج JavaScript: متصفح Chromium مشترك (يُشغّل مرة
+#      وحدة ويُعاد استخدامه) مع منع الصور/الخطوط لتسريع التحميل،
+#      وفحص متكرر للصفحة حتى يظهر المفتاح.
+#   3) أي Redirect خارج auth.platorelay.com = رفض فوري.
+#   4) أي حماية/CAPTCHA تظهر = رسالة واضحة، والبوت لا يتجاوزها.
 # ============================================================
 
-# يسمح فقط بروابط Platorelay الرسمية، ويرفض أي تحويل لموقع مختلف.
 KEY_ALLOWED_HOST = "auth.platorelay.com"
-KEY_FETCH_TIMEOUT_MS = 60000
-KEY_WAIT_AFTER_LOAD_MS = 3000
 KEY_PATTERN = re.compile(r"FREE_[a-fA-F0-9]{32}")
+
+KEY_HTTP_TIMEOUT = 12            # ثواني للمسار السريع
+KEY_HTTP_CONNECT_TIMEOUT = 6
+KEY_MAX_REDIRECTS = 6
+KEY_MAX_BODY_BYTES = 2_000_000
+
+KEY_BROWSER_GOTO_TIMEOUT_MS = 25000
+KEY_BROWSER_POLL_SECONDS = 15    # أقصى انتظار لظهور المفتاح داخل المتصفح
+KEY_BROWSER_CHALLENGE_SECONDS = 25   # لو ظهرت صفحة تحقق، ننتظر أكثر شوي
+KEY_BROWSER_POLL_INTERVAL = 0.4
+KEY_BROWSER_HARD_TIMEOUT = 50    # سقف صارم لمرحلة المتصفح كاملة
+KEY_OVERALL_TIMEOUT = 70         # سقف صارم للأمر كامله
+
+KEY_CACHE_TTL = 120
+KEY_USER_AGENT = (
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+    "AppleWebKit/537.36 (KHTML, like Gecko) "
+    "Chrome/124.0.0.0 Safari/537.36"
+)
+
+# علامات صفحات الحماية / التحقق
+KEY_BLOCK_MARKERS = (
+    "just a moment",
+    "attention required",
+    "cf-chl",
+    "challenge-platform",
+    "verify you are human",
+    "are you a robot",
+    "captcha",
+    "access denied",
+    "checking your browser",
+    "enable javascript and cookies",
+)
+
+_key_cache = {}
+_key_playwright = None
+_key_browser = None
+_key_browser_lock = None
+_key_browser_semaphore = None
+
+
+def _key_host_of(url):
+    try:
+        return (
+            urllib.parse.urlparse(str(url).strip()).hostname or ""
+        ).lower().rstrip(".")
+    except Exception:
+        return ""
 
 
 def _is_allowed_key_url(raw_url):
-    """يسمح فقط بـ https://auth.platorelay.com/..."""
+    """يسمح فقط بـ https://auth.platorelay.com/... (بدون user:pass وبدون بورت غريب)."""
     try:
         parsed = urllib.parse.urlparse(str(raw_url).strip())
-        return (
-            parsed.scheme == "https"
-            and parsed.hostname
-            and parsed.hostname.lower().rstrip(".") == KEY_ALLOWED_HOST
-        )
+
+        if parsed.scheme != "https":
+            return False
+
+        if (parsed.hostname or "").lower().rstrip(".") != KEY_ALLOWED_HOST:
+            return False
+
+        if parsed.username or parsed.password:
+            return False
+
+        if parsed.port not in (None, 443):
+            return False
+
+        return True
     except Exception:
         return False
 
 
 def _is_allowed_key_page(url):
-    """يتأكد أن الصفحة النهائية ما زالت على نفس نطاق Platorelay."""
-    try:
-        parsed = urllib.parse.urlparse(str(url).strip())
+    """يتأكد أن الصفحة الحالية ما زالت على نفس نطاق Platorelay."""
+    return _is_allowed_key_url(url)
+
+
+def _find_key(*texts):
+    """يبحث عن FREE_ + 32 Hex داخل أي نص (ويجرب فك ترميز الرابط أيضًا)."""
+    for text in texts:
+        if not text:
+            continue
+
+        text = str(text)
+
+        match = KEY_PATTERN.search(text)
+        if match:
+            return match.group(0)
+
+        try:
+            decoded = urllib.parse.unquote(text)
+        except Exception:
+            decoded = ""
+
+        if decoded and decoded != text:
+            match = KEY_PATTERN.search(decoded)
+            if match:
+                return match.group(0)
+
+    return None
+
+
+def _looks_blocked(text):
+    lowered = str(text or "").lower()
+    return any(marker in lowered for marker in KEY_BLOCK_MARKERS)
+
+
+def _short_error(error, limit=160):
+    """أول سطر من رسالة الخطأ الحقيقية (بدل كلمة Error فقط)."""
+    message = str(error or "").strip().splitlines()
+    message = message[0].strip() if message else ""
+    if len(message) > limit:
+        message = message[:limit] + "…"
+    return message or type(error).__name__
+
+
+def _describe_browser_error(error, launching=False):
+    """يحوّل أخطاء Playwright إلى سبب واضح بالعربي."""
+    name = type(error).__name__
+    raw = str(error or "")
+    lowered = raw.lower()
+
+    if "executable doesn't exist" in lowered or "playwright install" in lowered:
         return (
-            parsed.scheme == "https"
-            and parsed.hostname
-            and parsed.hostname.lower().rstrip(".") == KEY_ALLOWED_HOST
+            "❌ متصفح Chromium غير مثبت على السيرفر.\n"
+            "شغّل: `playwright install chromium` داخل Build Command."
         )
-    except Exception:
-        return False
+
+    if (
+        "host system is missing dependencies" in lowered
+        or "error while loading shared libraries" in lowered
+        or "install-deps" in lowered
+    ):
+        return (
+            "❌ مكتبات النظام الناقصة لتشغيل Chromium.\n"
+            "استخدم صورة Docker الرسمية لـ Playwright أو شغّل "
+            "`playwright install-deps chromium`."
+        )
+
+    if "net::err_name_not_resolved" in lowered:
+        return "❌ تعذر الوصول للموقع: الدومين ما انحل (مشكلة DNS)."
+
+    if "net::err_connection_refused" in lowered:
+        return "❌ الموقع رفض الاتصال."
+
+    if "net::err_connection_timed_out" in lowered or "timeout" in lowered:
+        return "⏱️ انتهت مهلة الاتصال بالموقع."
+
+    if "net::err_cert" in lowered or "ssl" in lowered:
+        return "❌ مشكلة في شهادة SSL للموقع."
+
+    if "net::err_" in lowered:
+        code = re.search(r"net::ERR_[A-Z_]+", raw)
+        return f"❌ فشل تحميل الصفحة: {code.group(0) if code else _short_error(error)}"
+
+    if "target closed" in lowered or "browser has been closed" in lowered:
+        return "❌ المتصفح أُغلق فجأة أثناء العملية (غالبًا نقص ذاكرة)."
+
+    if "memory" in lowered or "out of memory" in lowered:
+        return "❌ السيرفر ما عنده ذاكرة كافية لتشغيل المتصفح."
+
+    stage = "تشغيل المتصفح" if launching else "فتح الصفحة"
+    return f"❌ خطأ أثناء {stage} ({name}): {_short_error(error)}"
 
 
-def fetch_free_key_sync(raw_url):
-    """
-    يجلب المفتاح من صفحة Platorelay المسموح بها فقط.
-    لا يتجاوز CAPTCHA أو أنظمة الحماية؛ إذا نقلت الصفحة المستخدم
-    إلى نطاق آخر يتم رفض الطلب فورًا.
-    """
-    if sync_playwright is None:
-        return None, "Playwright غير مثبت في البيئة."
+def _key_get_cached(url):
+    item = _key_cache.get(url)
+    if not item:
+        return None
 
-    url = str(raw_url or "").strip()
+    if time.monotonic() - item[0] > KEY_CACHE_TTL:
+        _key_cache.pop(url, None)
+        return None
 
-    if not _is_allowed_key_url(url):
-        return None, "❌ مسموح فقط بروابط https://auth.platorelay.com"
+    return item[1]
 
-    browser = None
+
+def _key_set_cached(url, key):
+    _key_cache[url] = (time.monotonic(), key)
+
+    if len(_key_cache) > 100:
+        now = time.monotonic()
+        for cached_url in [
+            u for u, item in _key_cache.items()
+            if now - item[0] > KEY_CACHE_TTL
+        ]:
+            _key_cache.pop(cached_url, None)
+
+
+# ------------------------------------------------------------
+# المسار السريع: HTTP بدون متصفح
+# يرجع (key, error, need_browser)
+# ------------------------------------------------------------
+
+async def _fetch_key_http(url):
+    timeout = aiohttp.ClientTimeout(
+        total=KEY_HTTP_TIMEOUT,
+        connect=KEY_HTTP_CONNECT_TIMEOUT,
+    )
+
+    headers = {
+        "User-Agent": KEY_USER_AGENT,
+        "Accept": "text/html,application/xhtml+xml,application/json;q=0.9,*/*;q=0.8",
+        "Accept-Language": "en-US,en;q=0.9,ar;q=0.8",
+    }
+
+    current = url
+    blocked_hint = None
 
     try:
-        with sync_playwright() as p:
-            browser = p.chromium.launch(
+        async with aiohttp.ClientSession(
+            timeout=timeout,
+            headers=headers,
+        ) as session:
+
+            for _ in range(KEY_MAX_REDIRECTS + 1):
+
+                async with session.get(
+                    current,
+                    allow_redirects=False,
+                ) as response:
+
+                    status = response.status
+
+                    # ---------------- Redirect ----------------
+                    if status in (301, 302, 303, 307, 308):
+                        location = response.headers.get("Location", "")
+
+                        if not location:
+                            return (
+                                None,
+                                "❌ الموقع أرجع Redirect بدون وجهة.",
+                                False,
+                            )
+
+                        next_url = urllib.parse.urljoin(current, location)
+
+                        # ممكن المفتاح نفسه داخل رابط التحويل.
+                        key = _find_key(next_url)
+                        if key:
+                            return key, None, False
+
+                        if not _is_allowed_key_url(next_url):
+                            target = _key_host_of(next_url) or "غير معروف"
+                            return (
+                                None,
+                                (
+                                    "❌ تم رفض الرابط: الموقع حوّلك إلى دومين مختلف "
+                                    f"(`{target}`) والمسموح فقط `{KEY_ALLOWED_HOST}`."
+                                ),
+                                False,
+                            )
+
+                        current = next_url
+                        continue
+
+                    # ---------------- أخطاء واضحة ----------------
+                    if status == 404:
+                        return None, "❌ الرابط غير موجود (404) — تأكد أنه صحيح.", False
+
+                    if status == 410:
+                        return None, "❌ الرابط منتهي أو محذوف (410).", False
+
+                    if status == 429:
+                        return (
+                            None,
+                            "⏳ الموقع حدّ الطلبات (429). انتظر شوي وجرب مرة ثانية.",
+                            False,
+                        )
+
+                    if status >= 500 and status not in (503,):
+                        return (
+                            None,
+                            f"❌ الموقع فيه مشكلة من جهته (HTTP {status}). جرب لاحقًا.",
+                            False,
+                        )
+
+                    # ---------------- قراءة الصفحة ----------------
+                    data = await response.content.read(KEY_MAX_BODY_BYTES)
+                    body = data.decode("utf-8", errors="ignore")
+
+                    key = _find_key(body, str(response.url))
+                    if key:
+                        return key, None, False
+
+                    if status in (401, 403, 503) or _looks_blocked(body):
+                        blocked_hint = (
+                            f"🛡️ الموقع منع الطلب المباشر (HTTP {status}) "
+                            "أو عرض صفحة تحقق."
+                        )
+                        return None, blocked_hint, True
+
+                    # صفحة سليمة لكن بدون مفتاح = غالبًا تحتاج JavaScript.
+                    return None, None, True
+
+            return (
+                None,
+                f"❌ الرابط فيه تحويلات كثيرة (أكثر من {KEY_MAX_REDIRECTS}).",
+                False,
+            )
+
+    except asyncio.TimeoutError:
+        return (
+            None,
+            f"⏱️ انتهت مهلة الاتصال بالموقع ({KEY_HTTP_TIMEOUT} ثانية).",
+            False,
+        )
+
+    except aiohttp.ClientConnectorError as error:
+        return (
+            None,
+            f"❌ تعذر الاتصال بالموقع (شبكة/DNS): {_short_error(error)}",
+            False,
+        )
+
+    except aiohttp.ClientError:
+        # أخطاء مثل قطع الاتصال المفاجئ: نجرب المتصفح.
+        return None, None, True
+
+    except Exception as error:
+        print(f"❌ Key HTTP fast-path error: {type(error).__name__}: {error}")
+        return None, None, True
+
+
+# ------------------------------------------------------------
+# المتصفح المشترك
+# ------------------------------------------------------------
+
+def _get_key_browser_primitives():
+    global _key_browser_lock, _key_browser_semaphore
+
+    if _key_browser_lock is None:
+        _key_browser_lock = asyncio.Lock()
+
+    if _key_browser_semaphore is None:
+        _key_browser_semaphore = asyncio.Semaphore(2)
+
+    return _key_browser_lock, _key_browser_semaphore
+
+
+async def _close_key_browser():
+    global _key_playwright, _key_browser
+
+    browser = _key_browser
+    playwright = _key_playwright
+
+    _key_browser = None
+    _key_playwright = None
+
+    try:
+        if browser is not None:
+            await browser.close()
+    except Exception:
+        pass
+
+    try:
+        if playwright is not None:
+            await playwright.stop()
+    except Exception:
+        pass
+
+
+async def _get_key_browser():
+    global _key_playwright, _key_browser
+
+    lock, _ = _get_key_browser_primitives()
+
+    async with lock:
+        if _key_browser is not None:
+            try:
+                if _key_browser.is_connected():
+                    return _key_browser
+            except Exception:
+                pass
+
+            await _close_key_browser()
+
+        _key_playwright = await async_playwright().start()
+
+        try:
+            _key_browser = await _key_playwright.chromium.launch(
                 headless=True,
                 args=[
                     "--no-sandbox",
                     "--disable-setuid-sandbox",
-                ]
+                    "--disable-dev-shm-usage",
+                    "--disable-gpu",
+                ],
             )
+        except Exception:
+            await _close_key_browser()
+            raise
 
-            context = browser.new_context()
-            page = context.new_page()
+        return _key_browser
 
-            page.goto(
-                url,
-                timeout=KEY_FETCH_TIMEOUT_MS,
-                wait_until="domcontentloaded"
-            )
 
-            # نعطي الصفحة وقتًا كافيًا لتنفيذ JavaScript الطبيعي.
-            page.wait_for_timeout(KEY_WAIT_AFTER_LOAD_MS)
+# ------------------------------------------------------------
+# مسار المتصفح
+# يرجع (key, error)
+# ------------------------------------------------------------
 
-            final_url = page.url
+_KEY_PAGE_TEXT_JS = """
+() => {
+    const parts = [document.title || ''];
+    if (document.body) parts.push(document.body.innerText || '');
+    document.querySelectorAll('input, textarea').forEach(el => {
+        parts.push(el.value || '');
+    });
+    return parts.join('\\n');
+}
+"""
 
-            # أي تحويل خارج auth.platorelay.com = رفض.
-            if not _is_allowed_key_page(final_url):
-                return None, "❌ تم رفض الرابط لأن الصفحة انتقلت إلى موقع غير مسموح."
 
-            # انتظر حتى تستقر الصفحة قدر الإمكان بدون تجاوز أنظمة الحماية.
+def _redirect_error(host):
+    target = host or "غير معروف"
+    return (
+        "❌ تم رفض الرابط: الصفحة حاولت تحويلك إلى دومين مختلف "
+        f"(`{target}`) والمسموح فقط `{KEY_ALLOWED_HOST}`."
+    )
+
+
+async def _fetch_key_browser_inner(url):
+    if async_playwright is None:
+        return None, (
+            "❌ مكتبة playwright غير مثبتة.\n"
+            "أضف `playwright` في requirements.txt ثم شغّل "
+            "`playwright install chromium`."
+        )
+
+    try:
+        browser = await _get_key_browser()
+    except Exception as error:
+        return None, _describe_browser_error(error, launching=True)
+
+    state = {"blocked_host": None, "http_status": None}
+    context = None
+
+    try:
+        context = await browser.new_context(
+            user_agent=KEY_USER_AGENT,
+            viewport={"width": 1280, "height": 800},
+            locale="en-US",
+        )
+
+        page = await context.new_page()
+
+        async def route_handler(route):
             try:
-                page.wait_for_load_state("networkidle", timeout=15000)
+                request = route.request
+
+                # نوفّر وقت: بدون صور/فيديو/خطوط.
+                if request.resource_type in ("image", "media", "font"):
+                    await route.abort()
+                    return
+
+                # أي تنقّل رئيسي خارج الدومين المسموح = إيقاف فوري.
+                if (
+                    request.is_navigation_request()
+                    and request.frame == page.main_frame
+                    and not _is_allowed_key_page(request.url)
+                ):
+                    state["blocked_host"] = _key_host_of(request.url)
+                    await route.abort()
+                    return
+
+                await route.continue_()
+
             except Exception:
-                pass
+                try:
+                    await route.continue_()
+                except Exception:
+                    pass
 
-            content = page.content()
-            final_url = page.url
+        await context.route("**/*", route_handler)
 
-            if not _is_allowed_key_page(final_url):
-                return None, "❌ تم رفض الرابط لأن الصفحة انتقلت إلى موقع غير مسموح."
+        # ---------------- تحميل الصفحة ----------------
+        try:
+            response = await page.goto(
+                url,
+                timeout=KEY_BROWSER_GOTO_TIMEOUT_MS,
+                wait_until="domcontentloaded",
+            )
+            if response is not None:
+                state["http_status"] = response.status
 
-            match = KEY_PATTERN.search(content)
-            if match:
-                return match.group(0), None
-
-            # بعض الصفحات تضع المفتاح في الرابط النهائي.
-            query = urllib.parse.parse_qs(
-                urllib.parse.urlparse(final_url).query
+        except PlaywrightTimeoutError:
+            if state["blocked_host"]:
+                return None, _redirect_error(state["blocked_host"])
+            return None, (
+                "⏱️ انتهت مهلة تحميل الصفحة "
+                f"({KEY_BROWSER_GOTO_TIMEOUT_MS // 1000} ثانية)."
             )
 
-            for values in query.values():
-                for value in values:
-                    match = KEY_PATTERN.search(str(value))
-                    if match:
-                        return match.group(0), None
+        except Exception as error:
+            if state["blocked_host"]:
+                return None, _redirect_error(state["blocked_host"])
+            return None, _describe_browser_error(error)
 
-            return None, "❌ ما لقيت مفتاح في الصفحة. إذا ظهرت حماية أو CAPTCHA، لن يتجاوزها البوت."
+        status = state["http_status"]
+
+        if status == 404:
+            return None, "❌ الرابط غير موجود (404) — تأكد أنه صحيح."
+
+        if status == 410:
+            return None, "❌ الرابط منتهي أو محذوف (410)."
+
+        if status == 429:
+            return None, "⏳ الموقع حدّ الطلبات (429). انتظر شوي وجرب مرة ثانية."
+
+        # ---------------- انتظار ظهور المفتاح ----------------
+        started = time.monotonic()
+        deadline = started + KEY_BROWSER_POLL_SECONDS
+        saw_block = False
+
+        while True:
+            if state["blocked_host"]:
+                return None, _redirect_error(state["blocked_host"])
+
+            current_url = page.url
+
+            if not _is_allowed_key_page(current_url):
+                # قد يكون المفتاح في الرابط نفسه قبل ما نرفض.
+                key = _find_key(current_url)
+                if key:
+                    return key, None
+                return None, _redirect_error(_key_host_of(current_url))
+
+            try:
+                content = await page.content()
+                visible = await page.evaluate(_KEY_PAGE_TEXT_JS)
+            except Exception as error:
+                # الصفحة ممكن تكون في وسط تنقّل؛ نعيد المحاولة حتى الوقت.
+                content = ""
+                visible = ""
+                if time.monotonic() >= deadline:
+                    return None, _describe_browser_error(error)
+
+            key = _find_key(visible, content, current_url)
+            if key:
+                return key, None
+
+            if _looks_blocked(visible) or _looks_blocked(content[:6000]):
+                if not saw_block:
+                    saw_block = True
+                    deadline = max(
+                        deadline,
+                        started + KEY_BROWSER_CHALLENGE_SECONDS,
+                    )
+
+            if time.monotonic() >= deadline:
+                break
+
+            await asyncio.sleep(KEY_BROWSER_POLL_INTERVAL)
+
+        # ---------------- ما لقينا المفتاح: نحدد السبب ----------------
+        if saw_block or status in (401, 403):
+            return None, (
+                "🛡️ الموقع يعرض صفحة حماية/تحقق (CAPTCHA أو فحص متصفح) "
+                "ومنعت الوصول للمفتاح.\n"
+                "البوت لا يتجاوز أنظمة الحماية — افتح الرابط يدويًا وأكمل التحقق."
+            )
+
+        return None, (
+            "❌ ما لقيت مفتاح بصيغة `FREE_` + 32 حرف Hex داخل الصفحة.\n"
+            "غالبًا المفتاح ما يظهر إلا بعد إكمال خطوات الصفحة يدويًا، "
+            "أو الرابط منتهي/غير صحيح."
+        )
 
     except Exception as error:
-        return None, f"❌ تعذر جلب المفتاح: {type(error).__name__}"
+        return None, _describe_browser_error(error)
 
     finally:
         try:
-            if browser:
-                browser.close()
+            if context is not None:
+                await context.close()
         except Exception:
             pass
+
+
+async def _fetch_key_browser(url):
+    _, semaphore = _get_key_browser_primitives()
+
+    try:
+        async with semaphore:
+            return await asyncio.wait_for(
+                _fetch_key_browser_inner(url),
+                timeout=KEY_BROWSER_HARD_TIMEOUT,
+            )
+
+    except asyncio.TimeoutError:
+        # نعيد تشغيل المتصفح في المرة القادمة لو علق.
+        try:
+            await _close_key_browser()
+        except Exception:
+            pass
+
+        return None, (
+            "⏱️ انتهت المهلة أثناء فتح الصفحة في المتصفح "
+            f"({KEY_BROWSER_HARD_TIMEOUT} ثانية)."
+        )
+
+    except Exception as error:
+        print(f"❌ Key browser stage error: {type(error).__name__}: {error}")
+        return None, _describe_browser_error(error)
+
+
+# ------------------------------------------------------------
+# الدالة الرئيسية
+# يرجع (key, error)
+# ------------------------------------------------------------
+
+async def fetch_free_key(raw_url):
+    url = str(raw_url or "").strip()
+
+    if not url:
+        return None, "❌ لازم تحط رابط."
+
+    if not _is_allowed_key_url(url):
+        return None, f"❌ مسموح فقط بروابط https://{KEY_ALLOWED_HOST}"
+
+    cached = _key_get_cached(url)
+    if cached:
+        return cached, None
+
+    key, error, need_browser = await _fetch_key_http(url)
+
+    if key:
+        _key_set_cached(url, key)
+        return key, None
+
+    if not need_browser:
+        return None, error or "❌ ما قدرت أجيب المفتاح (سبب غير معروف)."
+
+    browser_key, browser_error = await _fetch_key_browser(url)
+
+    if browser_key:
+        _key_set_cached(url, browser_key)
+        return browser_key, None
+
+    return None, browser_error or error or "❌ ما لقيت مفتاح في الصفحة."
 
 
 @bot.tree.command(
@@ -5532,10 +6074,24 @@ async def slash_key(
 ):
     await interaction.response.defer(ephemeral=True)
 
-    key, error = await asyncio.to_thread(
-        fetch_free_key_sync,
-        url
-    )
+    try:
+        key, error = await asyncio.wait_for(
+            fetch_free_key(url),
+            timeout=KEY_OVERALL_TIMEOUT,
+        )
+
+    except asyncio.TimeoutError:
+        key, error = None, (
+            f"⏱️ انتهت المهلة الكلية ({KEY_OVERALL_TIMEOUT} ثانية) قبل ما أجيب المفتاح."
+        )
+
+    except Exception as exc:
+        import traceback
+        print(f"❌ /مفتاح unexpected error: {type(exc).__name__}: {exc}")
+        traceback.print_exc()
+        key, error = None, (
+            f"❌ خطأ غير متوقع ({type(exc).__name__}): {_short_error(exc)}"
+        )
 
     if key:
         await interaction.followup.send(
