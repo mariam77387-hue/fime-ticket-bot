@@ -5402,56 +5402,52 @@ async def slash_rscripts_by_user(
 # /مفتاح
 # ============================================================
 
-KEY_FETCH_TIMEOUT_MS = 20000
+# يسمح فقط بروابط Platorelay الرسمية، ويرفض أي تحويل لموقع مختلف.
+KEY_ALLOWED_HOST = "auth.platorelay.com"
+KEY_FETCH_TIMEOUT_MS = 60000
+KEY_WAIT_AFTER_LOAD_MS = 3000
 KEY_PATTERN = re.compile(r"FREE_[a-fA-F0-9]{32}")
 
 
-def _is_public_http_url(raw_url):
-    """منع الروابط المحلية/الخاصة حتى لا يتحول الأمر إلى SSRF."""
+def _is_allowed_key_url(raw_url):
+    """يسمح فقط بـ https://auth.platorelay.com/..."""
     try:
         parsed = urllib.parse.urlparse(str(raw_url).strip())
+        return (
+            parsed.scheme == "https"
+            and parsed.hostname
+            and parsed.hostname.lower().rstrip(".") == KEY_ALLOWED_HOST
+        )
+    except Exception:
+        return False
 
-        if parsed.scheme not in {"http", "https"}:
-            return False
 
-        if not parsed.hostname:
-            return False
-
-        host = parsed.hostname.strip().lower()
-
-        if host in {"localhost", "localhost.localdomain"}:
-            return False
-
-        try:
-            ip = ipaddress.ip_address(host)
-            return not (
-                ip.is_private
-                or ip.is_loopback
-                or ip.is_link_local
-                or ip.is_reserved
-                or ip.is_multicast
-                or ip.is_unspecified
-            )
-        except ValueError:
-            # اسم نطاق عادي.
-            return True
-
+def _is_allowed_key_page(url):
+    """يتأكد أن الصفحة النهائية ما زالت على نفس نطاق Platorelay."""
+    try:
+        parsed = urllib.parse.urlparse(str(url).strip())
+        return (
+            parsed.scheme == "https"
+            and parsed.hostname
+            and parsed.hostname.lower().rstrip(".") == KEY_ALLOWED_HOST
+        )
     except Exception:
         return False
 
 
 def fetch_free_key_sync(raw_url):
     """
-    نفس فكرة bypass_api المرسلة من المستخدم، لكن مدمجة داخل bot4
-    بدل تشغيل Flask منفصل.
+    يجلب المفتاح من صفحة Platorelay المسموح بها فقط.
+    لا يتجاوز CAPTCHA أو أنظمة الحماية؛ إذا نقلت الصفحة المستخدم
+    إلى نطاق آخر يتم رفض الطلب فورًا.
     """
     if sync_playwright is None:
-        return None, "playwright غير مثبت في البيئة."
+        return None, "Playwright غير مثبت في البيئة."
 
     url = str(raw_url or "").strip()
 
-    if not _is_public_http_url(url):
-        return None, "الرابط غير صالح أو غير مسموح."
+    if not _is_allowed_key_url(url):
+        return None, "❌ مسموح فقط بروابط https://auth.platorelay.com"
 
     browser = None
 
@@ -5465,24 +5461,41 @@ def fetch_free_key_sync(raw_url):
                 ]
             )
 
-            page = browser.new_page()
+            context = browser.new_context()
+            page = context.new_page()
 
             page.goto(
                 url,
                 timeout=KEY_FETCH_TIMEOUT_MS,
-                wait_until="networkidle"
+                wait_until="domcontentloaded"
             )
 
-            page.wait_for_timeout(2000)
+            # نعطي الصفحة وقتًا كافيًا لتنفيذ JavaScript الطبيعي.
+            page.wait_for_timeout(KEY_WAIT_AFTER_LOAD_MS)
+
+            final_url = page.url
+
+            # أي تحويل خارج auth.platorelay.com = رفض.
+            if not _is_allowed_key_page(final_url):
+                return None, "❌ تم رفض الرابط لأن الصفحة انتقلت إلى موقع غير مسموح."
+
+            # انتظر حتى تستقر الصفحة قدر الإمكان بدون تجاوز أنظمة الحماية.
+            try:
+                page.wait_for_load_state("networkidle", timeout=15000)
+            except Exception:
+                pass
 
             content = page.content()
             final_url = page.url
 
-            match = KEY_PATTERN.search(content)
+            if not _is_allowed_key_page(final_url):
+                return None, "❌ تم رفض الرابط لأن الصفحة انتقلت إلى موقع غير مسموح."
 
+            match = KEY_PATTERN.search(content)
             if match:
                 return match.group(0), None
 
+            # بعض الصفحات تضع المفتاح في الرابط النهائي.
             query = urllib.parse.parse_qs(
                 urllib.parse.urlparse(final_url).query
             )
@@ -5493,10 +5506,10 @@ def fetch_free_key_sync(raw_url):
                     if match:
                         return match.group(0), None
 
-            return None, "ما لقيت مفتاح في الصفحة."
+            return None, "❌ ما لقيت مفتاح في الصفحة. إذا ظهرت حماية أو CAPTCHA، لن يتجاوزها البوت."
 
     except Exception as error:
-        return None, f"تعذر جلب المفتاح: {type(error).__name__}"
+        return None, f"❌ تعذر جلب المفتاح: {type(error).__name__}"
 
     finally:
         try:
@@ -5508,10 +5521,10 @@ def fetch_free_key_sync(raw_url):
 
 @bot.tree.command(
     name="مفتاح",
-    description="جلب المفتاح من رابط يدخله العضو"
+    description="جلب المفتاح من رابط Platorelay"
 )
 @app_commands.describe(
-    url="رابط المفتاح"
+    url="رابط https://auth.platorelay.com"
 )
 async def slash_key(
     interaction: discord.Interaction,
@@ -5535,10 +5548,9 @@ async def slash_key(
         return
 
     await interaction.followup.send(
-        f"❌ {error or 'ما قدرت أجيب المفتاح.'}",
+        error or "❌ ما قدرت أجيب المفتاح.",
         ephemeral=True
     )
-
 
 # ============================================================
 # EXTENSION SETUP
