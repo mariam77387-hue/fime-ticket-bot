@@ -2620,19 +2620,18 @@ class AutomaticLineSystem(commands.Cog):
         avatar10: discord.Attachment = None,
         banner: discord.Attachment = None,
         room_definition: str = None
-    ):
-        if await self.owner_only(interaction):
+            if await self.owner_only(interaction):
             return
 
         if not interaction.guild:
             return
 
         if message is not None and len(message) > 2000:
-    await interaction.response.send_message(
-        "❌ الرسالة لا تتجاوز 2000 حرف.",
-        ephemeral=True
-    )
-    return
+            await interaction.response.send_message(
+                "❌ الرسالة لا تتجاوز 2000 حرف.",
+                ephemeral=True
+            )
+            return
 
         target = channel or interaction.channel
 
@@ -2642,6 +2641,7 @@ class AutomaticLineSystem(commands.Cog):
                 ephemeral=True
             )
             return
+
 
         avatar_attachments = [
             item for item in (
