@@ -2627,12 +2627,12 @@ class AutomaticLineSystem(commands.Cog):
         if not interaction.guild:
             return
 
-        if len(message) > 2000:
-            await interaction.response.send_message(
-                "❌ الرسالة لا تتجاوز 2000 حرف.",
-                ephemeral=True
-            )
-            return
+        if message is not None and len(message) > 2000:
+    await interaction.response.send_message(
+        "❌ الرسالة لا تتجاوز 2000 حرف.",
+        ephemeral=True
+    )
+    return
 
         target = channel or interaction.channel
 
