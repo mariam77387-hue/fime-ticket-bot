@@ -2571,7 +2571,7 @@ class AutomaticLineSystem(commands.Cog):
         name="say",
         description="إرسال رسالة مع بروفايل كلاسيكي وطقم افتارات"
     )
-    @app_commands.describe(
+        @app_commands.describe(
         message="الرسالة — اتركه فارغًا لفتح قائمة الافتارات",
         channel="الروم",
         layout="اختيار شكل الطقم",
@@ -2588,6 +2588,7 @@ class AutomaticLineSystem(commands.Cog):
         banner="البنر — اختياري",
         room_definition="تعريف اختياري لهذا الـ /say"
     )
+
     @app_commands.choices(
         layout=[
             app_commands.Choice(name="كلاسيك — افتار واحد", value="1"),
