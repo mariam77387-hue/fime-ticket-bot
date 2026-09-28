@@ -4562,14 +4562,7 @@ if __name__ == "__main__":
             "أضفه في Environment Variables."
         )
 
-    import subprocess
-    import signal
-
-    index_process = None
-
     async def main():
-        global index_process
-
         async with bot:
 
             # =====================================================
@@ -4629,17 +4622,32 @@ if __name__ == "__main__":
                 raise
 
             # =====================================================
-            # تحميل نظام Fime Library من fime_libary.py
+            # تحميل نظام Fime Library من fime_library.py
             # =====================================================
             try:
                 await bot.load_extension("fime_library")
                 print(
                     "✅ تم تحميل نظام Fime Library "
-                    "من fime_libary.py"
+                    "من fime_library.py"
                 )
             except Exception as error:
                 print(
-                    f"❌ تعذر تحميل fime_libary.py: {error}"
+                    f"❌ تعذر تحميل fime_library.py: {error}"
+                )
+                raise
+
+            # =====================================================
+            # تحميل نظام Index من index.py
+            # =====================================================
+            try:
+                await bot.load_extension("index")
+                print(
+                    "✅ تم تحميل نظام Index "
+                    "من index.py"
+                )
+            except Exception as error:
+                print(
+                    f"❌ تعذر تحميل index.py: {error}"
                 )
                 raise
 
@@ -4668,77 +4676,13 @@ if __name__ == "__main__":
                 raise
 
             # =====================================================
-            # تشغيل index.js
-            # =====================================================
-            try:
-                print("🟢 جاري تشغيل index.js ...")
-
-                index_process = subprocess.Popen(
-                    ["node", "index.js"],
-                    cwd=os.path.dirname(
-                        os.path.abspath(__file__)
-                    ),
-                    stdout=None,
-                    stderr=None,
-                )
-
-                print(
-                    f"✅ تم تشغيل index.js "
-                    f"(PID: {index_process.pid})"
-                )
-
-            except FileNotFoundError:
-                print(
-                    "❌ Node.js غير موجود على الاستضافة."
-                )
-                print(
-                    "تأكد أن الاستضافة تدعم Node.js "
-                    "وأن أمر node متوفر."
-                )
-                raise
-
-            except Exception as error:
-                print(
-                    f"❌ تعذر تشغيل index.js: {error}"
-                )
-                raise
-
-            # =====================================================
             # تشغيل Discord Bot
             # =====================================================
             print(
                 "🤖 جاري تشغيل Team Fime Bot..."
             )
 
-            try:
-                await bot.start(TOKEN)
-
-            finally:
-                # =================================================
-                # إيقاف index.js عند إيقاف bot.py
-                # =================================================
-                if index_process is not None:
-                    try:
-                        if index_process.poll() is None:
-                            print(
-                                "🛑 جاري إيقاف index.js..."
-                            )
-
-                            index_process.terminate()
-
-                            try:
-                                index_process.wait(timeout=5)
-                            except subprocess.TimeoutExpired:
-                                index_process.kill()
-
-                            print(
-                                "✅ تم إيقاف index.js"
-                            )
-
-                    except Exception as error:
-                        print(
-                            f"⚠️ تعذر إيقاف index.js: {error}"
-                        )
+            await bot.start(TOKEN)
 
     try:
         asyncio.run(main())
