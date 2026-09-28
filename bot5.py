@@ -29,12 +29,13 @@ import io
 import json
 import asyncio
 import re
+import random
 from copy import deepcopy
 from pathlib import Path
 from datetime import datetime, timezone, timedelta
 
 import discord
-from discord.ext import commands
+from discord.ext import commands, tasks
 from discord import app_commands
 
 from PIL import Image, ImageDraw, ImageFilter, ImageFont
@@ -101,6 +102,10 @@ DEFAULT_GUILD_CONFIG = {
     "auto_triggers": {
         "السلام عليكم": "وعليكم السلام ورحمة الله وبركاته"
     },
+
+    # GAME INFO
+    "game_info_enabled": False,
+    "game_info_channel_id": None,
 
     # MODERATION
     "moderation_enabled": True,
@@ -553,6 +558,107 @@ class ModerationShortcutView(discord.ui.View):
         self.add_item(ModerationShortcutSelect(shortcuts))
 
 
+
+# ============================================================
+# SAY LAYOUT SELECT
+# القائمة المخفية التي تظهر عند استخدام /say بدون رسالة.
+# ============================================================
+
+class SayLayoutSelect(discord.ui.Select):
+    def __init__(self, cog):
+        self.cog = cog
+
+        options = [
+            discord.SelectOption(
+                label="كلاسيك — افتار واحد",
+                value="1",
+                emoji="👤"
+            ),
+            discord.SelectOption(
+                label="طقم شخصين",
+                value="2",
+                emoji="👥"
+            ),
+            discord.SelectOption(
+                label="طقم 3",
+                value="3",
+                emoji="👥"
+            ),
+            discord.SelectOption(
+                label="طقم 4",
+                value="4",
+                emoji="👥"
+            ),
+            discord.SelectOption(
+                label="طقم 5",
+                value="5",
+                emoji="👥"
+            ),
+            discord.SelectOption(
+                label="طقم 6",
+                value="6",
+                emoji="👥"
+            ),
+            discord.SelectOption(
+                label="طقم 7",
+                value="7",
+                emoji="👥"
+            ),
+            discord.SelectOption(
+                label="طقم 8",
+                value="8",
+                emoji="👥"
+            ),
+            discord.SelectOption(
+                label="طقم 9",
+                value="9",
+                emoji="👥"
+            ),
+            discord.SelectOption(
+                label="طقم 10",
+                value="10",
+                emoji="👥"
+            ),
+        ]
+
+        super().__init__(
+            placeholder="اختر شكل طقم الافتارات...",
+            min_values=1,
+            max_values=1,
+            options=options,
+            custom_id="fime_say_layout_select"
+        )
+
+    async def callback(self, interaction):
+        if not interaction.guild:
+            await interaction.response.send_message(
+                "❌ هذا الخيار يعمل داخل السيرفر فقط.",
+                ephemeral=True
+            )
+            return
+
+        self.cog.say_pending_layout[
+            (interaction.guild.id, interaction.user.id)
+        ] = int(self.values[0])
+
+        count = int(self.values[0])
+
+        await interaction.response.send_message(
+            (
+                f"✅ تم اختيار **طقم {count}**.\n"
+                "الآن استخدم `/say` واكتب الرسالة وارفع الافتارات "
+                "في `avatar1` إلى `avatar10`، والبنر في `banner` إذا تبيه."
+            ),
+            ephemeral=True
+        )
+
+
+class SayLayoutView(discord.ui.View):
+    def __init__(self, cog):
+        super().__init__(timeout=120)
+        self.add_item(SayLayoutSelect(cog))
+
+
 # ============================================================
 # COG
 # ============================================================
@@ -617,6 +723,7 @@ class AutomaticLineSystem(commands.Cog):
         self.say_messages = load_say_messages()
         self.temp_bans = load_temp_bans()
         self.temp_ban_tasks = {}
+        self.say_pending_layout = {}
 
         print(
             "✅ bot5 — Line + Join + Fime + TOP + SAY "
@@ -916,327 +1023,136 @@ class AutomaticLineSystem(commands.Cog):
 
     def create_say_image_sync(
         self,
-        avatar_image,
-        banner_image,
-        template_image,
-        room_definition,
-        message_text,
-        username
+        avatar_images,
+        banner_image
     ):
+        """
+        قالب /say الكلاسيكي:
+        - بنر فقط في الأعلى.
+        - افتار واحد أو عدة افتارات في الأسفل.
+        - بدون شعار Fime.
+        - بدون ألوان إضافية.
+        - بدون بطاقات أو نصوص أو تأثيرات.
+        """
         WIDTH = 1600
         HEIGHT = 900
 
-        if template_image:
-            canvas = self.crop_to_fill(
-                template_image,
-                (WIDTH, HEIGHT)
-            )
-            overlay = Image.new(
-                "RGBA",
-                canvas.size,
-                (3, 5, 12, 105)
-            )
-            canvas.alpha_composite(overlay)
-        else:
-            canvas = Image.new(
-                "RGBA",
-                (WIDTH, HEIGHT),
-                (5, 7, 13, 255)
-            )
-
-            glow = Image.new(
-                "RGBA",
-                canvas.size,
-                (0, 0, 0, 0)
-            )
-            gd = ImageDraw.Draw(glow)
-            gd.ellipse(
-                (870, -390, 1810, 500),
-                fill=(124, 92, 255, 78)
-            )
-            gd.ellipse(
-                (-430, 520, 690, 1240),
-                fill=(40, 120, 255, 40)
-            )
-            glow = glow.filter(
-                ImageFilter.GaussianBlur(125)
-            )
-            canvas.alpha_composite(glow)
+        canvas = Image.new(
+            "RGBA",
+            (WIDTH, HEIGHT),
+            (12, 12, 12, 255)
+        )
 
         draw = ImageDraw.Draw(canvas)
 
-        # Main glass panel
-        draw.rounded_rectangle(
-            (42, 42, WIDTH - 42, HEIGHT - 42),
-            radius=46,
-            fill=(9, 12, 21, 246),
-            outline=(63, 69, 91, 230),
-            width=2
-        )
-
-        # Header
-        draw.text(
-            (92, 72),
-            "TEAM FIME",
-            font=self.get_font(36, True),
-            fill=(247, 248, 252)
-        )
-        draw.text(
-            (94, 119),
-            "OFFICIAL",
-            font=self.get_font(15, True),
-            fill=(154, 132, 255)
-        )
-        draw.rounded_rectangle(
-            (1340, 76, 1505, 119),
-            radius=18,
-            fill=(124, 92, 255, 30),
-            outline=(124, 92, 255, 95),
-            width=1
-        )
-        draw.ellipse(
-            (1355, 89, 1369, 103),
-            fill=(80, 220, 145)
-        )
-        draw.text(
-            (1384, 84),
-            "FIME",
-            font=self.get_font(14, True),
-            fill=(225, 227, 235)
-        )
-
-        # Banner
-        bx, by, bw, bh = 92, 165, 1416, 315
+        # Banner — الجزء العلوي فقط.
         if banner_image:
             banner = self.crop_to_fill(
                 banner_image,
-                (bw, bh)
-            )
-            banner_rgba = banner.convert("RGBA")
-            canvas.paste(banner_rgba, (bx, by))
-
-            shade = Image.new(
-                "RGBA",
-                (bw, bh),
-                (0, 0, 0, 0)
-            )
-            sd = ImageDraw.Draw(shade)
-            sd.rectangle(
-                (0, 0, bw, 95),
-                fill=(5, 7, 13, 70)
-            )
-            sd.rectangle(
-                (0, 175, bw, bh),
-                fill=(3, 4, 9, 175)
-            )
-            canvas.alpha_composite(shade, (bx, by))
-        else:
-            draw.rounded_rectangle(
-                (bx, by, bx + bw, by + bh),
-                radius=30,
-                fill=(15, 18, 29, 255),
-                outline=(124, 92, 255, 70),
-                width=2
-            )
-            draw.text(
-                (145, 270),
-                "FIME",
-                font=self.get_font(105, True),
-                fill=(124, 92, 255, 45)
-            )
-            draw.text(
-                (150, 390),
-                "TEAM FIME COMMUNITY",
-                font=self.get_font(18, True),
-                fill=(143, 149, 166)
-            )
-
-        # Avatar
-        avatar_size = 250
-        avatar_x, avatar_y = 125, 382
-        if avatar_image:
-            avatar = self.crop_to_fill(
-                avatar_image,
-                (avatar_size, avatar_size)
-            )
-            mask = Image.new("L", (avatar_size, avatar_size), 0)
-            ImageDraw.Draw(mask).ellipse(
-                (0, 0, avatar_size, avatar_size),
-                fill=255
-            )
-            avatar_rgba = Image.new(
-                "RGBA",
-                (avatar_size, avatar_size),
-                (0, 0, 0, 0)
-            )
-            avatar_rgba.paste(
-                avatar,
-                (0, 0),
-                mask
+                (WIDTH, 500)
             )
             canvas.paste(
-                avatar_rgba,
-                (avatar_x, avatar_y),
-                avatar_rgba
-            )
-            draw.ellipse(
-                (
-                    avatar_x - 12,
-                    avatar_y - 12,
-                    avatar_x + avatar_size + 12,
-                    avatar_y + avatar_size + 12
-                ),
-                outline=(7, 9, 15),
-                width=15
-            )
-            draw.ellipse(
-                (
-                    avatar_x - 8,
-                    avatar_y - 8,
-                    avatar_x + avatar_size + 8,
-                    avatar_y + avatar_size + 8
-                ),
-                outline=(124, 92, 255),
-                width=5
-            )
-        else:
-            draw.ellipse(
-                (avatar_x, avatar_y, avatar_x + avatar_size, avatar_y + avatar_size),
-                fill=(24, 28, 40),
-                outline=(124, 92, 255),
-                width=6
-            )
-            self.draw_center(
-                draw,
-                avatar_x + avatar_size / 2,
-                avatar_y + 62,
-                "F",
-                self.get_font(95, True),
-                (154, 132, 255)
+                banner.convert("RGBA"),
+                (0, 0)
             )
 
-        # Identity
-        display_name = self.prepare_text(
-            str(username or "Fime")[:28]
-        )
-        draw.text(
-            (435, 397),
-            display_name,
-            font=self.get_font(45, True),
-            fill=(247, 248, 252)
-        )
-        draw.text(
-            (438, 452),
-            "COMMUNITY MESSAGE",
-            font=self.get_font(17, True),
-            fill=(151, 158, 176)
+        # فاصل كلاسيكي بسيط.
+        draw.rectangle(
+            (0, 500, WIDTH, 506),
+            fill=(245, 245, 245, 255)
         )
 
-        # Message card
-        draw.rounded_rectangle(
-            (435, 505, 1508, 690),
-            radius=28,
-            fill=(13, 16, 27, 248),
-            outline=(124, 92, 255, 72),
-            width=2
-        )
-        draw.text(
-            (470, 530),
-            "MESSAGE",
-            font=self.get_font(16, True),
-            fill=(154, 132, 255)
-        )
+        avatars = [
+            image.convert("RGBA")
+            for image in (avatar_images or [])
+            if image is not None
+        ]
 
-        text = self.prepare_text(message_text)
-        font = self.get_font(24)
-        words = text.split()
-        wrapped = []
-        current = ""
+        if not avatars:
+            return self.image_to_jpeg(canvas, quality=92)
 
-        for word in words:
-            candidate = f"{current} {word}".strip()
-            bbox = draw.textbbox(
-                (0, 0),
-                candidate,
-                font=font
-            )
-            if bbox[2] - bbox[0] <= 975:
-                current = candidate
-            else:
-                if current:
-                    wrapped.append(current)
-                current = word
+        # من 1 إلى 10 افتارات، بحد أقصى 5 في الصف.
+        max_per_row = 5
+        avatar_size = 260 if len(avatars) <= 5 else 210
+        gap = 45
 
-        if current:
-            wrapped.append(current)
+        rows = [
+            avatars[index:index + max_per_row]
+            for index in range(0, len(avatars), max_per_row)
+        ]
 
-        if len(wrapped) > 4:
-            wrapped = wrapped[:4]
-            if wrapped:
-                wrapped[-1] = wrapped[-1][:75] + "…"
-
-        for index, line in enumerate(wrapped):
-            draw.text(
-                (470, 575 + index * 34),
-                line,
-                font=font,
-                fill=(229, 231, 238)
-            )
-
-        # Room definition / footer info
-        draw.rounded_rectangle(
-            (435, 710, 1508, 795),
-            radius=23,
-            fill=(13, 16, 26, 235),
-            outline=(48, 53, 70),
-            width=2
+        total_rows_height = (
+            len(rows) * avatar_size
+            + (len(rows) - 1) * gap
         )
 
-        if room_definition:
-            draw.text(
-                (470, 731),
-                self.prepare_text("تعريف الروم"),
-                font=self.get_font(16, True),
-                fill=(154, 132, 255)
-            )
-            draw.text(
-                (680, 733),
-                self.prepare_text(str(room_definition)[:95]),
-                font=self.get_font(17),
-                fill=(190, 195, 207)
-            )
-        else:
-            draw.text(
-                (470, 733),
-                "FIME COMMUNITY",
-                font=self.get_font(16, True),
-                fill=(124, 92, 255)
-            )
-            draw.text(
-                (680, 733),
-                "Official message • Team Fime",
-                font=self.get_font(17),
-                fill=(175, 181, 194)
+        start_y = 535 + max(
+            0,
+            (HEIGHT - 535 - total_rows_height) // 2
+        )
+
+        for row_index, row in enumerate(rows):
+            row_width = (
+                len(row) * avatar_size
+                + (len(row) - 1) * gap
             )
 
-        # Minimal footer
-        draw.rounded_rectangle(
-            (92, 832, 1508, 850),
-            radius=9,
-            fill=(124, 92, 255, 210)
-        )
-        draw.text(
-            (100, 858),
-            "FIME",
-            font=self.get_font(13, True),
-            fill=(235, 236, 242)
-        )
+            start_x = (WIDTH - row_width) // 2
+            y = start_y + row_index * (avatar_size + gap)
+
+            for item_index, image in enumerate(row):
+                x = start_x + item_index * (avatar_size + gap)
+
+                avatar = self.crop_to_fill(
+                    image,
+                    (avatar_size, avatar_size)
+                )
+
+                mask = Image.new(
+                    "L",
+                    (avatar_size, avatar_size),
+                    0
+                )
+
+                ImageDraw.Draw(mask).ellipse(
+                    (0, 0, avatar_size, avatar_size),
+                    fill=255
+                )
+
+                avatar_rgba = Image.new(
+                    "RGBA",
+                    (avatar_size, avatar_size),
+                    (0, 0, 0, 0)
+                )
+
+                avatar_rgba.paste(
+                    avatar,
+                    (0, 0),
+                    mask
+                )
+
+                canvas.paste(
+                    avatar_rgba,
+                    (x, y),
+                    avatar_rgba
+                )
+
+                # إطار أبيض بسيط فقط، بدون ألوان إضافية.
+                draw.ellipse(
+                    (
+                        x - 4,
+                        y - 4,
+                        x + avatar_size + 4,
+                        y + avatar_size + 4
+                    ),
+                    outline=(245, 245, 245, 255),
+                    width=4
+                )
 
         return self.image_to_jpeg(
             canvas,
-            quality=90
+            quality=92
         )
-
 
     # ========================================================
     # FAST PROFILE
@@ -2026,6 +1942,18 @@ class AutomaticLineSystem(commands.Cog):
         if not interaction.guild:
             return
 
+        # استخدام /say وحده يفتح قائمة مخفية لاختيار نوع الطقم.
+        if not message:
+            await interaction.response.send_message(
+                (
+                    "🖼️ **اختر نوع طقم الافتارات:**\n"
+                    "بعد الاختيار استخدم `/say` مرة ثانية وأرسل الصور."
+                ),
+                view=SayLayoutView(self),
+                ephemeral=True
+            )
+            return
+
         if len(message) > 2000:
 
             await interaction.response.send_message(
@@ -2443,6 +2371,7 @@ class AutomaticLineSystem(commands.Cog):
         media_type
     ):
         data = self.say_messages.get(str(say_message_id))
+
         if not data:
             await interaction.response.send_message(
                 "❌ بيانات هذا الـ /say غير موجودة.",
@@ -2450,18 +2379,8 @@ class AutomaticLineSystem(commands.Cog):
             )
             return
 
-        url = data.get(
-            "avatar_url" if media_type == "avatar" else "banner_url"
-        )
-
-        if not url:
-            await interaction.response.send_message(
-                "❌ هذه الصورة غير متوفرة في هذا البروفايل.",
-                ephemeral=True
-            )
-            return
-
         cfg = self.get_config(interaction.guild.id)
+
         message_text = str(
             cfg.get(
                 "say_media_response_message",
@@ -2472,12 +2391,58 @@ class AutomaticLineSystem(commands.Cog):
             str(data.get("username", "Unknown"))
         )
 
+        if media_type == "avatar":
+            urls = data.get("avatar_urls") or []
+
+            if not urls and data.get("avatar_url"):
+                urls = [data["avatar_url"]]
+
+            urls = [str(url) for url in urls if url][:10]
+
+            if not urls:
+                await interaction.response.send_message(
+                    "❌ ما فيه افتارات محفوظة لهذا البروفايل.",
+                    ephemeral=True
+                )
+                return
+
+            embeds = []
+
+            for index, url in enumerate(urls, start=1):
+                embed = discord.Embed(
+                    title=(
+                        "👤 الافتار"
+                        if len(urls) == 1
+                        else f"👤 الافتار {index}"
+                    ),
+                    color=discord.Color.blurple()
+                )
+                embed.set_image(url=url)
+                embed.set_footer(text="Team Fime • Say Profile")
+                embeds.append(embed)
+
+            await interaction.response.send_message(
+                content=(
+                    message_text
+                    if cfg.get("say_media_response_enabled", True)
+                    else None
+                ),
+                embeds=embeds,
+                ephemeral=True
+            )
+            return
+
+        url = data.get("banner_url")
+
+        if not url:
+            await interaction.response.send_message(
+                "❌ البنر غير متوفر في هذا البروفايل.",
+                ephemeral=True
+            )
+            return
+
         embed = discord.Embed(
-            title=(
-                "👤 الافتار"
-                if media_type == "avatar"
-                else "🎨 البنر"
-            ),
+            title="🎨 البنر",
             color=discord.Color.blurple()
         )
         embed.set_image(url=url)
@@ -2604,27 +2569,58 @@ class AutomaticLineSystem(commands.Cog):
 
     @app_commands.command(
         name="say",
-        description="إرسال رسالة — والبروفايل اختياري"
+        description="إرسال رسالة مع بروفايل كلاسيكي وطقم افتارات"
     )
     @app_commands.describe(
-        message="الرسالة",
+        message="الرسالة — اتركه فارغًا لفتح قائمة الافتارات",
         channel="الروم",
-        avatar="الافتار — اختياري",
+        layout="اختيار شكل الطقم",
+        avatar1="الافتار الأول",
+        avatar2="الافتار الثاني",
+        avatar3="الافتار الثالث",
+        avatar4="الافتار الرابع",
+        avatar5="الافتار الخامس",
+        avatar6="الافتار السادس",
+        avatar7="الافتار السابع",
+        avatar8="الافتار الثامن",
+        avatar9="الافتار التاسع",
+        avatar10="الافتار العاشر",
         banner="البنر — اختياري",
-        template="قالب اختياري",
         room_definition="تعريف اختياري لهذا الـ /say"
+    )
+    @app_commands.choices(
+        layout=[
+            app_commands.Choice(name="كلاسيك — افتار واحد", value="1"),
+            app_commands.Choice(name="طقم شخصين", value="2"),
+            app_commands.Choice(name="طقم 3", value="3"),
+            app_commands.Choice(name="طقم 4", value="4"),
+            app_commands.Choice(name="طقم 5", value="5"),
+            app_commands.Choice(name="طقم 6", value="6"),
+            app_commands.Choice(name="طقم 7", value="7"),
+            app_commands.Choice(name="طقم 8", value="8"),
+            app_commands.Choice(name="طقم 9", value="9"),
+            app_commands.Choice(name="طقم 10", value="10"),
+        ]
     )
     async def say(
         self,
         interaction,
-        message: str,
+        message: str = None,
         channel: discord.TextChannel = None,
-        avatar: discord.Attachment = None,
+        layout: app_commands.Choice[str] = None,
+        avatar1: discord.Attachment = None,
+        avatar2: discord.Attachment = None,
+        avatar3: discord.Attachment = None,
+        avatar4: discord.Attachment = None,
+        avatar5: discord.Attachment = None,
+        avatar6: discord.Attachment = None,
+        avatar7: discord.Attachment = None,
+        avatar8: discord.Attachment = None,
+        avatar9: discord.Attachment = None,
+        avatar10: discord.Attachment = None,
         banner: discord.Attachment = None,
-        template: discord.Attachment = None,
         room_definition: str = None
     ):
-
         if await self.owner_only(interaction):
             return
 
@@ -2632,87 +2628,80 @@ class AutomaticLineSystem(commands.Cog):
             return
 
         if len(message) > 2000:
-
             await interaction.response.send_message(
                 "❌ الرسالة لا تتجاوز 2000 حرف.",
                 ephemeral=True
             )
             return
 
-        target = (
-            channel
-            or
-            interaction.channel
-        )
+        target = channel or interaction.channel
 
-        if not isinstance(
-            target,
-            discord.TextChannel
-        ):
-
+        if not isinstance(target, discord.TextChannel):
             await interaction.response.send_message(
                 "❌ اختر رومًا نصيًا.",
                 ephemeral=True
             )
             return
 
-        for attachment in (
-            avatar,
-            banner,
-            template
-        ):
+        avatar_attachments = [
+            item for item in (
+                avatar1, avatar2, avatar3, avatar4, avatar5,
+                avatar6, avatar7, avatar8, avatar9, avatar10
+            ) if item
+        ]
 
-            if (
-                attachment
-                and
-                not self.is_supported_image(
-                    attachment
-                )
-            ):
-
+        for attachment in avatar_attachments + ([banner] if banner else []):
+            if not self.is_supported_image(attachment):
                 await interaction.response.send_message(
                     "❌ أحد الملفات المرفوعة ليس صورة مدعومة.",
                     ephemeral=True
                 )
                 return
 
-        cfg = self.get_config(
-            interaction.guild.id
+        pending_key = (
+            interaction.guild.id,
+            interaction.user.id
         )
+
+        selected_count = (
+            int(layout.value)
+            if layout
+            else int(self.say_pending_layout.pop(pending_key, 1))
+        )
+
+        if selected_count > len(avatar_attachments):
+            await interaction.response.send_message(
+                (
+                    f"❌ اخترت **طقم {selected_count}** لكن أرسلت "
+                    f"`{len(avatar_attachments)}` افتار فقط.\n"
+                    f"ارفع {selected_count} افتارات على الأقل."
+                ),
+                ephemeral=True
+            )
+            return
+
+        if selected_count < len(avatar_attachments):
+            avatar_attachments = avatar_attachments[:selected_count]
+
+        cfg = self.get_config(interaction.guild.id)
 
         definition = str(
             room_definition
             if room_definition is not None
-            else cfg.get(
-                "say_room_definition",
-                ""
-            )
+            else cfg.get("say_room_definition", "")
         ).strip()
 
-        # ====================================================
-        # NORMAL SAY
-        # لا صورة ولا قالب إذا لم يطلب البروفايل
-        # ====================================================
-
-        profile_requested = any(
-            (
-                avatar,
-                banner,
-                template
-            )
-        )
+        # لا يوجد قالب افتراضي ولا قالب مرفوع:
+        # البروفايل أصبح كلاسيكيًا فقط = بنر + افتارات.
+        profile_requested = bool(avatar_attachments or banner)
 
         if not profile_requested:
-
             try:
-
                 await target.send(
                     content=message,
                     allowed_mentions=discord.AllowedMentions.none()
                 )
-
             except Exception as error:
-
                 await interaction.response.send_message(
                     f"❌ فشل /say: `{type(error).__name__}`",
                     ephemeral=True
@@ -2720,117 +2709,31 @@ class AutomaticLineSystem(commands.Cog):
                 return
 
             await interaction.response.send_message(
-                (
-                    "✅ **تم إرسال الرسالة.**\n"
-                    f"📍 {target.mention}"
-                ),
+                f"✅ **تم إرسال الرسالة.**\n📍 {target.mention}",
                 ephemeral=True
             )
             return
 
-        await interaction.response.defer(
-            ephemeral=True
-        )
+        await interaction.response.defer(ephemeral=True)
 
         try:
+            avatar_results = await asyncio.gather(
+                *[
+                    self.read_image_attachment(attachment)
+                    for attachment in avatar_attachments
+                ]
+            ) if avatar_attachments else []
 
-            # =================================================
-            # تحميل الصور مرة واحدة وبشكل متزامن
-            # =================================================
-
-            tasks = []
-
-            if avatar:
-                tasks.append(
-                    (
-                        "avatar",
-                        self.read_image_attachment(
-                            avatar
-                        )
-                    )
-                )
-
-            if banner:
-                tasks.append(
-                    (
-                        "banner",
-                        self.read_image_attachment(
-                            banner
-                        )
-                    )
-                )
-
-            if template:
-                tasks.append(
-                    (
-                        "template",
-                        self.read_image_attachment(
-                            template
-                        )
-                    )
-                )
-
-            results = []
-
-            if tasks:
-                results = await asyncio.gather(
-                    *[
-                        task
-                        for _, task in tasks
-                    ]
-                )
-
-            avatar_image = None
-            banner_image = None
-            template_image = None
-
-            for index, (
-                name,
-                _
-            ) in enumerate(tasks):
-
-                if name == "avatar":
-                    avatar_image = results[index]
-
-                elif name == "banner":
-                    banner_image = results[index]
-
-                elif name == "template":
-                    template_image = results[index]
-
-            # =================================================
-            # الملفات تستخدم للروابط/المعلومات
-            # =================================================
-
-            avatar_url = (
-                avatar.url
-                if avatar
-                else None
+            banner_image = (
+                await self.read_image_attachment(banner)
+                if banner else None
             )
-
-            banner_url = (
-                banner.url
-                if banner
-                else None
-            )
-
-            # =================================================
-            # توليد البروفايل
-            # =================================================
 
             generated_bytes = await asyncio.to_thread(
                 self.create_say_image_sync,
-                avatar_image,
-                banner_image,
-                template_image,
-                definition,
-                message,
-                interaction.user.display_name
+                avatar_results,
+                banner_image
             )
-
-            # =================================================
-            # إرسال الصورة أولاً
-            # =================================================
 
             sent = await target.send(
                 content=message,
@@ -2843,13 +2746,12 @@ class AutomaticLineSystem(commands.Cog):
 
             profile_url = (
                 sent.attachments[0].url
-                if sent.attachments
-                else None
+                if sent.attachments else None
             )
 
-            # =================================================
-            # حفظ بيانات الرسالة
-            # =================================================
+            avatar_urls = [attachment.url for attachment in avatar_attachments]
+            first_avatar_url = avatar_urls[0] if avatar_urls else None
+            banner_url = banner.url if banner else None
 
             say_id = str(sent.id)
 
@@ -2860,44 +2762,31 @@ class AutomaticLineSystem(commands.Cog):
                 "username": interaction.user.display_name,
                 "user_id": interaction.user.id,
                 "message": message,
-                "avatar_url": avatar_url,
+                "avatar_url": first_avatar_url,
+                "avatar_urls": avatar_urls,
                 "banner_url": banner_url,
                 "profile_url": profile_url,
                 "room_definition": definition,
-                "created_at": datetime.now(
-                    timezone.utc
-                ).isoformat()
+                "layout": selected_count,
+                "created_at": datetime.now(timezone.utc).isoformat()
             }
 
-            save_say_messages(
-                self.say_messages
-            )
-
-            # =================================================
-            # إضافة الأزرار إلى الرسالة
-            # =================================================
+            save_say_messages(self.say_messages)
 
             view = SayProfileView(
                 self,
                 sent.id,
-                avatar_url=avatar_url,
+                avatar_url=first_avatar_url,
                 banner_url=banner_url,
                 profile_url=profile_url,
                 username=interaction.user.display_name,
                 room_definition=definition
             )
 
-            await sent.edit(
-                view=view
-            )
+            await sent.edit(view=view)
 
         except Exception as error:
-
-            print(
-                "❌ SAY error:",
-                error
-            )
-
+            print("❌ SAY error:", error)
             await interaction.followup.send(
                 f"❌ فشل /say: `{type(error).__name__}`",
                 ephemeral=True
@@ -2906,8 +2795,212 @@ class AutomaticLineSystem(commands.Cog):
 
         await interaction.followup.send(
             (
-                "✅ **تم إرسال الرسالة والبروفايل.**\n"
+                "✅ **تم إرسال الرسالة والبروفايل الكلاسيكي.**\n"
+                f"🖼️ الافتارات: `{len(avatar_attachments)}`\n"
                 f"📍 {target.mention}"
+            ),
+            ephemeral=True
+        )
+
+    # ========================================================
+    # GAME INFORMATION SYSTEM
+    # ========================================================
+
+    GAME_INFO_DATABASE = [
+        {
+            "name": "Hollow Knight",
+            "difficulty": "متوسطة إلى صعبة",
+            "suitable": "مناسب لمحبي الاستكشاف والتحدي",
+            "best_mode": "القصة والاستكشاف",
+            "genre": "Metroidvania"
+        },
+        {
+            "name": "Minecraft",
+            "difficulty": "سهلة إلى متوسطة",
+            "suitable": "مناسب لمعظم اللاعبين",
+            "best_mode": "Survival",
+            "genre": "Sandbox / Survival"
+        },
+        {
+            "name": "Terraria",
+            "difficulty": "متوسطة",
+            "suitable": "مناسب لمحبي البناء والاستكشاف والقتال",
+            "best_mode": "Classic",
+            "genre": "Sandbox / Adventure"
+        },
+        {
+            "name": "Stardew Valley",
+            "difficulty": "سهلة",
+            "suitable": "مناسب لمن يفضل اللعب الهادئ والتقدم التدريجي",
+            "best_mode": "Single Player",
+            "genre": "Farming / Life Sim"
+        },
+        {
+            "name": "Elden Ring",
+            "difficulty": "صعبة",
+            "suitable": "مناسب لمحبي التحدي والقتال والاستكشاف",
+            "best_mode": "القصة والاستكشاف",
+            "genre": "Action RPG"
+        },
+        {
+            "name": "Rocket League",
+            "difficulty": "سهلة في البداية وصعبة للاحتراف",
+            "suitable": "مناسب للعب السريع والمنافسة",
+            "best_mode": "Competitive",
+            "genre": "Sports / Action"
+        },
+        {
+            "name": "Fortnite",
+            "difficulty": "متوسطة",
+            "suitable": "مناسب لمحبي المنافسة واللعب الجماعي",
+            "best_mode": "Battle Royale",
+            "genre": "Battle Royale"
+        },
+        {
+            "name": "Valorant",
+            "difficulty": "متوسطة إلى صعبة",
+            "suitable": "مناسب لمحبي التصويب التكتيكي",
+            "best_mode": "Competitive",
+            "genre": "Tactical FPS"
+        },
+        {
+            "name": "Brawl Stars",
+            "difficulty": "سهلة إلى متوسطة",
+            "suitable": "مناسب للجلسات القصيرة واللعب الجماعي",
+            "best_mode": "3v3",
+            "genre": "Action"
+        },
+        {
+            "name": "Roblox",
+            "difficulty": "تختلف حسب التجربة",
+            "suitable": "مناسب لمعظم اللاعبين مع اختلاف التجربة",
+            "best_mode": "حسب التجربة",
+            "genre": "Platform"
+        },
+        {
+            "name": "Celeste",
+            "difficulty": "صعبة",
+            "suitable": "مناسب لمحبي تحديات المنصات",
+            "best_mode": "القصة",
+            "genre": "Platformer"
+        },
+        {
+            "name": "Among Us",
+            "difficulty": "سهلة",
+            "suitable": "مناسب للعب الجماعي مع الأصدقاء",
+            "best_mode": "Online",
+            "genre": "Social Deduction"
+        },
+    ]
+
+    @tasks.loop(minutes=5)
+    async def game_info_loop(self):
+        await self.bot.wait_until_ready()
+
+        for guild in self.bot.guilds:
+            cfg = self.get_config(guild.id)
+
+            if not cfg.get("game_info_enabled"):
+                continue
+
+            channel_id = cfg.get("game_info_channel_id")
+            if not channel_id:
+                continue
+
+            channel = guild.get_channel(int(channel_id))
+            if not isinstance(channel, discord.TextChannel):
+                continue
+
+            try:
+                await channel.send(
+                    embed=self.build_random_game_info_embed(guild)
+                )
+            except Exception as error:
+                print("⚠️ Game info loop error:", error)
+
+    @game_info_loop.before_loop
+    async def before_game_info_loop(self):
+        await self.bot.wait_until_ready()
+
+    def build_random_game_info_embed(self, guild):
+        game = random.choice(self.GAME_INFO_DATABASE)
+
+        embed = discord.Embed(
+            title=f"🎮 {game['name']}",
+            description="معلومة عشوائية عن لعبة مناسبة لجلسة اليوم.",
+            color=discord.Color.dark_grey()
+        )
+        embed.add_field(name="🎯 النوع", value=game["genre"], inline=True)
+        embed.add_field(name="📊 مستوى الصعوبة", value=game["difficulty"], inline=True)
+        embed.add_field(name="👥 تناسب", value=game["suitable"], inline=False)
+        embed.add_field(name="⭐ أفضل طور", value=game["best_mode"], inline=True)
+        embed.set_footer(text="Team Fime • تتجدد معلومات الألعاب كل 5 دقائق")
+        return embed
+
+    @app_commands.command(
+        name="معلومات-العاب",
+        description="تشغيل أو إيقاف معلومات الألعاب في روم محدد"
+    )
+    @app_commands.describe(
+        action="تشغيل أو إيقاف النظام",
+        channel="الروم الذي ينشر فيه النظام"
+    )
+    @app_commands.choices(
+        action=[
+            app_commands.Choice(name="تشغيل", value="on"),
+            app_commands.Choice(name="إيقاف", value="off"),
+        ]
+    )
+    async def game_info_command(
+        self,
+        interaction,
+        action: app_commands.Choice[str],
+        channel: discord.TextChannel = None
+    ):
+        if await self.owner_only(interaction):
+            return
+
+        if not interaction.guild:
+            return
+
+        cfg = self.get_config(interaction.guild.id)
+
+        if action.value == "off":
+            cfg["game_info_enabled"] = False
+            save_config(self.config)
+
+            await interaction.response.send_message(
+                "⏹️ تم إيقاف نظام معلومات الألعاب.",
+                ephemeral=True
+            )
+            return
+
+        if channel is None:
+            await interaction.response.send_message(
+                "❌ عند التشغيل لازم تحدد الروم.",
+                ephemeral=True
+            )
+            return
+
+        cfg["game_info_enabled"] = True
+        cfg["game_info_channel_id"] = channel.id
+        save_config(self.config)
+
+        try:
+            await channel.send(
+                embed=self.build_random_game_info_embed(interaction.guild)
+            )
+        except Exception as error:
+            await interaction.response.send_message(
+                f"❌ ما قدرت أرسل في الروم: `{type(error).__name__}`",
+                ephemeral=True
+            )
+            return
+
+        await interaction.response.send_message(
+            (
+                f"✅ تم تشغيل **معلومات الألعاب** في {channel.mention}.\n"
+                "🔄 سيتم نشر لعبة عشوائية جديدة كل 5 دقائق."
             ),
             ephemeral=True
         )
@@ -5717,6 +5810,12 @@ async def setup(bot):
     cog = AutomaticLineSystem(bot)
 
     await bot.add_cog(cog)
+
+    try:
+        if not cog.game_info_loop.is_running():
+            cog.game_info_loop.start()
+    except Exception as error:
+        print("⚠️ Game info task start error:", error)
 
     try:
         await cog.restore_temp_bans()
