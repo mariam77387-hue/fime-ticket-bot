@@ -4562,7 +4562,14 @@ if __name__ == "__main__":
             "أضفه في Environment Variables."
         )
 
+    import subprocess
+    import signal
+
+    index_process = None
+
     async def main():
+        global index_process
+
         async with bot:
 
             # =====================================================
@@ -4635,7 +4642,7 @@ if __name__ == "__main__":
                     f"❌ تعذر تحميل fime_libary.py: {error}"
                 )
                 raise
-                
+
             # =====================================================
             # تحميل نظام الذكاء الاصطناعي من ai.py
             # =====================================================
@@ -4661,12 +4668,86 @@ if __name__ == "__main__":
                 raise
 
             # =====================================================
+            # تشغيل index.js
+            # =====================================================
+            try:
+                print("🟢 جاري تشغيل index.js ...")
+
+                index_process = subprocess.Popen(
+                    ["node", "index.js"],
+                    cwd=os.path.dirname(
+                        os.path.abspath(__file__)
+                    ),
+                    stdout=None,
+                    stderr=None,
+                )
+
+                print(
+                    f"✅ تم تشغيل index.js "
+                    f"(PID: {index_process.pid})"
+                )
+
+            except FileNotFoundError:
+                print(
+                    "❌ Node.js غير موجود على الاستضافة."
+                )
+                print(
+                    "تأكد أن الاستضافة تدعم Node.js "
+                    "وأن أمر node متوفر."
+                )
+                raise
+
+            except Exception as error:
+                print(
+                    f"❌ تعذر تشغيل index.js: {error}"
+                )
+                raise
+
+            # =====================================================
             # تشغيل Discord Bot
             # =====================================================
             print(
                 "🤖 جاري تشغيل Team Fime Bot..."
             )
 
-            await bot.start(TOKEN)
+            try:
+                await bot.start(TOKEN)
 
-    asyncio.run(main())
+            finally:
+                # =================================================
+                # إيقاف index.js عند إيقاف bot.py
+                # =================================================
+                if index_process is not None:
+                    try:
+                        if index_process.poll() is None:
+                            print(
+                                "🛑 جاري إيقاف index.js..."
+                            )
+
+                            index_process.terminate()
+
+                            try:
+                                index_process.wait(timeout=5)
+                            except subprocess.TimeoutExpired:
+                                index_process.kill()
+
+                            print(
+                                "✅ تم إيقاف index.js"
+                            )
+
+                    except Exception as error:
+                        print(
+                            f"⚠️ تعذر إيقاف index.js: {error}"
+                        )
+
+    try:
+        asyncio.run(main())
+
+    except KeyboardInterrupt:
+        print("🛑 تم إيقاف البوت.")
+
+    except Exception as error:
+        print(
+            f"❌ توقف البرنامج بسبب خطأ: {error}"
+        )
+        raise
