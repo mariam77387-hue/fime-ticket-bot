@@ -1,384 +1,187 @@
-//Made by wmnd
-const { Client } = require('discord.js');
-const { REST } = require('@discordjs/rest');
-const { Routes } = require('discord-api-types/v9');
-const axios = require('axios');
-const fs = require('fs');
-const path = require('path');
+import discord
+from discord.ext import commands
+import aiohttp
+from urllib.parse import urlparse, parse_qs
 
-const token = "";
-const clientId = "";
-const botstatus = "";
-const madeby = "";
-const endpoint = "http://45.90.13.151:6041"
+# المتغيرات الأساسية (يمكنك ربطها بملف التكوين أو ملف التشغيل الرئيسي)
+ENDPOINT = "http://45.90.13.151:6041"
+MADE_BY = "wmnd"  # ضع اسم المبرمج هنا أو استدعِه من bot.py
 
-const client = new Client({ intents: 3276799 });
-const rest = new REST({ version: '9' }).setToken(token);
+class BypassCog(commands.Cog):
+    def __init__(self, bot):
+        self.bot = bot
 
-const commands = [
-    {
-        name: 'bypass',
-        description: 'Bypass Links You Enter',
-        options: [
-            {
-                name: 'link',
-                type: 3,
-                description: 'The link',
-                required: true,
-            },
-        ],
-    },
-    {
-        name: 'supported',
-        description: 'Gets Supported List',
-    },
-    {
-        name: 'apistatus',
-        description: 'Gets The Api Status',
-    },
-];
+    # أمر /bypass
+    @discord.app_commands.command(name="bypass", description="Bypass Links You Enter")
+    @discord.app_commands.describe(link="The link")
+    async def bypass(self, interaction: discord.Interaction, link: str):
+        box = "```"
+        
+        # التحقق من الروابط المدعومة
+        if not (link.startswith("[https://gateway.platoboost.com/a/](https://gateway.platoboost.com/a/)") or
+                link.startswith("[https://flux.li/android/external/start.php?HWID=](https://flux.li/android/external/start.php?HWID=)") or
+                link.startswith("[https://linkvertise.com](https://linkvertise.com)")):
+            
+            embed = discord.Embed(
+                title="Unsupported Link",
+                color=0xFF3336
+            )
+            embed.add_field(name='Message:', value='```ml\nRun /supported To Get The List Of Supported Bypasses.\n```')
+            embed.set_footer(text=f"Requested By {interaction.user.name} | Made by {MADE_BY} | Powered By Bypassi")
+            await interaction.response.send_message(embed=embed)
+            return
 
-client.once('ready', async () => {
-    console.log(`\x1b[36mSuccessfully Logged In As ${client.user.username}\x1b[0m`);
+        # رسالة الانتظار
+        embed_loading = discord.Embed(
+            title="Bypassing..",
+            color=0x59A53
+        )
+        embed_loading.add_field(name='Status', value='```Could Take A Few Seconds Depending On What Its Trying To Bypass```')
+        embed_loading.set_footer(text=f"Requested By {interaction.user.name} | Made by {MADE_BY} | Powered By Bypassi")
+        await interaction.response.send_message(embed=embed_loading)
 
-    try {
-        console.log('Started refreshing global application (/) commands.');
-        await rest.put(
-            Routes.applicationCommands(clientId),
-            { body: commands },
-        );
-        console.log('Successfully reloaded global application (/) commands.');
-    } catch (error) {
-        console.error(error);
-    }
+        async with aiohttp.ClientSession() as session:
+            # 1. معالجة رابط PlatoBoost
+            if link.startswith('[https://gateway.platoboost.com/a/](https://gateway.platoboost.com/a/)'):
+                parsed_url = urlparse(link)
+                urlparam = parse_qs(parsed_url.query)
+                hwid = urlparam.get('id', [None])[0]
+                api_url = f"{ENDPOINT}/?url={link}"
 
-    client.user.setPresence({
-        activities: [{ name: botstatus }],
-        status: 'dnd',
-    });
-});
+                try:
+                    async with session.get(api_url) as response:
+                        json_data = await response.json()
+                        status = json_data.get("status")
 
-client.on('interactionCreate', async interaction => {
-    if (!interaction.isCommand()) return;
+                        if status == "success":
+                            embed = discord.Embed(title="PlatoBoost Bypass", color=0x6FD44)
+                            embed.set_thumbnail(url='[https://gateway.platoboost.com/icon.svg](https://gateway.platoboost.com/icon.svg)')
+                            embed.add_field(name='Key:', value=f"{box}{json_data.get('key')}{box}")
+                            embed.add_field(name='HWID:', value=f"{box}yaml\n{hwid}\n{box}")
+                            embed.add_field(name='Key Time Left:', value=f"{box}{json_data.get('timeleft')}{box}")
+                            embed.add_field(name='Time Taken:', value=f"{box}{json_data.get('time')}{box}")
+                        elif status == "fail" and json_data.get("message") == "Most Likely An Invalid PlatoBoost Link Or Un-Existing Author.":
+                            embed = discord.Embed(title="Failed To Get PlatoBoost Key", color=0xFF3336)
+                            embed.set_thumbnail(url='[https://gateway.platoboost.com/icon.svg](https://gateway.platoboost.com/icon.svg)')
+                            embed.add_field(name='Message:', value='```ml\nMost Likely An Invalid PlatoBoost Link Or Un-Existing Author.\n```')
+                        else:
+                            embed = discord.Embed(title="PlatoBoost Error", color=0xFF3336)
+                            embed.set_thumbnail(url='[https://gateway.platoboost.com/icon.svg](https://gateway.platoboost.com/icon.svg)')
+                            embed.add_field(name='Message:', value='```ml\nEither Hwid Is Invalid Or Api Is Not Working.\n```')
+                        
+                        embed.set_footer(text=f"Requested By {interaction.user.name} | Made by {MADE_BY} | Powered By Bypassi")
+                        await interaction.edit_original_response(embed=embed)
 
-    switch (interaction.commandName) {
-        case 'bypass':
-            await bypass(interaction);
-            break;
-        case 'supported':
-            await supported(interaction);
-            break;
-        case 'apistatus':
-            await apistatus(interaction);
-            break;
-        default:
-            break;
-    }
-});
+                except Exception as e:
+                    print(e)
+                    embed = discord.Embed(title="PlatoBoost Error", color=0xFF3336)
+                    embed.set_thumbnail(url='[https://media.discordapp.net/attachments/1160520088181542925/1199162006993895484/deltax.png](https://media.discordapp.net/attachments/1160520088181542925/1199162006993895484/deltax.png)')
+                    embed.add_field(name='Message:', value='```ml\nEither Api Is Offline Or Not Responding.\n```')
+                    embed.set_footer(text=f"Requested By {interaction.user.name} | Made by {MADE_BY} | Powered By Bypassi")
+                    await interaction.edit_original_response(embed=embed)
 
+            # 2. معالجة رابط Fluxus
+            elif link.startswith('[https://flux.li/android/external/start.php?HWID=](https://flux.li/android/external/start.php?HWID=)'):
+                parsed_url = urlparse(link)
+                url_params = parse_qs(parsed_url.query)
+                hwid = url_params.get('HWID', [None])[0]
+                api_url = f"{ENDPOINT}/?url={link}"
 
-async function bypass(interaction) {
-    const link = interaction.options.getString('link');
-    const box = "```";
-    
-    if (!link.startsWith("https://gateway.platoboost.com/a/") &&
-        !link.startsWith("https://flux.li/android/external/start.php?HWID=") &&
-        !link.startsWith("https://linkvertise.com")) {
-        await interaction.reply({
-            embeds: [{
-                title: "Unsupported Link",
-                color: 16713222,
-                fields: [
-                    { name: 'Message:', value: '```ml\nRun /supported To Get The List Of Supported Bypasses.\n```' },
-                ],
-                footer: {
-                    text: `Requested By ${interaction.user.username} | Made by ${madeby} | Powered By Bypassi`
-                }
-            }],
-        });  
-        return;
-    }
-    
-    await interaction.reply({
-        embeds: [{
-            title: "Bypassing..",
-            color: 587253,
-            fields: [
-                { name: 'Status', value: '```Could Take A Few Seconds Depending On What Its Trying To Bypass```' }
-            ],
-            footer: {
-                text: `Requested By ${interaction.user.username} | Made by ${madeby} | Powered By Bypassi`
-            }
-        }],
-    });
+                try:
+                    async with session.get(api_url) as response:
+                        json_data = await response.json()
+                        status = json_data.get("status")
+                        flux_icon = '[https://media.discordapp.net/attachments/1205456615873052712/1239947639165026366/2558-fluxus.png](https://media.discordapp.net/attachments/1205456615873052712/1239947639165026366/2558-fluxus.png)'
 
-    if (link.startsWith('https://gateway.platoboost.com/a/')) {
-        const urlparam = new URLSearchParams(new URL(link).search);
-        const hwid = urlparam.get('id');
-        const apiUrl = `${endpoint}/?url=${link}`;
+                        if status == "success":
+                            embed = discord.Embed(title="Fluxus Bypass", color=0x6FD44)
+                            embed.set_thumbnail(url=flux_icon)
+                            embed.add_field(name='Key:', value=f"{box}{json_data.get('key')}{box}")
+                            embed.add_field(name='HWID:', value=f"{box}yaml\n{hwid}\n{box}")
+                            embed.add_field(name='Time Taken:', value=f"{box}{json_data.get('time')}{box}")
+                        else:
+                            embed = discord.Embed(title="Fluxus Error", color=0xFF3336)
+                            embed.set_thumbnail(url=flux_icon)
+                            embed.add_field(name='Message:', value='```ml\nMost Likely An Invalid HWID/Fluxus Link Or Failed To Bypass. Please Try Again With A Valid Link.\n```')
+                        
+                        embed.set_footer(text=f"Requested By {interaction.user.name} | Made by {MADE_BY} | Powered By Bypassi")
+                        await interaction.edit_original_response(embed=embed)
 
-        try {
-            const response = await axios.get(apiUrl);
-            const json = response.data;
+                except Exception as e:
+                    print(e)
+                    embed = discord.Embed(title="Fluxus Error", color=0xFF3336)
+                    embed.set_thumbnail(url='[https://media.discordapp.net/attachments/1205456615873052712/1239947639165026366/2558-fluxus.png](https://media.discordapp.net/attachments/1205456615873052712/1239947639165026366/2558-fluxus.png)')
+                    embed.add_field(name='Message:', value='```ml\nEither Api Is Offline Or Not Responding.\n```')
+                    embed.set_footer(text=f"Requested By {interaction.user.name} | Made by {MADE_BY} | Powered By Bypassi")
+                    await interaction.edit_original_response(embed=embed)
 
-            if (json.status === "success") {
-                await interaction.editReply({
-                    embeds: [{
-                        title: "PlatoBoost Bypass",
-                        color: 458532,
-                        thumbnail: { url: 'https://gateway.platoboost.com/icon.svg' },
-                        fields: [
-                            { name: 'Key:', value: `${box}${json.key}${box}` },
-                            { name: 'HWID:', value: `${box}yaml\n${hwid}\n${box}` },
-                            { name: 'Key Time Left:', value: `${box}${json.timeleft}${box}` },
-                            { name: 'Time Taken:', value: `${box}${json.time}${box}` }
-                        ],
-                        footer: {
-                            text: `Requested By ${interaction.user.username} | Made by ${madeby} | Powered By Bypassi`
-                        }
-                    }],
-                });     
-            } else if (json.status === "fail" && json.message === "Most Likely An Invalid PlatoBoost Link Or Un-Existing Author.") {
-                await interaction.editReply({
-                    embeds: [{
-                        title: "Failed To Get PlatoBoost Key",
-                        color: 16713222,
-                        thumbnail: { url: 'https://gateway.platoboost.com/icon.svg' },
-                        fields: [
-                            { name: 'Message:', value: '```ml\nMost Likely An Invalid PlatoBoost Link Or Un-Existing Author.\n```' },
-                        ],
-                        footer: {
-                            text: `Requested By ${interaction.user.username} | Made by ${madeby} | Powered By Bypassi`
-                        }
-                    }],
-                });                              
-            } else {
-                await interaction.editReply({
-                    embeds: [{
-                        title: "PlatoBoost Error",
-                        color: 16713222,
-                        thumbnail: { url: 'https://gateway.platoboost.com/icon.svg' },
-                        fields: [
-                            { name: 'Message:', value: '```ml\nEither Hwid Is Invalid Or Api Is Not Working.\n```' },
-                        ],
-                        footer: {
-                            text: `Requested By ${interaction.user.username} | Made by ${madeby} | Powered By Bypassi`
-                        }
-                    }],
-                });                       
-            }
-        } catch (error) {
-            console.error(error);
-            await interaction.editReply({
-                embeds: [{
-                    title: "PlatoBoost Error",
-                    color: 16713222,
-                    thumbnail: { url: 'https://media.discordapp.net/attachments/1160520088181542925/1199162006993895484/deltax.png?ex=663ad3a5&is=66398225&hm=0102ff78b7b4eb6b765b214a1685d53f6a4daf049fc9fd1ec8bfffa574238334&=&format=webp&quality=lossless' },
-                    fields: [
-                        { name: 'Message:', value: '```ml\nEither Api Is Offline Or Not Responding.\n```' },
-                    ],
-                    footer: {
-                        text: `Requested By ${interaction.user.username} | Made by ${madeby} | Powered By Bypassi`
-                    }
-                }],
-            });         
-        }
-    } else if (link.startsWith('https://flux.li/android/external/start.php?HWID=')) {
-        const urlParams = new URLSearchParams(new URL(link).search);
-        const HWID = urlParams.get('HWID');
-        const apiUrl = `${endpoint}/?url=${link}`;
+            # 3. معالجة رابط Linkvertise
+            elif link.startswith('[https://linkvertise.com](https://linkvertise.com)'):
+                api_url = f"{ENDPOINT}/?url={link}"
 
-        try {
-            const response = await axios.get(apiUrl);
-            const json = response.data;
+                try:
+                    async with session.get(api_url) as response:
+                        json_data = await response.json()
+                        status = json_data.get("status")
+                        link_icon = '[https://encrypted-tbn0.gstatic.com/images?q=tbn:ANd9GcQDXWPxWgfrFsPT9M9NzG2PLeMg3nWE5LkAIw&s](https://encrypted-tbn0.gstatic.com/images?q=tbn:ANd9GcQDXWPxWgfrFsPT9M9NzG2PLeMg3nWE5LkAIw&s)'
 
-            if (json.status === "success") {
-                await interaction.editReply({
-                    embeds: [{
-                        title: "Fluxus Bypass",
-                        color: 458532,
-                        thumbnail: { url: 'https://media.discordapp.net/attachments/1205456615873052712/1239947639165026366/2558-fluxus.png?ex=664769ba&is=6646183a&hm=2cee59399595d0f73a9fdc0faab234430cdb183a24890d5c8d550db3b4747de1&=&format=webp&quality=lossless' },
-                        fields: [
-                            { name: 'Key:', value: `${box}${json.key}${box}` },
-                            { name: 'HWID:', value: `${box}yaml\n${HWID}\n${box}` },
-                            { name: 'Time Taken:', value: `${box}${json.time}${box}` }
-                        ],
-                        footer: {
-                            text: `Requested By ${interaction.user.username} | Made by ${madeby} | Powered By Bypassi`
-                        }
-                    }],
-                });            
-            } else {
-                await interaction.editReply({
-                    embeds: [{
-                        title: "Fluxus Error",
-                        color: 16713222,
-                        thumbnail: { url: 'https://media.discordapp.net/attachments/1205456615873052712/1239947639165026366/2558-fluxus.png?ex=664769ba&is=6646183a&hm=2cee59399595d0f73a9fdc0faab234430cdb183a24890d5c8d550db3b4747de1&=&format=webp&quality=lossless' },
-                        fields: [
-                            { name: 'Message:', value: '```ml\nMost Likely An Invalid HWID/Fluxus Link Or Failed To Bypass. Please Try Again With A Valid Link.\n```' },
-                        ],
-                        footer: {
-                            text: `Requested By ${interaction.user.username} | Made by ${madeby} | Powered By Bypassi`
-                        }
-                    }],
-                });                       
-            }
-        } catch (error) {
-            console.error(error);
-            await interaction.editReply({
-                embeds: [{
-                    title: "Fluxus Error",                   
-                    color: 16713222,
-                    thumbnail: { url: 'https://media.discordapp.net/attachments/1205456615873052712/1239947639165026366/2558-fluxus.png?ex=664769ba&is=6646183a&hm=2cee59399595d0f73a9fdc0faab234430cdb183a24890d5c8d550db3b4747de1&=&format=webp&quality=lossless' },
-                    fields: [
-                        { name: 'Message:', value: '```ml\nEither Api Is Offline Or Not Responding.\n```' },
-                    ],
-                    footer: {
-                        text: `Requested By ${interaction.user.username} | Made by ${madeby} | Powered By Bypassi`
-                    }
-                }],
-            });         
-        }      
-    } else if (link.startsWith('https://linkvertise.com')) {
-        const apiUrl = `${endpoint}/?url=${link}`;
+                        if status == "success":
+                            embed = discord.Embed(title="Linkvertise Bypass", color=0x6FD44)
+                            embed.set_thumbnail(url=link_icon)
+                            embed.add_field(name='Direct URL:', value=f"{json_data.get('target')}")
+                            embed.add_field(name='Time Taken:', value=f"{box}{json_data.get('time')}{box}")
+                        elif status == "fail" and json_data.get("message") == "Invalid Linkvertise Link. Try Again With An Active/Working Linkvertise Link":
+                            embed = discord.Embed(title="Linkvertise Error", color=0xFF3336)
+                            embed.set_thumbnail(url=link_icon)
+                            embed.add_field(name='Message:', value='```ml\nInvalid Linkvertise Link. Try Again With An Active/Working Linkvertise Link.\n```')
+                        else:
+                            embed = discord.Embed(title="Linkvertise Error", color=0xFF3336)
+                            embed.set_thumbnail(url=link_icon)
+                            embed.add_field(name='Message:', value='```ml\nMost Likely An Api Error. Try Again Later!\n```')
+                        
+                        embed.set_footer(text=f"Requested By {interaction.user.name} | Made by {MADE_BY} | Powered By Bypassi")
+                        await interaction.edit_original_response(embed=embed)
 
-        try {
-            const response = await axios.get(apiUrl);
-            const json = response.data;
+                except Exception as e:
+                    print(e)
+                    embed = discord.Embed(title="Linkvertise Error", color=0xFF3336)
+                    embed.set_thumbnail(url='[https://encrypted-tbn0.gstatic.com/images?q=tbn:ANd9GcQDXWPxWgfrFsPT9M9NzG2PLeMg3nWE5LkAIw&s](https://encrypted-tbn0.gstatic.com/images?q=tbn:ANd9GcQDXWPxWgfrFsPT9M9NzG2PLeMg3nWE5LkAIw&s)')
+                    embed.add_field(name='Message:', value='```ml\nEither Api Is Offline Or Not Responding.\n```')
+                    embed.set_footer(text=f"Requested By {interaction.user.name} | Made by {MADE_BY} | Powered By Bypassi")
+                    await interaction.edit_original_response(embed=embed)
 
-            if (json.status === "success") {
-                await interaction.editReply({
-                    embeds: [{
-                        title: "Linkvertise Bypass",
-                        color: 458532,
-                        thumbnail: { url: 'https://encrypted-tbn0.gstatic.com/images?q=tbn:ANd9GcQDXWPxWgfrFsPT9M9NzG2PLeMg3nWE5LkAIw&s' },
-                        fields: [
-                            { name: 'Direct URL:', value: `${json.target}` },
-                            { name: 'Time Taken:', value: `${box}${json.time}${box}` }
-                        ],
-                        footer: {
-                            text: `Requested By ${interaction.user.username} | Made by ${madeby} | Powered By Bypassi`
-                        }
-                    }],
-                });           
-            } else if (json.status === "fail" && json.message === "Invalid Linkvertise Link. Try Again With An Active/Working Linkvertise Link") {
-                await interaction.editReply({
-                    embeds: [{
-                        title: "Linkvertise Error",
-                        color: 16713222,
-                        thumbnail: { url: 'https://encrypted-tbn0.gstatic.com/images?q=tbn:ANd9GcQDXWPxWgfrFsPT9M9NzG2PLeMg3nWE5LkAIw&s' },
-                        fields: [
-                            { name: 'Message:', value: '```ml\nInvalid Linkvertise Link. Try Again With An Active/Working Linkvertise Link.\n```' },
-                        ],
-                        footer: {
-                            text: `Requested By ${interaction.user.username} | Made by ${madeby} | Powered By Bypassi`
-                        }
-                    }],
-                });  
-            } else {
-                await interaction.editReply({
-                    embeds: [{
-                        title: "Linkvertise Error",
-                        color: 16713222,
-                        thumbnail: { url: 'https://encrypted-tbn0.gstatic.com/images?q=tbn:ANd9GcQDXWPxWgfrFsPT9M9NzG2PLeMg3nWE5LkAIw&s' },
-                        fields: [
-                            { name: 'Message:', value: '```ml\nMost Likely An Api Error. Try Again Later!\n```' },
-                        ],
-                        footer: {
-                            text: `Requested By ${interaction.user.username} | Made by ${madeby} | Powered By Bypassi`
-                        }
-                    }],
-                });                       
-            }
-        } catch (error) {
-            console.error(error);
-            await interaction.editReply({
-                embeds: [{
-                    title: "Linkvertise Error",                   
-                    color: 16713222,
-                    thumbnail: { url: 'https://encrypted-tbn0.gstatic.com/images?q=tbn:ANd9GcQDXWPxWgfrFsPT9M9NzG2PLeMg3nWE5LkAIw&s' },
-                    fields: [
-                        { name: 'Message:', value: '```ml\nEither Api Is Offline Or Not Responding.\n```' },
-                    ],
-                    footer: {
-                        text: `Requested By ${interaction.user.username} | Made by ${madeby} | Powered By Bypassi`
-                    }
-                }],
-            });         
-        }
+    # أمر /supported
+    @discord.app_commands.command(name="supported", description="Gets Supported List")
+    async def supported(self, interaction: discord.Interaction):
+        embed = discord.Embed(title="Supported Bypasses", color=0x3498DB, timestamp=discord.utils.utcnow())
+        embed.add_field(name='Supported Links:', value='```md\n1. [PlatoBoost](https://gateway.platoboost.com/a/)\n2. [Fluxus](https://flux.li/android/external/start.php?HWID=)\n3. [Linkvertise](https://linkvertise.com)\n```')
+        embed.set_footer(text=f"Requested By {interaction.user.name} | Made by {MADE_BY} | Powered By Bypassi")
+        await interaction.response.send_message(embed=embed)
 
-    }
-}
+    # أمر /apistatus
+    @discord.app_commands.command(name="apistatus", description="Gets The Api Status")
+    async def apistatus(self, interaction: discord.Interaction):
+        status_url = f"{ENDPOINT}/status"
 
-async function supported(interaction) {
-    await interaction.reply({
-        embeds: [{
-            title: "Supported Bypasses",
-            color: 3447003,
-            fields: [
-                { name: 'Supported Links:', value: '```md\n1. [PlatoBoost](https://gateway.platoboost.com/a/)\n2. [Fluxus](https://flux.li/android/external/start.php?HWID=)\n3. [Linkvertise](https://linkvertise.com)\n```' }
-            ],
-            footer: {
-                text: `Requested By ${interaction.user.username} | Made by ${madeby} | Powered By Bypassi`
-            },
-            timestamp: new Date()
-        }],
-    });
-}
+        async with aiohttp.ClientSession() as session:
+            try:
+                async with session.get(status_url) as response:
+                    data = await response.json()
 
-async function apistatus(interaction) {
-    const statusUrl = 'http://45.90.13.151:6041/status';
+                    if data.get("status") == 'online':
+                        embed = discord.Embed(title="API Status", color=0x2ECC71, timestamp=discord.utils.utcnow())
+                        embed.add_field(name='Ping:', value=f"`{data.get('ping')} ms`", inline=True)
+                        embed.add_field(name='Uptime:', value=`{data.get('uptime')}` if False else f"`{data.get('uptime')}`", inline=True)
+                    else:
+                        embed = discord.Embed(title="API Status", color=0xE74C3C)
+                        embed.add_field(name='Status:', value='The API is currently offline.')
+            except Exception as e:
+                print(e)
+                embed = discord.Embed(title="API Status", color=0xE74C3C)
+                embed.add_field(name='Message:', value='Failed to retrieve the API status.')
 
-    try {
-        const response = await axios.get(statusUrl);
-        const data = response.data;
+            embed.set_footer(text=f"Requested By {interaction.user.name} | Made by {MADE_BY} | Powered By Bypassi")
+            await interaction.response.send_message(embed=embed)
 
-        if (data.status === 'online') {
-            await interaction.reply({
-                embeds: [{
-                    title: "API Status",
-                    color: 3066993,
-                    fields: [
-                        { name: 'Ping:', value: `\`${data.ping} ms\``, inline: true },
-                        { name: 'Uptime:', value: `\`${data.uptime}\``, inline: true }
-                    ],
-                    footer: {
-                        text: `Requested By ${interaction.user.username} | Made by ${madeby} | Powered By Bypassi`
-                    },
-                    timestamp: new Date()
-                }],
-            });
-        } else {
-            await interaction.reply({
-                embeds: [{
-                    title: "API Status",
-                    color: 15158332,
-                    fields: [
-                        { name: 'Status:', value: 'The API is currently offline.' }
-                    ],
-                    footer: {
-                        text: `Requested By ${interaction.user.username} | Made by ${madeby} | Powered By Bypassi`
-                    },
-                    timestamp: new Date()
-                }],
-            });
-        }
-    } catch (error) {
-        console.error(error);
-        await interaction.reply({
-            embeds: [{
-                title: "API Status",
-                color: 15158332,
-                fields: [
-                    { name: 'Message:', value: 'Failed to retrieve the API status.' },
-                ],
-                footer: {
-                    text: `Requested By ${interaction.user.username} | Made by ${madeby} | Powered By Bypassi`
-                },
-                timestamp: new Date()
-            }],
-        });
-    }
-}
-
-client.login(token);
+async def setup(bot):
+    await bot.add_cog(BypassCog(bot))
