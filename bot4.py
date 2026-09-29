@@ -5571,8 +5571,8 @@ async def slash_rscripts_by_user(
 # /مفتاح
 #
 # HTTP أولًا لتقليل استهلاك RAM.
-# إذا كانت صفحة Platorelay تحتاج JavaScript، يتم تشغيل
-# Playwright عند الحاجة فقط، لطلب واحد في كل مرة، ثم إغلاقه فورًا.
+# Playwright/Chromium موجود كـfallback اختياري فقط، وهو معطل
+# افتراضيًا على الاستضافات محدودة الذاكرة لمنع OOM.
 # ============================================================
 
 KEY_ALLOWED_HOST = "auth.platorelay.com"
@@ -5585,6 +5585,21 @@ KEY_MAX_BODY_BYTES = 2_000_000
 
 # مهلة المتصفح الاحتياطي.
 KEY_BROWSER_TIMEOUT = 20
+
+# ============================================================
+# MEMORY SAFETY
+# ============================================================
+# Chromium/Playwright can consume a large amount of RAM on
+# limited hosting plans. Browser fallback is OFF by default.
+# The lightweight HTTP key-fetch system remains active.
+#
+# To explicitly enable browser fallback on a server with enough
+# RAM, set the environment variable: ENABLE_KEY_BROWSER=1
+# ============================================================
+KEY_BROWSER_ENABLED = (
+    os.getenv("ENABLE_KEY_BROWSER", "0").strip().lower()
+    in {"1", "true", "yes", "on"}
+)
 
 KEY_CACHE_TTL = 120
 
@@ -5613,8 +5628,8 @@ KEY_BROWSER_FALLBACK_MARKER = "__KEY_BROWSER_FALLBACK__"
 
 _key_cache = {}
 
-# يمنع تشغيل أكثر من Chromium في نفس الوقت.
-# كل طلب ينتظر دوره، ثم يفتح متصفحًا خاصًا به ويغلقه فورًا.
+# إذا تم تفعيل المتصفح يدويًا، يمنع تشغيل أكثر من Chromium
+# في نفس الوقت، ثم يتم إغلاقه فور انتهاء الطلب.
 _key_browser_lock = asyncio.Lock()
 
 
@@ -6174,20 +6189,24 @@ async def fetch_free_key(raw_url):
         return key, None
 
     # ------------------------------------------------------------
-    # 2) إذا كانت الصفحة تحتاج JS، شغّل Browser مرة واحدة فقط.
+    # ------------------------------------------------------------
+    # 2) Browser fallback — اختياري فقط.
+    #
+    # لا يتم تشغيل Chromium افتراضيًا حتى لا يسبب OOM على
+    # الاستضافات محدودة الذاكرة. نظام HTTP أعلاه يبقى المسار
+    # الأساسي والخفيف.
     # ------------------------------------------------------------
 
     should_use_browser = (
-        isinstance(error, str)
+        KEY_BROWSER_ENABLED
+        and isinstance(error, str)
         and error.startswith(KEY_BROWSER_FALLBACK_MARKER)
     )
 
     if should_use_browser:
-
         browser_key, browser_error = await _fetch_key_browser(url)
 
         if browser_key:
-
             _key_set_cached(
                 url,
                 browser_key
@@ -6199,6 +6218,16 @@ async def fetch_free_key(raw_url):
             None,
             browser_error
             or "❌ ما قدرت أجيب المفتاح حتى بعد تشغيل JavaScript."
+        )
+
+    if (
+        isinstance(error, str)
+        and error.startswith(KEY_BROWSER_FALLBACK_MARKER)
+    ):
+        return (
+            None,
+            "❌ الصفحة تحتاج JavaScript، وتم تعطيل المتصفح "
+            "تلقائيًا لحماية السيرفر من استهلاك RAM."
         )
 
     return (
