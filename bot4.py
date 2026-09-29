@@ -24,17 +24,6 @@ import time
 import aiohttp
 import ipaddress
 
-try:
-    from playwright.async_api import (
-        async_playwright,
-        TimeoutError as PlaywrightTimeoutError,
-    )
-except Exception:
-    async_playwright = None
-
-    class PlaywrightTimeoutError(Exception):
-        pass
-
 load_dotenv()
 TOKEN = os.getenv("BOT_TOKEN")
 FALLBACK_IMAGE = None  # لا تستخدم GIF كصورة احتياطية
@@ -277,12 +266,7 @@ class SearchHelpButtonView(discord.ui.View):
         self.add_item(button)
 
     async def open_rooms(self, interaction: discord.Interaction):
-        if interaction.user.id != self.requester_id:
-            await interaction.response.send_message(
-                "⚠️ هذا الزر لصاحب البحث فقط.", ephemeral=True
-            )
-            return
-
+        # أي عضو في روم البحث يقدر يستخدم الزر.
         ids = get_configured_help_channel_ids(self.guild_id)
         if not ids:
             await interaction.response.send_message(
@@ -546,6 +530,73 @@ GAME_ALIASES = {
         "مردر مستري",
         "مردر ميستري",
         "مردر"
+    ],
+
+    "war tycoon": [
+        "war tycoon",
+        "wartycoon",
+        "war tycoon roblox",
+        "وار تايكون",
+        "وار تايكن",
+        "وار تايكون روبلوكس",
+        "تايكون الحرب"
+    ],
+
+    "tradelands": [
+        "tradelands",
+        "trade lands",
+        "تريدلاندز",
+        "تريد لاندز"
+    ],
+
+    "islands": [
+        "islands",
+        "skyblock roblox",
+        "ايلاندز",
+        "جزر"
+    ],
+
+    "king legacy": [
+        "king legacy",
+        "kinglegacy",
+        "كينغ ليقاسي",
+        "كنق ليجاسي",
+        "كينج ليقاسي"
+    ],
+
+    "world zero": [
+        "world zero",
+        "worldzero",
+        "وورلد زيرو",
+        "ورلد زيرو"
+    ],
+
+    "combat warriors": [
+        "combat warriors",
+        "combatwarriors",
+        "كومبات واريورز",
+        "كومبات وريورز"
+    ],
+
+    "da hood": [
+        "da hood",
+        "dahood",
+        "دا هود",
+        "داهود"
+    ],
+
+    "arm wrestle simulator": [
+        "arm wrestle simulator",
+        "armwrestlesimulator",
+        "ارم ريسل سيميوليتر",
+        "مصارعة الذراع"
+    ],
+
+    "toilet tower defense": [
+        "toilet tower defense",
+        "ttd",
+        "تويلت تاور ديفنس",
+        "تواليت تاور ديفينس"
     ]
 }
 
@@ -896,17 +947,17 @@ def resolve_game_query(
             compact_query
         ) <= 4:
 
-            threshold = 0.82
+            threshold = 0.80
 
         elif len(
             compact_query
         ) <= 6:
 
-            threshold = 0.68
+            threshold = 0.64
 
         else:
 
-            threshold = 0.58
+            threshold = 0.52
 
         if (
             best_match
@@ -1118,10 +1169,14 @@ async def _scriptblox_search_async(session, query, key_mode):
             if not isinstance(scripts, list):
                 return [], False
 
-            return [
-                script for script in scripts
-                if isinstance(script, dict)
-            ], False
+            output = []
+            for script in scripts:
+                if isinstance(script, dict):
+                    item = dict(script)
+                    item["_fime_api"] = "scriptblox"
+                    output.append(item)
+
+            return output, False
 
     except asyncio.TimeoutError:
         return [], True
@@ -1129,6 +1184,59 @@ async def _scriptblox_search_async(session, query, key_mode):
         return [], True
     except Exception as e:
         print(f"❌ Async ScriptBlox search error: {e}")
+        return [], True
+
+
+async def _rscripts_search_async(session, query, key_mode):
+    """طلب بحث موازٍ من RScripts (مصدر ثانٍ يوسّع تغطية النتائج)."""
+
+    params = {
+        "q": query,
+        "page": 1,
+        "notPaid": True,
+    }
+
+    # RScripts يدعم فلترة "بدون مفتاح" فقط؛ نوع "بمفتاح" يترك بدون
+    # فلترة صارمة لأنه ما فيه علم صريح يعكسه.
+    if key_mode == "no_key":
+        params["noKeySystem"] = True
+
+    headers = {
+        "User-Agent": "Team-Fime-Search/4.0",
+        "Accept": "application/json",
+    }
+
+    try:
+        async with session.get(
+            "https://rscripts.net/api/v2/scripts",
+            params=params,
+            headers=headers,
+        ) as response:
+
+            if response.status != 200:
+                return [], True
+
+            data = await response.json(content_type=None)
+            scripts = data.get("scripts", []) if isinstance(data, dict) else []
+
+            if not isinstance(scripts, list):
+                return [], False
+
+            output = []
+            for script in scripts:
+                if isinstance(script, dict):
+                    item = dict(script)
+                    item["_fime_api"] = "rscripts"
+                    output.append(item)
+
+            return output, False
+
+    except asyncio.TimeoutError:
+        return [], True
+    except aiohttp.ClientError:
+        return [], True
+    except Exception as e:
+        print(f"❌ Async RScripts search error: {e}")
         return [], True
 
 
@@ -1232,40 +1340,73 @@ async def fetch_auto_search_mode(search_query, key_mode):
         collected = []
         seen = set()
         had_network_error = False
+        any_source_ok = False
 
-        async with aiohttp.ClientSession(timeout=timeout) as session:
-            scripts, network_error = await _scriptblox_search_async(
-                session,
-                primary,
-                key_mode,
-            )
-
-            had_network_error = network_error
-
-            for script in scripts:
+        def _merge(results):
+            nonlocal any_source_ok
+            for script in results:
+                any_source_ok = True
                 key = _script_key(script)
                 if key not in seen:
                     seen.add(key)
                     collected.append(script)
 
-            # نوسّع البحث فقط إذا لم نلقَ أي نتيجة.
+        async with aiohttp.ClientSession(timeout=timeout) as session:
+            # نبحث بمصدرين معًا (ScriptBlox + RScripts) بالتوازي —
+            # يوسّع التغطية كثيرًا للمابات اللي ما تظهر في مصدر واحد.
+            primary_results = await asyncio.gather(
+                _scriptblox_search_async(session, primary, key_mode),
+                _rscripts_search_async(session, primary, key_mode),
+                return_exceptions=True,
+            )
+
+            network_errors = []
+
+            for result in primary_results:
+                if isinstance(result, Exception):
+                    network_errors.append(True)
+                    continue
+
+                scripts, network_error = result
+                network_errors.append(network_error)
+
+                if scripts:
+                    _merge(scripts)
+
+            had_network_error = all(network_errors) if network_errors else False
+
+            # نوسّع البحث فقط إذا لم نلقَ أي نتيجة من أي مصدر.
             if not collected and fallback:
-                fallback_scripts, fallback_error = await _scriptblox_search_async(
-                    session,
-                    fallback,
-                    key_mode,
+                fallback_results = await asyncio.gather(
+                    _scriptblox_search_async(session, fallback, key_mode),
+                    _rscripts_search_async(session, fallback, key_mode),
+                    return_exceptions=True,
                 )
+
+                fallback_network_errors = []
+
+                for result in fallback_results:
+                    if isinstance(result, Exception):
+                        fallback_network_errors.append(True)
+                        continue
+
+                    scripts, network_error = result
+                    fallback_network_errors.append(network_error)
+
+                    if scripts:
+                        _merge(scripts)
 
                 had_network_error = (
                     had_network_error
-                    and fallback_error
+                    and (
+                        all(fallback_network_errors)
+                        if fallback_network_errors
+                        else had_network_error
+                    )
                 )
 
-                for script in fallback_scripts:
-                    key = _script_key(script)
-                    if key not in seen:
-                        seen.add(key)
-                        collected.append(script)
+        if any_source_ok:
+            had_network_error = False
 
         collected.sort(
             key=lambda script: _score_auto_result(script, search_query),
@@ -1420,12 +1561,7 @@ class AutoSearchKeyView(discord.ui.View):
         )
 
     async def interaction_check(self, interaction: discord.Interaction):
-        if interaction.user.id != self.requester_id:
-            await interaction.response.send_message(
-                "⚠️ هذي الخيارات للشخص اللي طلب البحث فقط.",
-                ephemeral=True,
-            )
-            return False
+        # الروم نفسه محدد مسبقًا كروم بحث، فأي عضو فيه يقدر يستخدم الخيارات.
         return True
 
     async def on_timeout(self):
@@ -1651,18 +1787,7 @@ class AutoSearchResultBrowseView(
         interaction: discord.Interaction
     ):
 
-        if (
-            interaction.user.id
-            != self.requester_id
-        ):
-
-            await interaction.response.send_message(
-                "⚠️ أزرار النتائج للشخص اللي طلب البحث فقط.",
-                ephemeral=True
-            )
-
-            return False
-
+        # الروم نفسه محدد مسبقًا كروم بحث، فأي عضو فيه يقدر يتصفح النتائج.
         return True
 
     def refresh_buttons(
@@ -1724,20 +1849,42 @@ class AutoSearchResultBrowseView(
             self.index
         ]
 
-        post_url = (
-            "https://scriptblox.com/script/"
-            f"{script.get('slug','')}"
+        source_api = script.get(
+            "_fime_api",
+            "scriptblox"
         )
 
-        raw_url = (
-            "https://rawscripts.net/raw/"
-            f"{script.get('slug','')}"
-        )
+        if source_api == "rscripts":
 
-        download_url = (
-            "https://scriptblox.com/download/"
-            f"{script.get('_id','')}"
-        )
+            post_url = (
+                "https://rscripts.net/script/"
+                f"{script.get('slug','')}"
+            )
+
+            raw_candidate = script.get(
+                "rawScript",
+                ""
+            ) or ""
+
+            raw_url = raw_candidate or post_url
+            download_url = raw_candidate or post_url
+
+        else:
+
+            post_url = (
+                "https://scriptblox.com/script/"
+                f"{script.get('slug','')}"
+            )
+
+            raw_url = (
+                "https://rawscripts.net/raw/"
+                f"{script.get('slug','')}"
+            )
+
+            download_url = (
+                "https://scriptblox.com/download/"
+                f"{script.get('_id','')}"
+            )
 
         self.add_item(
             discord.ui.Button(
@@ -1793,7 +1940,7 @@ class AutoSearchResultBrowseView(
             script,
             self.index + 1,
             len(self.scripts),
-            "scriptblox"
+            script.get("_fime_api", "scriptblox")
         )
 
     async def previous_callback(
@@ -1844,13 +1991,28 @@ class AutoSearchResultBrowseView(
             self.index
         ]
 
-        content = str(
-            script.get(
-                "script",
-                ""
+        if script.get("_fime_api") == "rscripts":
+
+            raw_script_url = str(
+                script.get("rawScript", "")
+                or ""
+            ).strip()
+
+            content = (
+                f'loadstring(game:HttpGet("{raw_script_url}"))()'
+                if raw_script_url
+                else ""
             )
-            or ""
-        ).strip()
+
+        else:
+
+            content = str(
+                script.get(
+                    "script",
+                    ""
+                )
+                or ""
+            ).strip()
 
         if not content:
 
