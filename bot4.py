@@ -5566,11 +5566,13 @@ async def slash_rscripts_by_user(
 
 
 # ============================================================
-# KEY FETCH SYSTEM v3 — Lightweight HTTP Only
+# ============================================================
+# KEY FETCH SYSTEM v4 — HTTP + Single-Shot Browser Fallback
 # /مفتاح
 #
-# لا يستخدم Chromium أو Playwright نهائيًا.
-# يعتمد على aiohttp فقط لتقليل استهلاك RAM.
+# HTTP أولًا لتقليل استهلاك RAM.
+# إذا كانت صفحة Platorelay تحتاج JavaScript، يتم تشغيل
+# Playwright عند الحاجة فقط، لطلب واحد في كل مرة، ثم إغلاقه فورًا.
 # ============================================================
 
 KEY_ALLOWED_HOST = "auth.platorelay.com"
@@ -5580,6 +5582,9 @@ KEY_HTTP_TIMEOUT = 20
 KEY_HTTP_CONNECT_TIMEOUT = 8
 KEY_MAX_REDIRECTS = 6
 KEY_MAX_BODY_BYTES = 2_000_000
+
+# مهلة المتصفح الاحتياطي.
+KEY_BROWSER_TIMEOUT = 20
 
 KEY_CACHE_TTL = 120
 
@@ -5602,7 +5607,15 @@ KEY_BLOCK_MARKERS = (
     "enable javascript and cookies",
 )
 
+# هذه الأخطاء تعني أن HTTP وصل للصفحة، لكن JavaScript/Browser
+# يستحق التجربة.
+KEY_BROWSER_FALLBACK_MARKER = "__KEY_BROWSER_FALLBACK__"
+
 _key_cache = {}
+
+# يمنع تشغيل أكثر من Chromium في نفس الوقت.
+# كل طلب ينتظر دوره، ثم يفتح متصفحًا خاصًا به ويغلقه فورًا.
+_key_browser_lock = asyncio.Lock()
 
 
 def _key_host_of(url):
@@ -5885,23 +5898,23 @@ async def _fetch_key_http(url):
                         return (
                             None,
                             (
+                                f"{KEY_BROWSER_FALLBACK_MARKER}"
                                 "🛡️ الموقع طلب تحققًا أو منع "
-                                "الوصول المباشر.\n"
-                                "هذه الصفحة تحتاج JavaScript "
-                                "أو تحققًا من المتصفح."
+                                "الوصول المباشر."
                             )
                         )
 
                     # ------------------------------------------------
-                    # No key
+                    # No key — الصفحة قد تحتاج JavaScript
                     # ------------------------------------------------
 
                     return (
                         None,
                         (
+                            f"{KEY_BROWSER_FALLBACK_MARKER}"
                             "❌ تم فتح الصفحة لكن لم يظهر "
-                            "مفتاح بصيغة `FREE_` + 32 حرف Hex.\n"
-                            "قد يكون المفتاح يظهر بعد تنفيذ JavaScript."
+                            "المفتاح.\n"
+                            "سيتم تجربة المتصفح لتشغيل JavaScript."
                         )
                     )
 
@@ -5918,8 +5931,8 @@ async def _fetch_key_http(url):
         return (
             None,
             (
-                "⏱️ انتهت مهلة الاتصال بالموقع "
-                f"({KEY_HTTP_TIMEOUT} ثانية)."
+                f"{KEY_BROWSER_FALLBACK_MARKER}"
+                "⏱️ انتهت مهلة الاتصال المباشر بالموقع."
             )
         )
 
@@ -5928,6 +5941,7 @@ async def _fetch_key_http(url):
         return (
             None,
             (
+                f"{KEY_BROWSER_FALLBACK_MARKER}"
                 "❌ تعذر الاتصال بالموقع "
                 f"(شبكة/DNS): {_short_error(error)}"
             )
@@ -5937,6 +5951,7 @@ async def _fetch_key_http(url):
 
         return (
             None,
+            f"{KEY_BROWSER_FALLBACK_MARKER}"
             f"❌ خطأ HTTP: {_short_error(error)}"
         )
 
@@ -5944,6 +5959,7 @@ async def _fetch_key_http(url):
 
         return (
             None,
+            f"{KEY_BROWSER_FALLBACK_MARKER}"
             f"❌ خطأ في الاتصال بالموقع: {_short_error(error)}"
         )
 
@@ -5956,8 +5972,168 @@ async def _fetch_key_http(url):
 
         return (
             None,
+            f"{KEY_BROWSER_FALLBACK_MARKER}"
             f"❌ تعذر جلب المفتاح: {_short_error(error)}"
         )
+
+
+async def _fetch_key_browser(url):
+    """
+    Fallback خفيف:
+    - يستورد Playwright وقت الحاجة فقط.
+    - يسمح بطلب Browser واحد في نفس الوقت.
+    - يفتح Chromium لهذا الطلب فقط.
+    - يبحث عن المفتاح بعد تنفيذ JavaScript.
+    - يغلق الصفحة والمتصفح وPlaywright في finally مهما حصل.
+    """
+
+    if not _is_allowed_key_url(url):
+
+        return (
+            None,
+            "❌ تم رفض الرابط قبل تشغيل المتصفح."
+        )
+
+    async with _key_browser_lock:
+
+        playwright = None
+        browser = None
+        context = None
+        page = None
+
+        try:
+
+            try:
+                from playwright.async_api import async_playwright
+            except Exception as error:
+
+                print(
+                    "❌ Playwright import error: "
+                    f"{type(error).__name__}: {error}"
+                )
+
+                return (
+                    None,
+                    "❌ Playwright غير متوفر في البيئة."
+                )
+
+            playwright = await async_playwright().start()
+
+            browser = await playwright.chromium.launch(
+                headless=True,
+                args=[
+                    "--disable-dev-shm-usage",
+                    "--no-sandbox",
+                    "--disable-gpu",
+                ],
+            )
+
+            context = await browser.new_context(
+                user_agent=KEY_USER_AGENT,
+                java_script_enabled=True,
+                ignore_https_errors=False,
+                viewport={
+                    "width": 1280,
+                    "height": 720,
+                },
+            )
+
+            page = await context.new_page()
+
+            await page.goto(
+                url,
+                wait_until="domcontentloaded",
+                timeout=KEY_BROWSER_TIMEOUT * 1000,
+            )
+
+            # بعض الصفحات تضع المفتاح بعد عدة مراحل JS.
+            deadline = time.monotonic() + KEY_BROWSER_TIMEOUT
+
+            while time.monotonic() < deadline:
+
+                html = await page.content()
+
+                key = _find_key(
+                    html,
+                    page.url,
+                )
+
+                if key:
+                    return key, None
+
+                await asyncio.sleep(0.5)
+
+            # فحص أخير بعد انتهاء الانتظار.
+            html = await page.content()
+
+            key = _find_key(
+                html,
+                page.url,
+            )
+
+            if key:
+                return key, None
+
+            return (
+                None,
+                (
+                    "❌ تم تشغيل JavaScript لكن لم يظهر "
+                    "المفتاح في الصفحة."
+                )
+            )
+
+        except asyncio.TimeoutError:
+
+            return (
+                None,
+                (
+                    "⏱️ انتهت مهلة المتصفح أثناء انتظار "
+                    "المفتاح."
+                )
+            )
+
+        except Exception as error:
+
+            print(
+                "❌ Key browser error: "
+                f"{type(error).__name__}: {error}"
+            )
+
+            return (
+                None,
+                (
+                    "❌ تعذر تشغيل متصفح جلب المفتاح: "
+                    f"{_short_error(error)}"
+                )
+            )
+
+        finally:
+
+            # مهم: كل متغير يبدأ بـ None حتى لا يحصل
+            # NameError لو فشل Playwright قبل تهيئته.
+            if page is not None:
+                try:
+                    await page.close()
+                except Exception:
+                    pass
+
+            if context is not None:
+                try:
+                    await context.close()
+                except Exception:
+                    pass
+
+            if browser is not None:
+                try:
+                    await browser.close()
+                except Exception:
+                    pass
+
+            if playwright is not None:
+                try:
+                    await playwright.stop()
+                except Exception:
+                    pass
 
 
 async def fetch_free_key(raw_url):
@@ -5982,6 +6158,10 @@ async def fetch_free_key(raw_url):
 
         return cached, None
 
+    # ------------------------------------------------------------
+    # 1) محاولة HTTP أولًا — أسرع وأخف على RAM.
+    # ------------------------------------------------------------
+
     key, error = await _fetch_key_http(url)
 
     if key:
@@ -5993,10 +6173,39 @@ async def fetch_free_key(raw_url):
 
         return key, None
 
+    # ------------------------------------------------------------
+    # 2) إذا كانت الصفحة تحتاج JS، شغّل Browser مرة واحدة فقط.
+    # ------------------------------------------------------------
+
+    should_use_browser = (
+        isinstance(error, str)
+        and error.startswith(KEY_BROWSER_FALLBACK_MARKER)
+    )
+
+    if should_use_browser:
+
+        browser_key, browser_error = await _fetch_key_browser(url)
+
+        if browser_key:
+
+            _key_set_cached(
+                url,
+                browser_key
+            )
+
+            return browser_key, None
+
+        return (
+            None,
+            browser_error
+            or "❌ ما قدرت أجيب المفتاح حتى بعد تشغيل JavaScript."
+        )
+
     return (
         None,
         error or "❌ ما قدرت أجيب المفتاح."
     )
+
 
 
 @bot.tree.command(
