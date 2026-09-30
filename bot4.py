@@ -46,16 +46,18 @@ AUTO_SEARCH_COOLDOWN = 3
 AUTO_SEARCH_CACHE_TTL = 120
 
 # الحد الأقصى المعروض في متصفح النتائج.
-AUTO_SEARCH_MAX_RESULTS = 30
+AUTO_SEARCH_MAX_RESULTS = 24
 
 # مهلات مستقلة حتى لا يعلق طلب واحد كل البحث.
 AUTO_SEARCH_TOTAL_TIMEOUT = 7
 AUTO_SEARCH_CONNECT_TIMEOUT = 3
 AUTO_SEARCH_READ_TIMEOUT = 5
+AUTO_SEARCH_REQUEST_TIMEOUT = 8
 
 _search_cooldowns = {}
 _auto_search_cache = {}
 _auto_search_inflight = {}
+_key_inflight = {}
 
 
 def _auto_cache_key(query, key_mode):
@@ -362,6 +364,26 @@ GAME_ALIASES = {
         "ستيل اي برينروت",
         "ستيل برين روت",
         "برينروت"
+    ],
+
+    "steal an egg": [
+        "steal an egg",
+        "steal a egg",
+        "steal an egg roblox",
+        "steal a egg roblox",
+        "steal the egg",
+        "steal egg",
+        "steal an eggs",
+        "steal a eggs",
+        "steal an egg game",
+        "steal a egg game",
+        "ستيل ان ايق",
+        "ستيل ان ايغ",
+        "ستيل اي ايق",
+        "ستيل ايق",
+        "سرقة البيضة",
+        "سرق البيضه",
+        "سرقة البيض"
     ],
 
     "arsenal": [
@@ -1099,6 +1121,16 @@ def get_game_search_queries(
         query
     )
 
+    if normalize_game_name(resolved) == normalize_game_name("steal an egg"):
+        for variant in (
+            "steal a egg",
+            "steal an egg roblox",
+            "steal a egg roblox",
+        ):
+            add_query(variant)
+            if len(queries) >= 3:
+                break
+
     # ========================================================
     # إضافة صيغ بحث إضافية عند الحاجة
     # ========================================================
@@ -1265,6 +1297,16 @@ def _score_auto_result(script, query):
 
     candidates = [title, game_name]
     score = 0.0
+
+    if target in (
+        normalize_game_name("steal an egg"),
+        normalize_game_name("steal a egg"),
+    ):
+        combined = " ".join(candidates)
+        if "brainrot" in combined:
+            score -= 55.0
+        if "steal" in combined and "egg" in combined:
+            score += 18.0
 
     for candidate in candidates:
         if not candidate:
@@ -3453,7 +3495,8 @@ async def display_scripts_dynamic(
     while True:
 
         scripts, total_pages, error = (
-            fetch_scripts(
+            await asyncio.to_thread(
+                fetch_scripts,
                 api,
                 query,
                 mode,
@@ -4589,7 +4632,8 @@ class APISelect(
                 )
             )
 
-            scripts, _, error = fetch_scripts(
+            scripts, _, error = await asyncio.to_thread(
+                fetch_scripts,
                 "rscripts",
                 self.query,
                 self.mode,
@@ -5586,7 +5630,7 @@ KEY_MAX_REDIRECTS = 6
 KEY_MAX_BODY_BYTES = 2_000_000
 
 # مهلة المتصفح الاحتياطي.
-KEY_BROWSER_TIMEOUT = 20
+KEY_BROWSER_TIMEOUT = 12
 
 # مهلة تجهيز Chromium عند عدم وجوده في الاستضافة.
 KEY_BROWSER_INSTALL_TIMEOUT = 90
@@ -5984,26 +6028,16 @@ async def _fetch_key_http(url):
 
 async def _ensure_key_browser_executable(playwright):
     """
-    يتأكد من وجود Chromium قبل تشغيله.
-
-    الترتيب:
-    1) PLAYWRIGHT_EXECUTABLE_PATH إن تم تحديده.
-    2) Chromium/Chrome الموجود أصلًا في الاستضافة.
-    3) Chromium المدمج مع Playwright.
-    4) تثبيت chromium-headless-shell تلقائيًا عند الحاجة.
+    يبحث فقط عن Chromium/Chrome الموجود مسبقًا.
+    لا يقوم بتنزيل Playwright وقت التشغيل لأن ذلك قد يسبب OOM/DISK usage
+    على الاستضافات المحدودة.
     """
-
     custom_path = os.getenv("PLAYWRIGHT_EXECUTABLE_PATH", "").strip()
 
     if custom_path:
         custom_path = os.path.expanduser(custom_path)
         if os.path.isfile(custom_path) and os.access(custom_path, os.X_OK):
             return custom_path
-
-        print(
-            "⚠️ PLAYWRIGHT_EXECUTABLE_PATH غير صالح: "
-            f"{custom_path}"
-        )
 
     system_candidates = [
         shutil.which("chromium"),
@@ -6018,15 +6052,8 @@ async def _ensure_key_browser_executable(playwright):
     ]
 
     for candidate in system_candidates:
-        if (
-            candidate
-            and os.path.isfile(candidate)
-            and os.access(candidate, os.X_OK)
-        ):
-            print(
-                "✅ تم العثور على Chromium/Chrome الموجود في الاستضافة: "
-                f"{candidate}"
-            )
+        if candidate and os.path.isfile(candidate) and os.access(candidate, os.X_OK):
+            print(f"✅ تم العثور على Chromium/Chrome: {candidate}")
             return candidate
 
     try:
@@ -6039,83 +6066,12 @@ async def _ensure_key_browser_executable(playwright):
             print("✅ تم العثور على Chromium المدمج مع Playwright.")
             return bundled_path
     except Exception as error:
-        print(
-            "⚠️ تعذر قراءة مسار Chromium من Playwright: "
-            f"{type(error).__name__}: {error}"
-        )
+        print(f"⚠️ تعذر قراءة مسار Chromium: {type(error).__name__}: {error}")
 
     print(
-        "⚠️ Chromium غير موجود. محاولة تجهيز "
-        "Playwright Chromium Headless Shell..."
+        "⚠️ Chromium غير مثبت مسبقًا؛ تم تعطيل التثبيت التلقائي "
+        "حتى لا يتسبب في استهلاك RAM/DISK."
     )
-
-    try:
-        process = await asyncio.create_subprocess_exec(
-            sys.executable,
-            "-m",
-            "playwright",
-            "install",
-            "chromium-headless-shell",
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.STDOUT,
-            env=os.environ.copy(),
-        )
-
-        try:
-            output, _ = await asyncio.wait_for(
-                process.communicate(),
-                timeout=KEY_BROWSER_INSTALL_TIMEOUT,
-            )
-        except asyncio.TimeoutError:
-            try:
-                process.kill()
-            except Exception:
-                pass
-            try:
-                await process.wait()
-            except Exception:
-                pass
-            print("❌ انتهت مهلة تجهيز Chromium.")
-            return None
-
-        output_text = (
-            output.decode("utf-8", errors="replace")
-            if output else ""
-        )
-
-        if process.returncode != 0:
-            print(
-                "❌ فشل تثبيت Chromium Headless Shell. "
-                f"exit={process.returncode}"
-            )
-            if output_text:
-                print(output_text[-3000:])
-            return None
-
-        try:
-            bundled_path = playwright.chromium.executable_path
-            if (
-                bundled_path
-                and os.path.isfile(bundled_path)
-                and os.access(bundled_path, os.X_OK)
-            ):
-                print(
-                    "✅ تم تجهيز Chromium بنجاح: "
-                    f"{bundled_path}"
-                )
-                return bundled_path
-        except Exception as error:
-            print(
-                "❌ تعذر التحقق من Chromium بعد التثبيت: "
-                f"{type(error).__name__}: {error}"
-            )
-
-    except Exception as error:
-        print(
-            "❌ خطأ أثناء تجهيز Chromium: "
-            f"{type(error).__name__}: {error}"
-        )
-
     return None
 
 
@@ -6341,75 +6297,64 @@ async def _fetch_key_browser(url):
 
 
 async def fetch_free_key(raw_url):
-
     url = str(raw_url or "").strip()
 
     if not url:
-
         return None, "❌ لازم تحط رابط."
 
     if not _is_allowed_key_url(url):
-
         return (
             None,
-            f"❌ مسموح فقط بروابط "
-            f"`https://{KEY_ALLOWED_HOST}`"
+            f"❌ مسموح فقط بروابط `https://{KEY_ALLOWED_HOST}`"
         )
 
     cached = _key_get_cached(url)
-
     if cached:
-
         return cached, None
 
-    # ------------------------------------------------------------
-    # 1) محاولة HTTP أولًا — أسرع وأخف على RAM.
-    # ------------------------------------------------------------
+    existing = _key_inflight.get(url)
+    if existing is not None:
+        try:
+            return await existing
+        except Exception:
+            pass
 
-    key, error = await _fetch_key_http(url)
+    async def _work():
+        # HTTP أولًا: أسرع وأخف.
+        key, error = await _fetch_key_http(url)
 
-    if key:
+        if key:
+            _key_set_cached(url, key)
+            return key, None
 
-        _key_set_cached(
-            url,
-            key
+        should_use_browser = (
+            isinstance(error, str)
+            and error.startswith(KEY_BROWSER_FALLBACK_MARKER)
         )
 
-        return key, None
+        if should_use_browser:
+            browser_key, browser_error = await _fetch_key_browser(url)
 
-    # ------------------------------------------------------------
-    # 2) إذا كانت الصفحة تحتاج JS، شغّل Browser مرة واحدة فقط.
-    # ------------------------------------------------------------
+            if browser_key:
+                _key_set_cached(url, browser_key)
+                return browser_key, None
 
-    should_use_browser = (
-        isinstance(error, str)
-        and error.startswith(KEY_BROWSER_FALLBACK_MARKER)
-    )
-
-    if should_use_browser:
-
-        browser_key, browser_error = await _fetch_key_browser(url)
-
-        if browser_key:
-
-            _key_set_cached(
-                url,
-                browser_key
+            return (
+                None,
+                browser_error
+                or "❌ ما قدرت أجيب المفتاح بعد تشغيل JavaScript."
             )
 
-            return browser_key, None
+        return None, error or "❌ ما قدرت أجيب المفتاح."
 
-        return (
-            None,
-            browser_error
-            or "❌ ما قدرت أجيب المفتاح حتى بعد تشغيل JavaScript."
-        )
+    task = asyncio.create_task(_work())
+    _key_inflight[url] = task
 
-    return (
-        None,
-        error or "❌ ما قدرت أجيب المفتاح."
-    )
-
+    try:
+        return await task
+    finally:
+        if _key_inflight.get(url) is task:
+            _key_inflight.pop(url, None)
 
 
 @bot.tree.command(
