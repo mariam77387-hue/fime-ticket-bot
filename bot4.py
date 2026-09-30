@@ -11,6 +11,8 @@ from discord.ext import commands
 from discord import app_commands
 import requests
 import os
+import sys
+import shutil
 import asyncio
 import json
 import difflib
@@ -5586,6 +5588,9 @@ KEY_MAX_BODY_BYTES = 2_000_000
 # مهلة المتصفح الاحتياطي.
 KEY_BROWSER_TIMEOUT = 20
 
+# مهلة تجهيز Chromium عند عدم وجوده في الاستضافة.
+KEY_BROWSER_INSTALL_TIMEOUT = 90
+
 KEY_CACHE_TTL = 120
 
 KEY_USER_AGENT = (
@@ -5977,6 +5982,143 @@ async def _fetch_key_http(url):
         )
 
 
+async def _ensure_key_browser_executable(playwright):
+    """
+    يتأكد من وجود Chromium قبل تشغيله.
+
+    الترتيب:
+    1) PLAYWRIGHT_EXECUTABLE_PATH إن تم تحديده.
+    2) Chromium/Chrome الموجود أصلًا في الاستضافة.
+    3) Chromium المدمج مع Playwright.
+    4) تثبيت chromium-headless-shell تلقائيًا عند الحاجة.
+    """
+
+    custom_path = os.getenv("PLAYWRIGHT_EXECUTABLE_PATH", "").strip()
+
+    if custom_path:
+        custom_path = os.path.expanduser(custom_path)
+        if os.path.isfile(custom_path) and os.access(custom_path, os.X_OK):
+            return custom_path
+
+        print(
+            "⚠️ PLAYWRIGHT_EXECUTABLE_PATH غير صالح: "
+            f"{custom_path}"
+        )
+
+    system_candidates = [
+        shutil.which("chromium"),
+        shutil.which("chromium-browser"),
+        shutil.which("google-chrome"),
+        shutil.which("google-chrome-stable"),
+        shutil.which("chrome"),
+        "/usr/bin/chromium",
+        "/usr/bin/chromium-browser",
+        "/usr/bin/google-chrome",
+        "/usr/bin/google-chrome-stable",
+    ]
+
+    for candidate in system_candidates:
+        if (
+            candidate
+            and os.path.isfile(candidate)
+            and os.access(candidate, os.X_OK)
+        ):
+            print(
+                "✅ تم العثور على Chromium/Chrome الموجود في الاستضافة: "
+                f"{candidate}"
+            )
+            return candidate
+
+    try:
+        bundled_path = playwright.chromium.executable_path
+        if (
+            bundled_path
+            and os.path.isfile(bundled_path)
+            and os.access(bundled_path, os.X_OK)
+        ):
+            print("✅ تم العثور على Chromium المدمج مع Playwright.")
+            return bundled_path
+    except Exception as error:
+        print(
+            "⚠️ تعذر قراءة مسار Chromium من Playwright: "
+            f"{type(error).__name__}: {error}"
+        )
+
+    print(
+        "⚠️ Chromium غير موجود. محاولة تجهيز "
+        "Playwright Chromium Headless Shell..."
+    )
+
+    try:
+        process = await asyncio.create_subprocess_exec(
+            sys.executable,
+            "-m",
+            "playwright",
+            "install",
+            "chromium-headless-shell",
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.STDOUT,
+            env=os.environ.copy(),
+        )
+
+        try:
+            output, _ = await asyncio.wait_for(
+                process.communicate(),
+                timeout=KEY_BROWSER_INSTALL_TIMEOUT,
+            )
+        except asyncio.TimeoutError:
+            try:
+                process.kill()
+            except Exception:
+                pass
+            try:
+                await process.wait()
+            except Exception:
+                pass
+            print("❌ انتهت مهلة تجهيز Chromium.")
+            return None
+
+        output_text = (
+            output.decode("utf-8", errors="replace")
+            if output else ""
+        )
+
+        if process.returncode != 0:
+            print(
+                "❌ فشل تثبيت Chromium Headless Shell. "
+                f"exit={process.returncode}"
+            )
+            if output_text:
+                print(output_text[-3000:])
+            return None
+
+        try:
+            bundled_path = playwright.chromium.executable_path
+            if (
+                bundled_path
+                and os.path.isfile(bundled_path)
+                and os.access(bundled_path, os.X_OK)
+            ):
+                print(
+                    "✅ تم تجهيز Chromium بنجاح: "
+                    f"{bundled_path}"
+                )
+                return bundled_path
+        except Exception as error:
+            print(
+                "❌ تعذر التحقق من Chromium بعد التثبيت: "
+                f"{type(error).__name__}: {error}"
+            )
+
+    except Exception as error:
+        print(
+            "❌ خطأ أثناء تجهيز Chromium: "
+            f"{type(error).__name__}: {error}"
+        )
+
+    return None
+
+
 async def _fetch_key_browser(url):
     """
     Fallback خفيف:
@@ -6019,8 +6161,20 @@ async def _fetch_key_browser(url):
 
             playwright = await async_playwright().start()
 
+            executable_path = await _ensure_key_browser_executable(
+                playwright
+            )
+
+            if not executable_path:
+                return (
+                    None,
+                    "❌ Chromium غير موجود في الاستضافة، "
+                    "وتعذر تجهيزه تلقائيًا."
+                )
+
             browser = await playwright.chromium.launch(
                 headless=True,
+                executable_path=executable_path,
                 args=[
                     "--disable-dev-shm-usage",
                     "--no-sandbox",
@@ -6278,7 +6432,7 @@ async def slash_key(
 
         key, error = await asyncio.wait_for(
             fetch_free_key(url),
-            timeout=25,
+            timeout=KEY_BROWSER_INSTALL_TIMEOUT + KEY_BROWSER_TIMEOUT + 10,
         )
 
     except asyncio.TimeoutError:
