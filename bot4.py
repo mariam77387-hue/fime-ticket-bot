@@ -46,18 +46,16 @@ AUTO_SEARCH_COOLDOWN = 3
 AUTO_SEARCH_CACHE_TTL = 120
 
 # الحد الأقصى المعروض في متصفح النتائج.
-AUTO_SEARCH_MAX_RESULTS = 24
+AUTO_SEARCH_MAX_RESULTS = 30
 
 # مهلات مستقلة حتى لا يعلق طلب واحد كل البحث.
 AUTO_SEARCH_TOTAL_TIMEOUT = 7
 AUTO_SEARCH_CONNECT_TIMEOUT = 3
 AUTO_SEARCH_READ_TIMEOUT = 5
-AUTO_SEARCH_REQUEST_TIMEOUT = 8
 
 _search_cooldowns = {}
 _auto_search_cache = {}
 _auto_search_inflight = {}
-_key_inflight = {}
 
 
 def _auto_cache_key(query, key_mode):
@@ -369,21 +367,21 @@ GAME_ALIASES = {
     "steal an egg": [
         "steal an egg",
         "steal a egg",
+        "stealanegg",
+        "stealegg",
+        "steal egg",
         "steal an egg roblox",
         "steal a egg roblox",
-        "steal the egg",
-        "steal egg",
-        "steal an eggs",
-        "steal a eggs",
-        "steal an egg game",
-        "steal a egg game",
         "ستيل ان ايق",
         "ستيل ان ايغ",
         "ستيل اي ايق",
         "ستيل ايق",
+        "ستيل ايغ",
+        "ستيل ان اَج",
+        "سرقة البيض",
+        "سرقه البيض",
         "سرقة البيضة",
-        "سرق البيضه",
-        "سرقة البيض"
+        "سرقه البيض روبلوكس"
     ],
 
     "arsenal": [
@@ -1121,16 +1119,6 @@ def get_game_search_queries(
         query
     )
 
-    if normalize_game_name(resolved) == normalize_game_name("steal an egg"):
-        for variant in (
-            "steal a egg",
-            "steal an egg roblox",
-            "steal a egg roblox",
-        ):
-            add_query(variant)
-            if len(queries) >= 3:
-                break
-
     # ========================================================
     # إضافة صيغ بحث إضافية عند الحاجة
     # ========================================================
@@ -1297,16 +1285,6 @@ def _score_auto_result(script, query):
 
     candidates = [title, game_name]
     score = 0.0
-
-    if target in (
-        normalize_game_name("steal an egg"),
-        normalize_game_name("steal a egg"),
-    ):
-        combined = " ".join(candidates)
-        if "brainrot" in combined:
-            score -= 55.0
-        if "steal" in combined and "egg" in combined:
-            score += 18.0
 
     for candidate in candidates:
         if not candidate:
@@ -2442,7 +2420,7 @@ def fetch_scripts(
 
             r = requests.get(
                 url,
-                timeout=AUTO_SEARCH_REQUEST_TIMEOUT
+                timeout=AUTO_SEARCH_TOTAL_TIMEOUT
             )
 
             r.raise_for_status()
@@ -2554,7 +2532,7 @@ def fetch_scripts(
 
             r = requests.get(
                 url,
-                timeout=AUTO_SEARCH_REQUEST_TIMEOUT
+                timeout=AUTO_SEARCH_TOTAL_TIMEOUT
             )
 
             r.raise_for_status()
@@ -3495,8 +3473,7 @@ async def display_scripts_dynamic(
     while True:
 
         scripts, total_pages, error = (
-            await asyncio.to_thread(
-                fetch_scripts,
+            fetch_scripts(
                 api,
                 query,
                 mode,
@@ -4632,8 +4609,7 @@ class APISelect(
                 )
             )
 
-            scripts, _, error = await asyncio.to_thread(
-                fetch_scripts,
+            scripts, _, error = fetch_scripts(
                 "rscripts",
                 self.query,
                 self.mode,
@@ -5613,34 +5589,31 @@ async def slash_rscripts_by_user(
 
 # ============================================================
 # ============================================================
-# KEY FETCH SYSTEM v4 — HTTP + Single-Shot Browser Fallback
+# KEY FETCH SYSTEM v5 — LOW RAM / HTTP ONLY
 # /مفتاح
 #
-# HTTP أولًا لتقليل استهلاك RAM.
-# إذا كانت صفحة Platorelay تحتاج JavaScript، يتم تشغيل
-# Playwright عند الحاجة فقط، لطلب واحد في كل مرة، ثم إغلاقه فورًا.
+# مهم للاستضافات المحدودة:
+# - لا Playwright.
+# - لا Chromium.
+# - لا تنزيل متصفح أثناء التشغيل.
+# - HTTP + redirects + HTML/JSON/meta/data extraction فقط.
+# هذا يمنع OOM الناتج عن تشغيل المتصفح أو تنزيله.
 # ============================================================
 
 KEY_ALLOWED_HOST = "auth.platorelay.com"
 KEY_PATTERN = re.compile(r"FREE_[a-fA-F0-9]{32}")
 
-KEY_HTTP_TIMEOUT = 20
-KEY_HTTP_CONNECT_TIMEOUT = 8
-KEY_MAX_REDIRECTS = 6
-KEY_MAX_BODY_BYTES = 2_000_000
-
-# مهلة المتصفح الاحتياطي.
-KEY_BROWSER_TIMEOUT = 12
-
-# مهلة تجهيز Chromium عند عدم وجوده في الاستضافة.
-KEY_BROWSER_INSTALL_TIMEOUT = 90
-
-KEY_CACHE_TTL = 120
+KEY_HTTP_TIMEOUT = 10
+KEY_HTTP_CONNECT_TIMEOUT = 4
+KEY_MAX_REDIRECTS = 5
+KEY_MAX_BODY_BYTES = 1_500_000
+KEY_CACHE_TTL = 180
+KEY_MAX_INFLIGHT = 2
 
 KEY_USER_AGENT = (
-    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+    "Mozilla/5.0 (Linux; Android 10) "
     "AppleWebKit/537.36 (KHTML, like Gecko) "
-    "Chrome/124.0.0.0 Safari/537.36"
+    "Chrome/124.0 Mobile Safari/537.36"
 )
 
 KEY_BLOCK_MARKERS = (
@@ -5656,15 +5629,9 @@ KEY_BLOCK_MARKERS = (
     "enable javascript and cookies",
 )
 
-# هذه الأخطاء تعني أن HTTP وصل للصفحة، لكن JavaScript/Browser
-# يستحق التجربة.
-KEY_BROWSER_FALLBACK_MARKER = "__KEY_BROWSER_FALLBACK__"
-
 _key_cache = {}
-
-# يمنع تشغيل أكثر من Chromium في نفس الوقت.
-# كل طلب ينتظر دوره، ثم يفتح متصفحًا خاصًا به ويغلقه فورًا.
-_key_browser_lock = asyncio.Lock()
+_key_inflight = {}
+_key_http_semaphore = asyncio.Semaphore(KEY_MAX_INFLIGHT)
 
 
 def _key_host_of(url):
@@ -5679,621 +5646,193 @@ def _key_host_of(url):
 def _is_allowed_key_url(raw_url):
     try:
         parsed = urllib.parse.urlparse(str(raw_url).strip())
-
         if parsed.scheme != "https":
             return False
-
         if (parsed.hostname or "").lower().rstrip(".") != KEY_ALLOWED_HOST:
             return False
-
         if parsed.username or parsed.password:
             return False
-
         if parsed.port not in (None, 443):
             return False
-
         return True
-
     except Exception:
         return False
 
 
 def _find_key(*texts):
     for text in texts:
-
         if not text:
             continue
-
         text = str(text)
-
         match = KEY_PATTERN.search(text)
-
         if match:
             return match.group(0)
-
         try:
             decoded = urllib.parse.unquote(text)
         except Exception:
             decoded = ""
-
         if decoded and decoded != text:
-
             match = KEY_PATTERN.search(decoded)
-
             if match:
                 return match.group(0)
+    return None
+
+
+def _find_embedded_key(body):
+    """يبحث عن المفتاح في HTML/JSON/attributes/meta/روابط بدون تشغيل JS."""
+    key = _find_key(body)
+    if key:
+        return key
+
+    text = str(body or "")
+
+    # بعض الصفحات تخزن القيمة في attributes أو JSON escaped.
+    patterns = (
+        r'(?i)(?:key|accessKey|license|token)\s*["\'=:]+\s*(FREE_[a-f0-9]{32})',
+        r'(?i)(?:data-key|data-token)\s*=\s*["\'](FREE_[a-f0-9]{32})',
+    )
+    for pattern in patterns:
+        match = re.search(pattern, text)
+        if match:
+            return match.group(1)
 
     return None
 
 
 def _looks_blocked(text):
     lowered = str(text or "").lower()
-
-    return any(
-        marker in lowered
-        for marker in KEY_BLOCK_MARKERS
-    )
+    return any(marker in lowered for marker in KEY_BLOCK_MARKERS)
 
 
 def _short_error(error, limit=180):
-
     message = str(error or "").strip().splitlines()
-
-    message = (
-        message[0].strip()
-        if message
-        else ""
-    )
-
+    message = message[0].strip() if message else ""
     if len(message) > limit:
         message = message[:limit] + "…"
-
     return message or type(error).__name__
 
 
 def _key_get_cached(url):
-
     item = _key_cache.get(url)
-
     if not item:
         return None
-
     if time.monotonic() - item[0] > KEY_CACHE_TTL:
-
         _key_cache.pop(url, None)
-
         return None
-
     return item[1]
 
 
 def _key_set_cached(url, key):
-
-    _key_cache[url] = (
-        time.monotonic(),
-        key
-    )
-
+    _key_cache[url] = (time.monotonic(), key)
     if len(_key_cache) > 100:
-
         now = time.monotonic()
-
         expired = [
-            u
-            for u, item in _key_cache.items()
+            u for u, item in _key_cache.items()
             if now - item[0] > KEY_CACHE_TTL
         ]
-
         for u in expired:
             _key_cache.pop(u, None)
 
 
 async def _fetch_key_http(url):
-
     timeout = aiohttp.ClientTimeout(
         total=KEY_HTTP_TIMEOUT,
         connect=KEY_HTTP_CONNECT_TIMEOUT,
+        sock_read=6,
     )
 
     headers = {
         "User-Agent": KEY_USER_AGENT,
-        "Accept": (
-            "text/html,application/xhtml+xml,"
-            "application/json;q=0.9,*/*;q=0.8"
-        ),
+        "Accept": "text/html,application/xhtml+xml,application/json;q=0.9,*/*;q=0.8",
         "Accept-Language": "en-US,en;q=0.9,ar;q=0.8",
+        "Cache-Control": "no-cache",
     }
 
     current = url
 
     try:
+        async with _key_http_semaphore:
+            async with aiohttp.ClientSession(
+                timeout=timeout,
+                headers=headers,
+                raise_for_status=False,
+            ) as session:
+                for _ in range(KEY_MAX_REDIRECTS + 1):
+                    if not _is_allowed_key_url(current):
+                        return None, "❌ الرابط غير مسموح؛ يجب أن يكون من auth.platorelay.com."
 
-        async with aiohttp.ClientSession(
-            timeout=timeout,
-            headers=headers,
-        ) as session:
+                    async with session.get(
+                        current,
+                        allow_redirects=False,
+                        max_redirects=0,
+                    ) as response:
+                        status = response.status
 
-            for _ in range(KEY_MAX_REDIRECTS + 1):
+                        if status in (301, 302, 303, 307, 308):
+                            location = response.headers.get("Location", "")
+                            if not location:
+                                return None, "❌ الموقع أرسل تحويلًا بدون وجهة."
 
-                if not _is_allowed_key_url(current):
+                            next_url = urllib.parse.urljoin(current, location)
+                            key = _find_key(next_url)
+                            if key:
+                                return key, None
 
-                    return (
-                        None,
-                        "❌ تم رفض الرابط: يسمح فقط "
-                        f"بـ `https://{KEY_ALLOWED_HOST}`."
-                    )
+                            if not _is_allowed_key_url(next_url):
+                                return None, "❌ تم رفض التحويل إلى نطاق خارجي."
+                            current = next_url
+                            continue
 
-                async with session.get(
-                    current,
-                    allow_redirects=False,
-                ) as response:
+                        if status == 404:
+                            return None, "❌ الرابط غير موجود (404)."
+                        if status == 410:
+                            return None, "❌ الرابط منتهي أو محذوف (410)."
+                        if status == 429:
+                            return None, "⏳ الموقع حدّ الطلبات (429)، جرب بعد قليل."
+                        if status >= 500:
+                            return None, f"❌ الموقع أعاد خطأ {status}."
 
-                    status = response.status
+                        # لا نقرأ أكثر من 1.5MB مهما كان حجم الصفحة.
+                        data = await response.content.read(KEY_MAX_BODY_BYTES)
+                        body = data.decode("utf-8", errors="ignore")
 
-                    # ------------------------------------------------
-                    # Redirect
-                    # ------------------------------------------------
-
-                    if status in (301, 302, 303, 307, 308):
-
-                        location = response.headers.get(
-                            "Location",
-                            ""
-                        )
-
-                        if not location:
-
-                            return (
-                                None,
-                                "❌ الموقع أرسل Redirect بدون وجهة."
-                            )
-
-                        next_url = urllib.parse.urljoin(
-                            current,
-                            location
-                        )
-
-                        # أحيانًا المفتاح يكون موجودًا في الرابط نفسه
-                        key = _find_key(next_url)
-
+                        key = _find_embedded_key(body)
                         if key:
                             return key, None
 
-                        if not _is_allowed_key_url(next_url):
+                        # meta refresh يمكن اتباعه بدون Browser.
+                        meta_match = re.search(
+                            r'(?is)<meta[^>]+http-equiv=["\']?refresh["\']?[^>]+content=["\'][^"\']*url=([^"\'> ]+)',
+                            body,
+                        )
+                        if meta_match:
+                            next_url = urllib.parse.urljoin(current, meta_match.group(1).strip())
+                            if _is_allowed_key_url(next_url):
+                                current = next_url
+                                continue
 
-                            target = (
-                                _key_host_of(next_url)
-                                or "غير معروف"
+                        if _looks_blocked(body) or status in (401, 403, 503):
+                            return None, (
+                                "❌ الموقع يتطلب JavaScript/تحققًا لا يمكن تشغيله على هذه الاستضافة "
+                                "بدون Browser، وتم إيقاف ذلك عمدًا لحماية RAM."
                             )
 
-                            return (
-                                None,
-                                (
-                                    "❌ تم رفض التحويل إلى "
-                                    f"`{target}`.\n"
-                                    f"المسموح فقط: `{KEY_ALLOWED_HOST}`."
-                                )
-                            )
-
-                        current = next_url
-
-                        continue
-
-                    # ------------------------------------------------
-                    # HTTP Errors
-                    # ------------------------------------------------
-
-                    if status == 404:
-
-                        return (
-                            None,
-                            "❌ الرابط غير موجود (404)."
+                        return None, (
+                            "❌ الصفحة فتحت لكن المفتاح غير موجود في البيانات التي يمكن قراءتها "
+                            "بدون متصفح."
                         )
 
-                    if status == 410:
-
-                        return (
-                            None,
-                            "❌ الرابط منتهي أو محذوف (410)."
-                        )
-
-                    if status == 429:
-
-                        return (
-                            None,
-                            "⏳ الموقع حدّ الطلبات (429). "
-                            "انتظر قليلًا وجرب مرة ثانية."
-                        )
-
-                    if status >= 500:
-
-                        return (
-                            None,
-                            f"❌ الموقع فيه مشكلة من جهته "
-                            f"(HTTP {status}). جرب لاحقًا."
-                        )
-
-                    # ------------------------------------------------
-                    # Read body
-                    # ------------------------------------------------
-
-                    data = await response.content.read(
-                        KEY_MAX_BODY_BYTES
-                    )
-
-                    body = data.decode(
-                        "utf-8",
-                        errors="ignore"
-                    )
-
-                    key = _find_key(
-                        body,
-                        str(response.url),
-                        current
-                    )
-
-                    if key:
-                        return key, None
-
-                    # ------------------------------------------------
-                    # Protection / JavaScript
-                    # ------------------------------------------------
-
-                    if (
-                        status in (401, 403, 503)
-                        or _looks_blocked(body)
-                    ):
-
-                        return (
-                            None,
-                            (
-                                f"{KEY_BROWSER_FALLBACK_MARKER}"
-                                "🛡️ الموقع طلب تحققًا أو منع "
-                                "الوصول المباشر."
-                            )
-                        )
-
-                    # ------------------------------------------------
-                    # No key — الصفحة قد تحتاج JavaScript
-                    # ------------------------------------------------
-
-                    return (
-                        None,
-                        (
-                            f"{KEY_BROWSER_FALLBACK_MARKER}"
-                            "❌ تم فتح الصفحة لكن لم يظهر "
-                            "المفتاح.\n"
-                            "سيتم تجربة المتصفح لتشغيل JavaScript."
-                        )
-                    )
-
-            return (
-                None,
-                (
-                    "❌ الرابط يحتوي على تحويلات كثيرة "
-                    f"(أكثر من {KEY_MAX_REDIRECTS})."
-                )
-            )
+                return None, "❌ الرابط يحتوي على تحويلات كثيرة."
 
     except asyncio.TimeoutError:
-
-        return (
-            None,
-            (
-                f"{KEY_BROWSER_FALLBACK_MARKER}"
-                "⏱️ انتهت مهلة الاتصال المباشر بالموقع."
-            )
-        )
-
+        return None, "⏱️ انتهت مهلة الاتصال بالموقع."
     except aiohttp.ClientConnectorError as error:
-
-        return (
-            None,
-            (
-                f"{KEY_BROWSER_FALLBACK_MARKER}"
-                "❌ تعذر الاتصال بالموقع "
-                f"(شبكة/DNS): {_short_error(error)}"
-            )
-        )
-
-    except aiohttp.ClientResponseError as error:
-
-        return (
-            None,
-            f"{KEY_BROWSER_FALLBACK_MARKER}"
-            f"❌ خطأ HTTP: {_short_error(error)}"
-        )
-
+        return None, f"❌ تعذر الاتصال بالموقع: {_short_error(error)}"
     except aiohttp.ClientError as error:
-
-        return (
-            None,
-            f"{KEY_BROWSER_FALLBACK_MARKER}"
-            f"❌ خطأ في الاتصال بالموقع: {_short_error(error)}"
-        )
-
+        return None, f"❌ خطأ اتصال: {_short_error(error)}"
     except Exception as error:
-
-        print(
-            "❌ Key HTTP error: "
-            f"{type(error).__name__}: {error}"
-        )
-
-        return (
-            None,
-            f"{KEY_BROWSER_FALLBACK_MARKER}"
-            f"❌ تعذر جلب المفتاح: {_short_error(error)}"
-        )
-
-
-async def _ensure_key_browser_executable(playwright):
-    """
-    يبحث فقط عن Chromium/Chrome الموجود مسبقًا.
-    لا يقوم بتنزيل Playwright وقت التشغيل لأن ذلك قد يسبب OOM/DISK usage
-    على الاستضافات المحدودة.
-    """
-    custom_path = os.getenv("PLAYWRIGHT_EXECUTABLE_PATH", "").strip()
-
-    if custom_path:
-        custom_path = os.path.expanduser(custom_path)
-        if os.path.isfile(custom_path) and os.access(custom_path, os.X_OK):
-            return custom_path
-
-    system_candidates = [
-        shutil.which("chromium"),
-        shutil.which("chromium-browser"),
-        shutil.which("google-chrome"),
-        shutil.which("google-chrome-stable"),
-        shutil.which("chrome"),
-        "/usr/bin/chromium",
-        "/usr/bin/chromium-browser",
-        "/usr/bin/google-chrome",
-        "/usr/bin/google-chrome-stable",
-    ]
-
-    for candidate in system_candidates:
-        if candidate and os.path.isfile(candidate) and os.access(candidate, os.X_OK):
-            print(f"✅ تم العثور على Chromium/Chrome: {candidate}")
-            return candidate
-
-    try:
-        bundled_path = playwright.chromium.executable_path
-        if (
-            bundled_path
-            and os.path.isfile(bundled_path)
-            and os.access(bundled_path, os.X_OK)
-        ):
-            print("✅ تم العثور على Chromium المدمج مع Playwright.")
-            return bundled_path
-    except Exception as error:
-        print(f"⚠️ تعذر قراءة مسار Chromium: {type(error).__name__}: {error}")
-
-    print(
-        "⚠️ Chromium غير مثبت مسبقًا؛ تم تعطيل التثبيت التلقائي "
-        "حتى لا يتسبب في استهلاك RAM/DISK."
-    )
-    return None
-
-
-async def _fetch_key_browser(url):
-    """
-    Fallback خفيف:
-    - يستورد Playwright وقت الحاجة فقط.
-    - يسمح بطلب Browser واحد في نفس الوقت.
-    - يفتح Chromium لهذا الطلب فقط.
-    - يبحث عن المفتاح بعد تنفيذ JavaScript.
-    - يغلق الصفحة والمتصفح وPlaywright في finally مهما حصل.
-    """
-
-    if not _is_allowed_key_url(url):
-
-        return (
-            None,
-            "❌ تم رفض الرابط قبل تشغيل المتصفح."
-        )
-
-    async with _key_browser_lock:
-
-        playwright = None
-        browser = None
-        context = None
-        page = None
-
-        try:
-
-            try:
-                from playwright.async_api import async_playwright
-            except Exception as error:
-
-                print(
-                    "❌ Playwright import error: "
-                    f"{type(error).__name__}: {error}"
-                )
-
-                return (
-                    None,
-                    "❌ Playwright غير متوفر في البيئة."
-                )
-
-            playwright = await async_playwright().start()
-
-            executable_path = await _ensure_key_browser_executable(
-                playwright
-            )
-
-            if not executable_path:
-                return (
-                    None,
-                    "❌ Chromium غير موجود في الاستضافة، "
-                    "وتعذر تجهيزه تلقائيًا."
-                )
-
-            browser = await playwright.chromium.launch(
-                headless=True,
-                executable_path=executable_path,
-                args=[
-                    "--disable-dev-shm-usage",
-                    "--no-sandbox",
-                    "--disable-gpu",
-                    "--disable-software-rasterizer",
-                    "--disable-extensions",
-                    "--disable-background-networking",
-                    "--disable-background-timer-throttling",
-                    "--disable-backgrounding-occluded-windows",
-                    "--disable-renderer-backgrounding",
-                    "--disable-features=Translate,BackForwardCache,MediaRouter,OptimizationHints",
-                    "--disable-component-update",
-                    "--disable-default-apps",
-                    "--disable-sync",
-                    "--no-first-run",
-                    "--no-default-browser-check",
-                    "--metrics-recording-only",
-                    "--mute-audio",
-                    "--renderer-process-limit=1",
-                    "--js-flags=--max-old-space-size=64",
-                ],
-            )
-
-            context = await browser.new_context(
-                user_agent=KEY_USER_AGENT,
-                java_script_enabled=True,
-                ignore_https_errors=False,
-                viewport={
-                    "width": 800,
-                    "height": 600,
-                },
-                service_workers="block",
-            )
-
-            # الموقع يحتاج JavaScript، لكن لا يحتاج صورًا أو خطوطًا أو
-            # فيديو/صوت حتى يظهر المفتاح. منع هذه الموارد يقلل RAM
-            # والاتصالات بشكل واضح على الاستضافات المحدودة.
-            async def _route_key_resources(route):
-                request = route.request
-                resource_type = request.resource_type
-                request_url = request.url.lower()
-
-                blocked_types = {
-                    "image",
-                    "font",
-                    "media",
-                    "texttrack",
-                }
-
-                blocked_extensions = (
-                    ".png", ".jpg", ".jpeg", ".gif", ".webp",
-                    ".svg", ".ico", ".woff", ".woff2", ".ttf",
-                    ".otf", ".mp4", ".webm", ".mp3", ".wav",
-                )
-
-                if (
-                    resource_type in blocked_types
-                    or request_url.split("?")[0].endswith(blocked_extensions)
-                ):
-                    await route.abort()
-                    return
-
-                await route.continue_()
-
-            await context.route("**/*", _route_key_resources)
-
-            page = await context.new_page()
-
-            await page.goto(
-                url,
-                wait_until="domcontentloaded",
-                timeout=KEY_BROWSER_TIMEOUT * 1000,
-            )
-
-            # بعض الصفحات تضع المفتاح بعد عدة مراحل JS.
-            # ننتظر فقط بقدر الحاجة، ونخرج فور ظهور المفتاح.
-            deadline = time.monotonic() + KEY_BROWSER_TIMEOUT
-
-            while time.monotonic() < deadline:
-
-                html = await page.content()
-
-                key = _find_key(
-                    html,
-                    page.url,
-                )
-
-                if key:
-                    return key, None
-
-                await asyncio.sleep(0.35)
-
-            # فحص أخير بعد انتهاء الانتظار.
-            html = await page.content()
-
-            key = _find_key(
-                html,
-                page.url,
-            )
-
-            if key:
-                return key, None
-
-            return (
-                None,
-                (
-                    "❌ تم تشغيل JavaScript لكن لم يظهر "
-                    "المفتاح في الصفحة."
-                )
-            )
-
-        except asyncio.TimeoutError:
-
-            return (
-                None,
-                (
-                    "⏱️ انتهت مهلة المتصفح أثناء انتظار "
-                    "المفتاح."
-                )
-            )
-
-        except Exception as error:
-
-            print(
-                "❌ Key browser error: "
-                f"{type(error).__name__}: {error}"
-            )
-
-            return (
-                None,
-                (
-                    "❌ تعذر تشغيل متصفح جلب المفتاح: "
-                    f"{_short_error(error)}"
-                )
-            )
-
-        finally:
-
-            # مهم: كل متغير يبدأ بـ None حتى لا يحصل
-            # NameError لو فشل Playwright قبل تهيئته.
-            if page is not None:
-                try:
-                    await page.close()
-                except Exception:
-                    pass
-
-            if context is not None:
-                try:
-                    await context.close()
-                except Exception:
-                    pass
-
-            if browser is not None:
-                try:
-                    await browser.close()
-                except Exception:
-                    pass
-
-            if playwright is not None:
-                try:
-                    await playwright.stop()
-                except Exception:
-                    pass
+        print(f"❌ Key HTTP error: {type(error).__name__}: {error}")
+        return None, f"❌ تعذر جلب المفتاح: {_short_error(error)}"
 
 
 async def fetch_free_key(raw_url):
@@ -6301,57 +5840,26 @@ async def fetch_free_key(raw_url):
 
     if not url:
         return None, "❌ لازم تحط رابط."
-
     if not _is_allowed_key_url(url):
-        return (
-            None,
-            f"❌ مسموح فقط بروابط `https://{KEY_ALLOWED_HOST}`"
-        )
+        return None, f"❌ مسموح فقط بروابط https://{KEY_ALLOWED_HOST}"
 
     cached = _key_get_cached(url)
     if cached:
         return cached, None
 
+    # طلب واحد فعلي لكل رابط؛ يمنع تكرار نفس العملية واستهلاك الشبكة.
     existing = _key_inflight.get(url)
-    if existing is not None:
-        try:
-            return await existing
-        except Exception:
-            pass
+    if existing:
+        return await existing
 
-    async def _work():
-        # HTTP أولًا: أسرع وأخف.
-        key, error = await _fetch_key_http(url)
-
-        if key:
-            _key_set_cached(url, key)
-            return key, None
-
-        should_use_browser = (
-            isinstance(error, str)
-            and error.startswith(KEY_BROWSER_FALLBACK_MARKER)
-        )
-
-        if should_use_browser:
-            browser_key, browser_error = await _fetch_key_browser(url)
-
-            if browser_key:
-                _key_set_cached(url, browser_key)
-                return browser_key, None
-
-            return (
-                None,
-                browser_error
-                or "❌ ما قدرت أجيب المفتاح بعد تشغيل JavaScript."
-            )
-
-        return None, error or "❌ ما قدرت أجيب المفتاح."
-
-    task = asyncio.create_task(_work())
+    task = asyncio.create_task(_fetch_key_http(url))
     _key_inflight[url] = task
 
     try:
-        return await task
+        key, error = await task
+        if key:
+            _key_set_cached(url, key)
+        return key, error
     finally:
         if _key_inflight.get(url) is task:
             _key_inflight.pop(url, None)
@@ -6364,61 +5872,35 @@ async def fetch_free_key(raw_url):
 @app_commands.describe(
     url="رابط https://auth.platorelay.com"
 )
-async def slash_key(
-    interaction: discord.Interaction,
-    url: str
-):
-
-    await interaction.response.defer(
-        ephemeral=True
-    )
+async def slash_key(interaction: discord.Interaction, url: str):
+    await interaction.response.defer(ephemeral=True)
 
     try:
-
         key, error = await asyncio.wait_for(
             fetch_free_key(url),
-            timeout=KEY_BROWSER_INSTALL_TIMEOUT + KEY_BROWSER_TIMEOUT + 10,
+            timeout=KEY_HTTP_TIMEOUT + 3,
         )
-
     except asyncio.TimeoutError:
-
         key = None
-
-        error = (
-            "⏱️ انتهت المهلة أثناء محاولة جلب المفتاح."
-        )
-
+        error = "⏱️ انتهت المهلة أثناء جلب المفتاح."
     except Exception as exc:
-
-        print(
-            "❌ /مفتاح unexpected error: "
-            f"{type(exc).__name__}: {exc}"
-        )
-
+        print(f"❌ /مفتاح unexpected error: {type(exc).__name__}: {exc}")
         key = None
-
-        error = (
-            f"❌ خطأ غير متوقع "
-            f"({type(exc).__name__}): "
-            f"{_short_error(exc)}"
-        )
+        error = f"❌ خطأ غير متوقع: {_short_error(exc)}"
 
     if key:
-
         await interaction.followup.send(
-            (
-                "🔑 **تم العثور على المفتاح:**\n"
-                f"```{key}```"
-            ),
-            ephemeral=True
+            f"🔑 **تم العثور على المفتاح:**\n```{key}```",
+            ephemeral=True,
         )
-
         return
 
     await interaction.followup.send(
         error or "❌ ما قدرت أجيب المفتاح.",
-        ephemeral=True
+        ephemeral=True,
     )
+
+
 # ============================================================
 # EXTENSION SETUP
 # ============================================================
