@@ -54,6 +54,11 @@ AUTO_SEARCH_TOTAL_TIMEOUT = 7
 AUTO_SEARCH_CONNECT_TIMEOUT = 3
 AUTO_SEARCH_READ_TIMEOUT = 5
 
+# True = العضو يكتب اسم الماب والبوت يبحث فورًا بالنوعين (بدون قائمة اختيار).
+# False = يرجع للنظام القديم (قائمة اختيار النوع أولًا).
+AUTO_SEARCH_DIRECT = True
+
+_direct_search_tasks = set()
 _search_cooldowns = {}
 _auto_search_cache = {}
 _auto_search_inflight = {}
@@ -1938,7 +1943,7 @@ async def process_auto_search_request(
             await interaction.edit_original_response(
                 content=(
                     content
-                    + "\\n\\n📚 **ما لقيت النتيجة؟ توجه للرومات المحددة من المالك:**"
+                    + "\n\n📚 **ما لقيت النتيجة؟ توجه للرومات المحددة من المالك:**"
                 ),
                 embed=None,
                 view=SearchHelpButtonView(
@@ -2297,59 +2302,125 @@ class AutoSearchResultBrowseView(
 # AUTOMATIC GAME SEARCH
 # ============================================================
 
+class _MessageResponder:
+    """يخلي نتائج البحث تتحدث داخل رسالة عادية بنفس طريقة interaction."""
+
+    def __init__(self, message, guild):
+        self.message = message
+        self.guild = guild
+
+    async def edit_original_response(self, **kwargs):
+        await self.message.edit(**kwargs)
+
+
 async def automatic_game_search(
     message,
     query
 ):
 
-    resolved_query = (
-        resolve_game_query(
-            query
-        )
+    candidates = search_query_candidates(
+        query
     )
 
-    view = AutoSearchKeyView(
-        message.author,
-        query,
-        resolved_query
+    understood = (
+        candidates[0]
+        if candidates
+        else query
     )
 
     recognized_text = ""
 
-    normalized_original = (
-        normalize_game_name(
-            query
-        )
-    )
-
-    normalized_resolved = (
-        normalize_game_name(
-            resolved_query
-        )
-    )
-
     if (
-        normalized_resolved
-        and normalized_original
-        and normalized_resolved
-        != normalized_original
+        normalize_game_name(understood)
+        != normalize_game_name(query)
     ):
 
         recognized_text = (
             f"\n🎯 فهمت أنك تقصد: "
-            f"**{resolved_query}**"
+            f"**{understood}**"
         )
 
-    sent_message = await message.channel.send(
-        content=(
-            f"🔎 **تم استلام طلب البحث عن {query}**"
-            f"{recognized_text}\n"
-            "🔐 اختر نوع السكربت اللي تبيه من القائمة:"
-        ),
-        view=view
+    # ========================================================
+    # النظام القديم: قائمة اختيار نوع السكربت أولًا.
+    # ========================================================
+
+    if not AUTO_SEARCH_DIRECT:
+
+        view = AutoSearchKeyView(
+            message.author,
+            query,
+            query
+        )
+
+        sent_message = await message.channel.send(
+            content=(
+                f"🔎 **تم استلام طلب البحث عن {query}**"
+                f"{recognized_text}\n"
+                "🔐 اختر نوع السكربت اللي تبيه من القائمة:"
+            ),
+            view=view
+        )
+
+        view.message = sent_message
+
+        return
+
+    # ========================================================
+    # بحث تلقائي مباشر: العضو يكتب اسم الماب والبوت يبحث فورًا.
+    # ========================================================
+
+    selected_modes = [
+        "no_key",
+        "with_key"
+    ]
+
+    label = "🔓 بدون مفتاح + 🔑 بمفتاح"
+
+    content = (
+        f"⏳ **جاري البحث عن {query}...**"
+        f"{recognized_text}"
     )
 
-    view.message = sent_message
+    try:
+
+        sent_message = await message.reply(
+            content,
+            mention_author=False,
+            allowed_mentions=(
+                discord.AllowedMentions.none()
+            )
+        )
+
+    except Exception:
+
+        sent_message = await message.channel.send(
+            content,
+            allowed_mentions=(
+                discord.AllowedMentions.none()
+            )
+        )
+
+    responder = _MessageResponder(
+        sent_message,
+        message.guild
+    )
+
+    task = asyncio.create_task(
+        process_auto_search_request(
+            responder,
+            message.author.id,
+            query,
+            query,
+            selected_modes,
+            label
+        )
+    )
+
+    _direct_search_tasks.add(task)
+
+    task.add_done_callback(
+        _direct_search_tasks.discard
+    )
 
 
 # ============================================================
@@ -4596,7 +4667,7 @@ async def slash_set_search_room(
 
     await interaction.response.send_message(
         f"✅ تم تحديد {channel.mention} كروم البحث التلقائي.\n"
-        "🔎 العضو يكتب اسم الماب، وبعدها يختار **بدون مفتاح** أو **بمفتاح** أو **جميعهم**."
+        "🔎 العضو يكتب اسم الماب (عربي أو إنجليزي) والبوت يبحث له تلقائيًا فورًا."
     )
 
 
@@ -4698,7 +4769,7 @@ async def slash_show_search_help_rooms(interaction: discord.Interaction):
         if channel:
             rooms.append(channel.mention)
     await interaction.response.send_message(
-        "📚 **رومات المساعدة:**\\n" + (", ".join(rooms) if rooms else "لا توجد رومات محددة."),
+        "📚 **رومات المساعدة:**\n" + (", ".join(rooms) if rooms else "لا توجد رومات محددة."),
         ephemeral=True,
     )
 
