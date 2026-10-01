@@ -24,6 +24,7 @@ import validators
 import urllib.parse
 import time
 import aiohttp
+from functools import lru_cache
 import ipaddress
 
 load_dotenv()
@@ -1070,83 +1071,270 @@ def resolve_game_query(
     return query
 
 
+# ============================================================
+# SMART ARABIC / ENGLISH QUERY SYSTEM
+# يقبل العربي والإنجليزي: العربي يتحول لصيغ إنجليزية للبحث
+# + مطابقة صوتية لترتيب النتائج (بدون مكتبات إضافية وبدون رام).
+# ============================================================
+
+_ARABIC_CHAR_RE = re.compile(r"[\u0600-\u06FF]")
+
+
+def has_arabic(text):
+    return bool(_ARABIC_CHAR_RE.search(str(text or "")))
+
+
+# كلمات شائعة في أسماء الماب. الكلمات الفارغة = كلمات زائدة تُحذف من البحث.
+_AR_WORD_SOURCE = {
+    "ماب": "", "روبلوكس": "", "سكربت": "", "سكريبت": "", "اسكربت": "",
+    "سكربتات": "", "لعبة": "", "هاك": "",
+    "سيمولاتور": "simulator", "سيميولاتور": "simulator", "سيميوليتر": "simulator",
+    "سمولاتور": "simulator", "سيم": "sim", "تايكون": "tycoon", "تايكن": "tycoon",
+    "اوبي": "obby", "تاور": "tower", "وورز": "wars", "وور": "war",
+    "باتل": "battle", "قراوند": "ground", "قراوندز": "grounds", "جراوند": "ground",
+    "فروت": "fruit", "فروتس": "fruits", "سرفايفل": "survival", "ديفنس": "defense",
+    "ديفندرز": "defenders", "ادفنتشرز": "adventures", "ستوري": "story",
+    "لايف": "life", "ورلد": "world", "وورلد": "world", "زيرو": "zero",
+    "كينق": "king", "كينج": "king", "جاردن": "garden", "جرو": "grow",
+    "برينروت": "brainrot", "ستيل": "steal", "هيرو": "hero", "هيروز": "heroes",
+    "ايلاند": "island", "ايلاندز": "islands", "فارم": "farm", "كليكر": "clicker",
+    "كلكر": "clicker", "فايتنق": "fighting", "فايتنج": "fighting", "قيم": "game",
+    "قيمز": "games", "ماستر": "master", "ليجند": "legend", "ليقند": "legend",
+    "سيرفر": "server", "ريسنق": "racing", "ريسينق": "racing", "درايف": "drive",
+    "كار": "car", "كارز": "cars", "زومبي": "zombie", "زومبيز": "zombies",
+    "نينجا": "ninja", "انمي": "anime", "ماينكرافت": "minecraft", "هيل": "hell",
+    "اوف": "of", "اي": "a", "ان": "an", "ذا": "the", "ذي": "the",
+    "فيش": "fish", "بول": "ball", "بليد": "blade", "هاوس": "house",
+    "سيتي": "city", "ستريت": "street", "كوينز": "queens", "ديث": "death",
+    "ريفت": "rift", "ريسيل": "rival", "رايفلز": "rivals", "ريفالز": "rivals",
+}
+
+_AR_WORD_MAP = {}
+for _word, _english in _AR_WORD_SOURCE.items():
+    _normalized_word = normalize_game_name(_word)
+    if _normalized_word:
+        _AR_WORD_MAP[_normalized_word] = _english
+
+# نسختان صوتيتان لأن الحروف العربية تحتمل أكثر من نطق (ق = g أو q، ج = j أو g ...).
+_AR_LETTERS = (
+    {
+        "ا": "a", "ب": "b", "ت": "t", "ث": "th", "ج": "j", "ح": "h", "خ": "kh",
+        "د": "d", "ذ": "th", "ر": "r", "ز": "z", "س": "s", "ش": "sh", "ص": "s",
+        "ض": "d", "ط": "t", "ظ": "z", "ع": "a", "غ": "g", "ف": "f", "ق": "g",
+        "ك": "k", "ل": "l", "م": "m", "ن": "n", "ه": "h", "و": "o", "ي": "i",
+        "ء": "", "پ": "p", "ڤ": "v", "چ": "ch", "گ": "g", "ک": "k", "ی": "i",
+    },
+    {
+        "ا": "a", "ب": "b", "ت": "t", "ث": "th", "ج": "g", "ح": "h", "خ": "k",
+        "د": "d", "ذ": "z", "ر": "r", "ز": "z", "س": "s", "ش": "sh", "ص": "s",
+        "ض": "d", "ط": "t", "ظ": "z", "ع": "a", "غ": "g", "ف": "f", "ق": "q",
+        "ك": "c", "ل": "l", "م": "m", "ن": "n", "ه": "h", "و": "u", "ي": "e",
+        "ء": "", "پ": "p", "ڤ": "v", "چ": "ch", "گ": "g", "ک": "c", "ی": "e",
+    },
+)
+
+
+def _translit_word(word, variant):
+    table = _AR_LETTERS[variant]
+    last = len(word) - 1
+    out = []
+
+    for index, char in enumerate(word):
+        if not _ARABIC_CHAR_RE.match(char):
+            out.append(char)
+        elif char == "و" and index == 0:
+            out.append("w")
+        elif char == "ي" and index == 0:
+            out.append("y")
+        elif char == "ه" and index == last and variant == 1 and last >= 2:
+            continue
+        else:
+            out.append(table.get(char, ""))
+
+    text = re.sub(r"(.)\1{2,}", r"\1\1", "".join(out))
+
+    if variant == 0:
+        text = re.sub(r"ks$", "x", text)
+
+    return text
+
+
+def arabic_to_latin_queries(text, limit=2):
+    """يحول نص عربي (أو مختلط) إلى صيغ إنجليزية محتملة للبحث."""
+
+    normalized = normalize_game_name(text)
+
+    if not normalized or not has_arabic(normalized):
+        return []
+
+    results = []
+
+    for variant in range(2):
+        words = []
+
+        for token in normalized.split():
+            if token in _AR_WORD_MAP:
+                mapped = _AR_WORD_MAP[token]
+            elif has_arabic(token):
+                mapped = _translit_word(token, variant)
+            else:
+                mapped = token
+
+            if mapped:
+                words.append(mapped)
+
+        candidate = " ".join(words).strip()
+
+        if candidate and candidate not in results:
+            results.append(candidate)
+
+    return results[:limit]
+
+
+def latin_skeleton(text):
+    """هيكل صوتي (حروف ساكنة فقط) لمقارنة النطق العربي بالاسم الإنجليزي."""
+
+    value = re.sub(r"[^a-z0-9]", "", str(text or "").lower())
+
+    for old, new in (
+        ("x", "ks"), ("ph", "f"), ("ck", "k"), ("sh", "s"),
+        ("th", "t"), ("kh", "k"), ("ch", "s"),
+    ):
+        value = value.replace(old, new)
+
+    value = value.translate(
+        str.maketrans({"q": "k", "c": "k", "v": "f", "p": "b", "z": "s", "j": "g"})
+    )
+    value = re.sub(r"[aeiouyw]", "", value)
+
+    return re.sub(r"(.)\1+", r"\1", value)
+
+
+def phonetic_similarity(query, text):
+    skeleton_text = latin_skeleton(text)
+
+    if len(skeleton_text) < 2:
+        return 0.0
+
+    sources = arabic_to_latin_queries(query) if has_arabic(query) else [query]
+    best = 0.0
+
+    for source in sources:
+        skeleton_query = latin_skeleton(source)
+
+        if len(skeleton_query) < 2:
+            continue
+
+        if len(skeleton_query) >= 3 and skeleton_query in skeleton_text:
+            ratio = 0.9
+        elif len(skeleton_text) >= 3 and skeleton_text in skeleton_query:
+            ratio = 0.8
+        else:
+            ratio = difflib.SequenceMatcher(
+                None, skeleton_query, skeleton_text
+            ).ratio()
+
+        best = max(best, ratio)
+
+    return best
+
+
+def _exact_alias_game(query):
+    """اسم لعبة معروف فقط عند تطابق دقيق مع أحد الأسماء البديلة."""
+
+    normalized_query = normalize_game_name(query)
+    compact_query = compact_game_name(query)
+
+    if not normalized_query:
+        return None
+
+    for game_name, aliases in NORMALIZED_GAME_ALIASES.items():
+        if normalized_query in aliases:
+            return game_name
+
+        for alias in aliases:
+            if compact_query == compact_game_name(alias):
+                return game_name
+
+    return None
+
+
+@lru_cache(maxsize=512)
+def search_query_candidates(query):
+    """صيغ البحث بالترتيب: الاسم المعروف ← تحويل عربي→إنجليزي ← الأصل ← اقتراحات."""
+
+    query = str(query or "").strip()
+
+    if not query:
+        return ()
+
+    output = []
+    seen = set()
+
+    def add(value):
+        value = str(value or "").strip()
+        key = normalize_game_name(value)
+
+        if not value or not key or key in seen:
+            return
+
+        seen.add(key)
+        output.append(value)
+
+    arabic_query = has_arabic(query)
+    resolved = resolve_game_query(query)
+
+    if arabic_query:
+        # 1) تطابق دقيق مع اسم معروف، 2) تحويل عربي→إنجليزي،
+        # 3) التخمين التقريبي (قد يكون خاطئ لألعاب غير موجودة بالقائمة) كاحتياط فقط.
+        noise = {w for w, e in _AR_WORD_MAP.items() if not e}
+        cleaned = " ".join(
+            t for t in normalize_game_name(query).split() if t not in noise
+        )
+        exact = _exact_alias_game(cleaned or query)
+
+        if exact:
+            add(exact)
+
+        for item in arabic_to_latin_queries(query):
+            add(item)
+
+        if not has_arabic(resolved):
+            add(resolved)
+    else:
+        add(resolved)
+
+    add(query)
+
+    if len(output) < 4:
+        for suggestion in get_close_game_suggestions(query, limit=2):
+            add(suggestion)
+
+    return tuple(output[:4])
+
+
+def prepare_search_query(query):
+    """للأوامر المباشرة (/search): يحول العربي فقط، والإنجليزي يبقى كما كتبه المستخدم."""
+
+    query = str(query or "").strip()
+
+    if not query or not has_arabic(query):
+        return query
+
+    candidates = search_query_candidates(query)
+
+    return candidates[0] if candidates else query
+
+
 def get_game_search_queries(
     query
 ):
 
-    resolved = resolve_game_query(
-        query
-    )
-
-    queries = []
-
-    def add_query(
-        value
-    ):
-
-        if not value:
-
-            return
-
-        normalized = normalize_game_name(
-            value
+    return list(
+        search_query_candidates(
+            query
         )
-
-        if not normalized:
-
-            return
-
-        for existing in queries:
-
-            if (
-                normalize_game_name(
-                    existing
-                )
-                == normalized
-            ):
-
-                return
-
-        queries.append(
-            value
-        )
-
-    add_query(
-        resolved
-    )
-
-    add_query(
-        query
-    )
-
-    # ========================================================
-    # إضافة صيغ بحث إضافية عند الحاجة
-    # ========================================================
-
-    if len(
-        queries
-    ) < 3:
-
-        suggestions = (
-            get_close_game_suggestions(
-                query,
-                limit=3
-            )
-        )
-
-        for suggestion in suggestions:
-
-            add_query(
-                suggestion
-            )
-
-            if len(
-                queries
-            ) >= 3:
-
-                break
-
-    return queries[:3]
+    )[:4]
 
 
 # ============================================================
@@ -1271,7 +1459,7 @@ def _script_key(script):
     )
 
 
-def _score_auto_result(script, query):
+def _score_text_match(script, query):
     target = normalize_game_name(query)
     compact_target = compact_game_name(query)
 
@@ -1312,6 +1500,26 @@ def _score_auto_result(script, query):
 
         score = max(score, similarity * 75.0)
 
+    return score
+
+
+def _score_auto_result(script, query):
+    targets = search_query_candidates(query) or (str(query or ""),)
+    score = 0.0
+
+    for target in targets:
+        if target:
+            score = max(score, _score_text_match(script, target))
+
+    # مطابقة صوتية: "بلوكس فروت" ↔ "Blox Fruits" حتى لو التحويل غير دقيق.
+    if has_arabic(query):
+        game = script.get("game", {})
+        game_name = game.get("name", "") if isinstance(game, dict) else ""
+
+        for text in (script.get("title", ""), game_name):
+            if text:
+                score = max(score, phonetic_similarity(query, text) * 88.0)
+
     # دفعة خفيفة للموثوقية والشعبية، بدون كسر ترتيب الدقة.
     if script.get("verified", False):
         score += 3
@@ -1346,12 +1554,17 @@ async def fetch_auto_search_mode(search_query, key_mode):
 
         # نبدأ بالصيغة التي يفهمها النظام كاسم اللعبة.
         primary = search_queries[0] if search_queries else search_query
-        fallback = None
+        fallbacks = []
 
         for item in search_queries[1:]:
-            if normalize_game_name(item) != normalize_game_name(primary):
-                fallback = item
-                break
+            if (
+                normalize_game_name(item) != normalize_game_name(primary)
+                and item not in fallbacks
+            ):
+                fallbacks.append(item)
+
+        fallbacks = fallbacks[:2]
+        worker_started = time.monotonic()
 
         timeout = aiohttp.ClientTimeout(
             total=AUTO_SEARCH_TOTAL_TIMEOUT,
@@ -1397,8 +1610,11 @@ async def fetch_auto_search_mode(search_query, key_mode):
 
             had_network_error = all(network_errors) if network_errors else False
 
-            # نوسّع البحث فقط إذا لم نلقَ أي نتيجة من أي مصدر.
-            if not collected and fallback:
+            # نوسّع البحث فقط إذا لم نلقَ أي نتيجة (حتى صيغتين إضافيتين).
+            for fallback in fallbacks:
+                if collected or time.monotonic() - worker_started > 12:
+                    break
+
                 fallback_results = await asyncio.gather(
                     _scriptblox_search_async(session, fallback, key_mode),
                     _rscripts_search_async(session, fallback, key_mode),
@@ -1418,14 +1634,8 @@ async def fetch_auto_search_mode(search_query, key_mode):
                     if scripts:
                         _merge(scripts)
 
-                had_network_error = (
-                    had_network_error
-                    and (
-                        all(fallback_network_errors)
-                        if fallback_network_errors
-                        else had_network_error
-                    )
-                )
+                if fallback_network_errors and not all(fallback_network_errors):
+                    had_network_error = False
 
         if any_source_ok:
             had_network_error = False
@@ -2313,6 +2523,9 @@ def fetch_scripts(
     **filters
 ):
 
+    original_query = query
+    query = prepare_search_query(query)
+
     try:
 
         if api == "scriptblox":
@@ -2453,7 +2666,7 @@ def fetch_scripts(
                 None,
                 None,
                 f"Couldn't find any scripts "
-                f"matching '{query}'"
+                f"matching '{original_query}'"
             )
 
         elif api == "rscripts":
@@ -2553,7 +2766,7 @@ def fetch_scripts(
                 None,
                 None,
                 f"Couldn't find any scripts "
-                f"matching '{query}'"
+                f"matching '{original_query}'"
             )
 
     except requests.RequestException as e:
@@ -5585,320 +5798,6 @@ async def slash_rscripts_by_user(
         api="rscripts"
     )
 
-
-
-# ============================================================
-# ============================================================
-# KEY FETCH SYSTEM v5 — LOW RAM / HTTP ONLY
-# /مفتاح
-#
-# مهم للاستضافات المحدودة:
-# - لا Playwright.
-# - لا Chromium.
-# - لا تنزيل متصفح أثناء التشغيل.
-# - HTTP + redirects + HTML/JSON/meta/data extraction فقط.
-# هذا يمنع OOM الناتج عن تشغيل المتصفح أو تنزيله.
-# ============================================================
-
-KEY_ALLOWED_HOST = "auth.platorelay.com"
-KEY_PATTERN = re.compile(r"FREE_[a-fA-F0-9]{32}")
-
-KEY_HTTP_TIMEOUT = 10
-KEY_HTTP_CONNECT_TIMEOUT = 4
-KEY_MAX_REDIRECTS = 5
-KEY_MAX_BODY_BYTES = 1_500_000
-KEY_CACHE_TTL = 180
-KEY_MAX_INFLIGHT = 2
-
-KEY_USER_AGENT = (
-    "Mozilla/5.0 (Linux; Android 10) "
-    "AppleWebKit/537.36 (KHTML, like Gecko) "
-    "Chrome/124.0 Mobile Safari/537.36"
-)
-
-KEY_BLOCK_MARKERS = (
-    "just a moment",
-    "attention required",
-    "cf-chl",
-    "challenge-platform",
-    "verify you are human",
-    "are you a robot",
-    "captcha",
-    "access denied",
-    "checking your browser",
-    "enable javascript and cookies",
-)
-
-_key_cache = {}
-_key_inflight = {}
-_key_http_semaphore = asyncio.Semaphore(KEY_MAX_INFLIGHT)
-
-
-def _key_host_of(url):
-    try:
-        return (
-            urllib.parse.urlparse(str(url).strip()).hostname or ""
-        ).lower().rstrip(".")
-    except Exception:
-        return ""
-
-
-def _is_allowed_key_url(raw_url):
-    try:
-        parsed = urllib.parse.urlparse(str(raw_url).strip())
-        if parsed.scheme != "https":
-            return False
-        if (parsed.hostname or "").lower().rstrip(".") != KEY_ALLOWED_HOST:
-            return False
-        if parsed.username or parsed.password:
-            return False
-        if parsed.port not in (None, 443):
-            return False
-        return True
-    except Exception:
-        return False
-
-
-def _find_key(*texts):
-    for text in texts:
-        if not text:
-            continue
-        text = str(text)
-        match = KEY_PATTERN.search(text)
-        if match:
-            return match.group(0)
-        try:
-            decoded = urllib.parse.unquote(text)
-        except Exception:
-            decoded = ""
-        if decoded and decoded != text:
-            match = KEY_PATTERN.search(decoded)
-            if match:
-                return match.group(0)
-    return None
-
-
-def _find_embedded_key(body):
-    """يبحث عن المفتاح في HTML/JSON/attributes/meta/روابط بدون تشغيل JS."""
-    key = _find_key(body)
-    if key:
-        return key
-
-    text = str(body or "")
-
-    # بعض الصفحات تخزن القيمة في attributes أو JSON escaped.
-    patterns = (
-        r'(?i)(?:key|accessKey|license|token)\s*["\'=:]+\s*(FREE_[a-f0-9]{32})',
-        r'(?i)(?:data-key|data-token)\s*=\s*["\'](FREE_[a-f0-9]{32})',
-    )
-    for pattern in patterns:
-        match = re.search(pattern, text)
-        if match:
-            return match.group(1)
-
-    return None
-
-
-def _looks_blocked(text):
-    lowered = str(text or "").lower()
-    return any(marker in lowered for marker in KEY_BLOCK_MARKERS)
-
-
-def _short_error(error, limit=180):
-    message = str(error or "").strip().splitlines()
-    message = message[0].strip() if message else ""
-    if len(message) > limit:
-        message = message[:limit] + "…"
-    return message or type(error).__name__
-
-
-def _key_get_cached(url):
-    item = _key_cache.get(url)
-    if not item:
-        return None
-    if time.monotonic() - item[0] > KEY_CACHE_TTL:
-        _key_cache.pop(url, None)
-        return None
-    return item[1]
-
-
-def _key_set_cached(url, key):
-    _key_cache[url] = (time.monotonic(), key)
-    if len(_key_cache) > 100:
-        now = time.monotonic()
-        expired = [
-            u for u, item in _key_cache.items()
-            if now - item[0] > KEY_CACHE_TTL
-        ]
-        for u in expired:
-            _key_cache.pop(u, None)
-
-
-async def _fetch_key_http(url):
-    timeout = aiohttp.ClientTimeout(
-        total=KEY_HTTP_TIMEOUT,
-        connect=KEY_HTTP_CONNECT_TIMEOUT,
-        sock_read=6,
-    )
-
-    headers = {
-        "User-Agent": KEY_USER_AGENT,
-        "Accept": "text/html,application/xhtml+xml,application/json;q=0.9,*/*;q=0.8",
-        "Accept-Language": "en-US,en;q=0.9,ar;q=0.8",
-        "Cache-Control": "no-cache",
-    }
-
-    current = url
-
-    try:
-        async with _key_http_semaphore:
-            async with aiohttp.ClientSession(
-                timeout=timeout,
-                headers=headers,
-                raise_for_status=False,
-            ) as session:
-                for _ in range(KEY_MAX_REDIRECTS + 1):
-                    if not _is_allowed_key_url(current):
-                        return None, "❌ الرابط غير مسموح؛ يجب أن يكون من auth.platorelay.com."
-
-                    async with session.get(
-                        current,
-                        allow_redirects=False,
-                        max_redirects=0,
-                    ) as response:
-                        status = response.status
-
-                        if status in (301, 302, 303, 307, 308):
-                            location = response.headers.get("Location", "")
-                            if not location:
-                                return None, "❌ الموقع أرسل تحويلًا بدون وجهة."
-
-                            next_url = urllib.parse.urljoin(current, location)
-                            key = _find_key(next_url)
-                            if key:
-                                return key, None
-
-                            if not _is_allowed_key_url(next_url):
-                                return None, "❌ تم رفض التحويل إلى نطاق خارجي."
-                            current = next_url
-                            continue
-
-                        if status == 404:
-                            return None, "❌ الرابط غير موجود (404)."
-                        if status == 410:
-                            return None, "❌ الرابط منتهي أو محذوف (410)."
-                        if status == 429:
-                            return None, "⏳ الموقع حدّ الطلبات (429)، جرب بعد قليل."
-                        if status >= 500:
-                            return None, f"❌ الموقع أعاد خطأ {status}."
-
-                        # لا نقرأ أكثر من 1.5MB مهما كان حجم الصفحة.
-                        data = await response.content.read(KEY_MAX_BODY_BYTES)
-                        body = data.decode("utf-8", errors="ignore")
-
-                        key = _find_embedded_key(body)
-                        if key:
-                            return key, None
-
-                        # meta refresh يمكن اتباعه بدون Browser.
-                        meta_match = re.search(
-                            r'(?is)<meta[^>]+http-equiv=["\']?refresh["\']?[^>]+content=["\'][^"\']*url=([^"\'> ]+)',
-                            body,
-                        )
-                        if meta_match:
-                            next_url = urllib.parse.urljoin(current, meta_match.group(1).strip())
-                            if _is_allowed_key_url(next_url):
-                                current = next_url
-                                continue
-
-                        if _looks_blocked(body) or status in (401, 403, 503):
-                            return None, (
-                                "❌ الموقع يتطلب JavaScript/تحققًا لا يمكن تشغيله على هذه الاستضافة "
-                                "بدون Browser، وتم إيقاف ذلك عمدًا لحماية RAM."
-                            )
-
-                        return None, (
-                            "❌ الصفحة فتحت لكن المفتاح غير موجود في البيانات التي يمكن قراءتها "
-                            "بدون متصفح."
-                        )
-
-                return None, "❌ الرابط يحتوي على تحويلات كثيرة."
-
-    except asyncio.TimeoutError:
-        return None, "⏱️ انتهت مهلة الاتصال بالموقع."
-    except aiohttp.ClientConnectorError as error:
-        return None, f"❌ تعذر الاتصال بالموقع: {_short_error(error)}"
-    except aiohttp.ClientError as error:
-        return None, f"❌ خطأ اتصال: {_short_error(error)}"
-    except Exception as error:
-        print(f"❌ Key HTTP error: {type(error).__name__}: {error}")
-        return None, f"❌ تعذر جلب المفتاح: {_short_error(error)}"
-
-
-async def fetch_free_key(raw_url):
-    url = str(raw_url or "").strip()
-
-    if not url:
-        return None, "❌ لازم تحط رابط."
-    if not _is_allowed_key_url(url):
-        return None, f"❌ مسموح فقط بروابط https://{KEY_ALLOWED_HOST}"
-
-    cached = _key_get_cached(url)
-    if cached:
-        return cached, None
-
-    # طلب واحد فعلي لكل رابط؛ يمنع تكرار نفس العملية واستهلاك الشبكة.
-    existing = _key_inflight.get(url)
-    if existing:
-        return await existing
-
-    task = asyncio.create_task(_fetch_key_http(url))
-    _key_inflight[url] = task
-
-    try:
-        key, error = await task
-        if key:
-            _key_set_cached(url, key)
-        return key, error
-    finally:
-        if _key_inflight.get(url) is task:
-            _key_inflight.pop(url, None)
-
-
-@bot.tree.command(
-    name="مفتاح",
-    description="جلب المفتاح من رابط Platorelay"
-)
-@app_commands.describe(
-    url="رابط https://auth.platorelay.com"
-)
-async def slash_key(interaction: discord.Interaction, url: str):
-    await interaction.response.defer(ephemeral=True)
-
-    try:
-        key, error = await asyncio.wait_for(
-            fetch_free_key(url),
-            timeout=KEY_HTTP_TIMEOUT + 3,
-        )
-    except asyncio.TimeoutError:
-        key = None
-        error = "⏱️ انتهت المهلة أثناء جلب المفتاح."
-    except Exception as exc:
-        print(f"❌ /مفتاح unexpected error: {type(exc).__name__}: {exc}")
-        key = None
-        error = f"❌ خطأ غير متوقع: {_short_error(exc)}"
-
-    if key:
-        await interaction.followup.send(
-            f"🔑 **تم العثور على المفتاح:**\n```{key}```",
-            ephemeral=True,
-        )
-        return
-
-    await interaction.followup.send(
-        error or "❌ ما قدرت أجيب المفتاح.",
-        ephemeral=True,
-    )
 
 
 # ============================================================
