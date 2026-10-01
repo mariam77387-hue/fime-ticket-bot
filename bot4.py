@@ -300,333 +300,12 @@ class SearchHelpButtonView(discord.ui.View):
 
 
 # ============================================================
-# GAME ALIASES
+# GAME RESOLUTION
 # ============================================================
-
-GAME_ALIASES = {
-
-    "doors": [
-        "doors",
-        "door",
-        "doors roblox",
-        "دورز",
-        "دور",
-        "دورز روبلوكس",
-        "دورز ماب",
-        "الابواب",
-        "الباب"
-    ],
-
-    "murder mystery 2": [
-        "mm2",
-        "mm 2",
-        "murder mystery 2",
-        "murder mystery",
-        "murdermystery2",
-        "murder mystery ii",
-        "م م 2",
-        "ام ام 2",
-        "ام ام تو",
-        "مردر مستري 2",
-        "مردر ميستري 2",
-        "مردر",
-        "مرڈر",
-        "ام ام"
-    ],
-
-    "blox fruits": [
-        "blox fruits",
-        "bloxfruit",
-        "blox fruit",
-        "bf",
-        "بلوك فروت",
-        "بلوك فروتس",
-        "بلوكس فروت",
-        "بلوكس فروتس",
-        "بلوك فروتس روبلوكس"
-    ],
-
-    "grow a garden": [
-        "grow a garden",
-        "growagarden",
-        "grow a garden roblox",
-        "gag",
-        "جرو جاردن",
-        "قرو جاردن",
-        "جرو اي قاردن",
-        "جرو اغاردن",
-        "جرو ا جاردن",
-        "جرو جاردن روبلوكس"
-    ],
-
-    "steal a brainrot": [
-        "steal a brainrot",
-        "stealabrainrot",
-        "brainrot",
-        "steal brainrot",
-        "ستيل برينروت",
-        "ستيل اي برينروت",
-        "ستيل برين روت",
-        "برينروت"
-    ],
-
-    "steal an egg": [
-        "steal an egg",
-        "steal a egg",
-        "stealanegg",
-        "stealegg",
-        "steal egg",
-        "steal an egg roblox",
-        "steal a egg roblox",
-        "ستيل ان ايق",
-        "ستيل ان ايغ",
-        "ستيل اي ايق",
-        "ستيل ايق",
-        "ستيل ايغ",
-        "ستيل ان اَج",
-        "سرقة البيض",
-        "سرقه البيض",
-        "سرقة البيضة",
-        "سرقه البيض روبلوكس"
-    ],
-
-    "arsenal": [
-        "arsenal",
-        "ارسنال",
-        "ارسنل",
-        "ارسنال روبلوكس"
-    ],
-
-    "adopt me": [
-        "adopt me",
-        "adoptme",
-        "adopt",
-        "ادوبت مي",
-        "ادوبت",
-        "ادوبت مي روبلوكس"
-    ],
-
-    "brookhaven": [
-        "brookhaven",
-        "brook haven",
-        "بروك هافن",
-        "بروكهافن",
-        "بروك"
-    ],
-
-    "pet simulator 99": [
-        "pet simulator 99",
-        "pet sim 99",
-        "petsim99",
-        "ps99",
-        "pet sim",
-        "بت سيم 99",
-        "بت سيم",
-        "بيت سيم 99",
-        "بتسيم"
-    ],
-
-    "the strongest battlegrounds": [
-        "the strongest battlegrounds",
-        "strongest battlegrounds",
-        "tsb",
-        "strongest",
-        "ذا سترونقست باتل قراوند",
-        "ذا سترونقست",
-        "سترونقست",
-        "سترونجست",
-        "سترونقست باتل قراوند"
-    ],
-
-    "blade ball": [
-        "blade ball",
-        "bladeball",
-        "blade",
-        "بليد بول",
-        "بليدبال",
-        "بليد"
-    ],
-
-    "natural disaster survival": [
-        "natural disaster survival",
-        "natural disaster",
-        "nds",
-        "ناتشورال ديزاستر",
-        "ناتشرال ديزاستر",
-        "الكوارث الطبيعية"
-    ],
-
-    "tower of hell": [
-        "tower of hell",
-        "towerofhell",
-        "toh",
-        "تاور اوف هيل",
-        "تاور اوف هل",
-        "تاور"
-    ],
-
-    "piggy": [
-        "piggy",
-        "بيقي",
-        "بيجي",
-        "بقي"
-    ],
-
-    "rainbow friends": [
-        "rainbow friends",
-        "rainbowfriend",
-        "راينبو فريندز",
-        "رينبو فريندز",
-        "راينبو"
-    ],
-
-    "evade": [
-        "evade",
-        "ايفيد",
-        "إيفيد",
-        "ايفيد روبلوكس"
-    ],
-
-    "bedwars": [
-        "bedwars",
-        "bed wars",
-        "bedwar",
-        "بد وورز",
-        "بيد وورز",
-        "بدورز"
-    ],
-
-    "pet simulator x": [
-        "pet simulator x",
-        "pet sim x",
-        "petsimx",
-        "psx",
-        "بت سيم اكس",
-        "بت سيم x"
-    ],
-
-    "jailbreak": [
-        "jailbreak",
-        "جايليبريك",
-        "جيلبريك",
-        "جلبريك"
-    ],
-
-    "shindo life": [
-        "shindo life",
-        "shindolife",
-        "شيندو لايف",
-        "شندو لايف",
-        "شيندو"
-    ],
-
-    "anime defenders": [
-        "anime defenders",
-        "animedefenders",
-        "anime defender",
-        "انمي ديفندرز",
-        "انمي دفندرز",
-        "انمي ديفندرز"
-    ],
-
-    "anime adventures": [
-        "anime adventures",
-        "animeadventures",
-        "انمي ادفنتشرز",
-        "انمي ادفنشرز",
-        "انمي ادفنشر"
-    ],
-
-    "fisch": [
-        "fisch",
-        "fish",
-        "فيش",
-        "فش",
-        "فيش روبلوكس"
-    ],
-
-    "pet simulator": [
-        "pet simulator",
-        "pet sim",
-        "بت سيم",
-        "بيت سيم"
-    ],
-
-    "murder mystery": [
-        "murder mystery",
-        "murder mystery game",
-        "مردر مستري",
-        "مردر ميستري",
-        "مردر"
-    ],
-
-    "war tycoon": [
-        "war tycoon",
-        "wartycoon",
-        "war tycoon roblox",
-        "وار تايكون",
-        "وار تايكن",
-        "وار تايكون روبلوكس",
-        "تايكون الحرب"
-    ],
-
-    "tradelands": [
-        "tradelands",
-        "trade lands",
-        "تريدلاندز",
-        "تريد لاندز"
-    ],
-
-    "islands": [
-        "islands",
-        "skyblock roblox",
-        "ايلاندز",
-        "جزر"
-    ],
-
-    "king legacy": [
-        "king legacy",
-        "kinglegacy",
-        "كينغ ليقاسي",
-        "كنق ليجاسي",
-        "كينج ليقاسي"
-    ],
-
-    "world zero": [
-        "world zero",
-        "worldzero",
-        "وورلد زيرو",
-        "ورلد زيرو"
-    ],
-
-    "combat warriors": [
-        "combat warriors",
-        "combatwarriors",
-        "كومبات واريورز",
-        "كومبات وريورز"
-    ],
-
-    "da hood": [
-        "da hood",
-        "dahood",
-        "دا هود",
-        "داهود"
-    ],
-
-    "arm wrestle simulator": [
-        "arm wrestle simulator",
-        "armwrestlesimulator",
-        "ارم ريسل سيميوليتر",
-        "مصارعة الذراع"
-    ],
-
-    "toilet tower defense": [
-        "toilet tower defense",
-        "ttd",
-        "تويلت تاور ديفنس",
-        "تواليت تاور ديفينس"
-    ]
-}
+# لا توجد قائمة مابات ثابتة هنا.
+# البحث يعتمد على الاسم الذي كتبه العضو + التحويل العربي/الإنجليزي،
+# ثم يقرر API وترتيب النتائج بناءً على اسم اللعبة الحقيقي.
+GAME_ALIASES = {}
 
 
 # ============================================================
@@ -719,365 +398,28 @@ def compact_game_name(
     )
 
 
+# لا توجد aliases ثابتة: هذا متعمد حتى لا يتحول بحث مثل
+# "Timebomb" أو "Steal an Egg" إلى لعبة أخرى مسجلة داخل البوت.
 NORMALIZED_GAME_ALIASES = {}
 
-for game_name, aliases in GAME_ALIASES.items():
 
-    normalized_aliases = []
+def get_close_game_suggestions(query, limit=3):
+    # الاقتراحات الثابتة كانت أحد مصادر الخلط، لذلك لا نقترح ألعابًا
+    # من قائمة داخلية لمجرد تشابه الاسم.
+    return []
 
-    for alias in aliases:
 
-        normalized = normalize_game_name(
-            alias
-        )
-
-        if normalized:
-
-            normalized_aliases.append(
-                normalized
-            )
-
-    normalized_game = normalize_game_name(
-        game_name
-    )
-
-    normalized_aliases.append(
-        normalized_game
-    )
-
-    NORMALIZED_GAME_ALIASES[
-        normalized_game
-    ] = list(
-        dict.fromkeys(
-            normalized_aliases
-        )
-    )
-
-
-def get_close_game_suggestions(
-    query,
-    limit=3
-):
-
-    compact_query = compact_game_name(
-        query
-    )
-
-    if len(
-        compact_query
-    ) < 3:
-
-        return []
-
-    matches = []
-
-    for game_name, aliases in (
-        NORMALIZED_GAME_ALIASES.items()
-    ):
-
-        best_score = 0.0
-
-        for alias in aliases:
-
-            compact_alias = compact_game_name(
-                alias
-            )
-
-            if len(
-                compact_alias
-            ) < 3:
-
-                continue
-
-            score = difflib.SequenceMatcher(
-                None,
-                compact_query,
-                compact_alias
-            ).ratio()
-
-            if (
-                compact_query[:3]
-                == compact_alias[:3]
-            ):
-
-                score += 0.08
-
-            best_score = max(
-                best_score,
-                score
-            )
-
-        if best_score >= 0.48:
-
-            matches.append(
-                (
-                    best_score,
-                    game_name
-                )
-            )
-
-    matches.sort(
-        reverse=True
-    )
-
-    output = []
-
-    for _, game_name in matches:
-
-        if game_name not in output:
-
-            output.append(
-                game_name
-            )
-
-        if len(
-            output
-        ) >= limit:
-
-            break
-
-    return output
-
-
-def resolve_game_query(
-    query
-):
-
-    normalized_query = normalize_game_name(
-        query
-    )
-
-    if not normalized_query:
-
-        return query
-
-    compact_query = compact_game_name(
-        query
-    )
-
-    # ========================================================
-    # 1. تطابق مباشر
-    # ========================================================
-
-    for game_name, aliases in (
-        NORMALIZED_GAME_ALIASES.items()
-    ):
-
-        if normalized_query in aliases:
-
-            return game_name
-
-    # ========================================================
-    # 2. تطابق بدون مسافات
-    # ========================================================
-
-    for game_name, aliases in (
-        NORMALIZED_GAME_ALIASES.items()
-    ):
-
-        for alias in aliases:
-
-            compact_alias = compact_game_name(
-                alias
-            )
-
-            if (
-                compact_query
-                == compact_alias
-            ):
-
-                return game_name
-
-    # ========================================================
-    # 3. احتواء الاسم
-    # ========================================================
-
-    for game_name, aliases in (
-        NORMALIZED_GAME_ALIASES.items()
-    ):
-
-        for alias in aliases:
-
-            if len(alias) < 4:
-
-                continue
-
-            compact_alias = compact_game_name(
-                alias
-            )
-
-            if (
-                alias in normalized_query
-                or normalized_query in alias
-                or compact_alias in compact_query
-                or compact_query in compact_alias
-            ):
-
-                return game_name
-
-    # ========================================================
-    # 4. البحث الذكي بالأخطاء الإملائية
-    # ========================================================
-
-    if len(
-        compact_query
-    ) >= 3:
-
-        best_match = None
-        best_score = 0.0
-
-        for game_name, aliases in (
-            NORMALIZED_GAME_ALIASES.items()
-        ):
-
-            for alias in aliases:
-
-                compact_alias = compact_game_name(
-                    alias
-                )
-
-                if len(
-                    compact_alias
-                ) < 3:
-
-                    continue
-
-                score = difflib.SequenceMatcher(
-                    None,
-                    compact_query,
-                    compact_alias
-                ).ratio()
-
-                if (
-                    len(compact_query) >= 4
-                    and len(compact_alias) >= 4
-                    and compact_query[:3]
-                    == compact_alias[:3]
-                ):
-
-                    score += 0.08
-
-                length_difference = abs(
-                    len(compact_query)
-                    - len(compact_alias)
-                )
-
-                if length_difference <= 2:
-
-                    score += 0.03
-
-                if score > best_score:
-
-                    best_score = score
-                    best_match = game_name
-
-        if len(
-            compact_query
-        ) <= 4:
-
-            threshold = 0.80
-
-        elif len(
-            compact_query
-        ) <= 6:
-
-            threshold = 0.64
-
-        else:
-
-            threshold = 0.52
-
-        if (
-            best_match
-            and best_score >= threshold
-        ):
-
-            return best_match
-
-    # ========================================================
-    # 5. مطابقة الكلمات
-    # ========================================================
-
-    query_words = set(
-        normalized_query.split()
-    )
-
-    if query_words:
-
-        best_game = None
-        best_score = 0.0
-
-        for game_name, aliases in (
-            NORMALIZED_GAME_ALIASES.items()
-        ):
-
-            for alias in aliases:
-
-                alias_words = set(
-                    alias.split()
-                )
-
-                if not alias_words:
-
-                    continue
-
-                overlap = (
-                    len(
-                        query_words
-                        & alias_words
-                    )
-                    / max(
-                        len(
-                            query_words
-                            | alias_words
-                        ),
-                        1
-                    )
-                )
-
-                partial = 0.0
-
-                for word in query_words:
-
-                    for alias_word in alias_words:
-
-                        if (
-                            len(word) >= 3
-                            and len(alias_word) >= 3
-                        ):
-
-                            partial = max(
-                                partial,
-                                difflib.SequenceMatcher(
-                                    None,
-                                    word,
-                                    alias_word
-                                ).ratio()
-                            )
-
-                score = (
-                    overlap * 0.55
-                ) + (
-                    partial * 0.45
-                )
-
-                if score > best_score:
-
-                    best_score = score
-                    best_game = game_name
-
-        if (
-            best_game
-            and best_score >= 0.55
-        ):
-
-            return best_game
-
-    return query
+def resolve_game_query(query):
+    # لا نعيد كتابة اسم اللعبة إلى اسم مسجل.
+    # نترك API يستلم استعلام العضو كما هو.
+    return str(query or "").strip()
 
 
 # ============================================================
 # SMART ARABIC / ENGLISH QUERY SYSTEM
+# ============================================================
+
+
 # يقبل العربي والإنجليزي: العربي يتحول لصيغ إنجليزية للبحث
 # + مطابقة صوتية لترتيب النتائج (بدون مكتبات إضافية وبدون رام).
 # ============================================================
@@ -1244,32 +586,10 @@ def phonetic_similarity(query, text):
     return best
 
 
-def _exact_alias_game(query):
-    """اسم لعبة معروف فقط عند تطابق دقيق مع أحد الأسماء البديلة."""
-
-    normalized_query = normalize_game_name(query)
-    compact_query = compact_game_name(query)
-
-    if not normalized_query:
-        return None
-
-    for game_name, aliases in NORMALIZED_GAME_ALIASES.items():
-        if normalized_query in aliases:
-            return game_name
-
-        for alias in aliases:
-            if compact_query == compact_game_name(alias):
-                return game_name
-
-    return None
-
-
 @lru_cache(maxsize=512)
 def search_query_candidates(query):
-    """صيغ البحث بالترتيب: الاسم المعروف ← تحويل عربي→إنجليزي ← الأصل ← اقتراحات."""
-
+    """يبني صيغًا من نفس استعلام العضو فقط؛ لا يختار لعبة من قائمة داخلية."""
     query = str(query or "").strip()
-
     if not query:
         return ()
 
@@ -1279,55 +599,28 @@ def search_query_candidates(query):
     def add(value):
         value = str(value or "").strip()
         key = normalize_game_name(value)
-
         if not value or not key or key in seen:
             return
-
         seen.add(key)
         output.append(value)
 
-    arabic_query = has_arabic(query)
-    resolved = resolve_game_query(query)
-
-    if arabic_query:
-        # 1) تطابق دقيق مع اسم معروف، 2) تحويل عربي→إنجليزي،
-        # 3) التخمين التقريبي (قد يكون خاطئ لألعاب غير موجودة بالقائمة) كاحتياط فقط.
-        noise = {w for w, e in _AR_WORD_MAP.items() if not e}
-        cleaned = " ".join(
-            t for t in normalize_game_name(query).split() if t not in noise
-        )
-        exact = _exact_alias_game(cleaned or query)
-
-        if exact:
-            add(exact)
-
-        for item in arabic_to_latin_queries(query):
-            add(item)
-
-        if not has_arabic(resolved):
-            add(resolved)
-    else:
-        add(resolved)
-
+    # الأصل أولًا: لا نضحي بدقة اسم اللعبة الذي كتبه العضو.
     add(query)
 
-    if len(output) < 4:
-        for suggestion in get_close_game_suggestions(query, limit=2):
-            add(suggestion)
+    if has_arabic(query):
+        for item in arabic_to_latin_queries(query, limit=3):
+            add(item)
 
     return tuple(output[:4])
 
 
 def prepare_search_query(query):
-    """للأوامر المباشرة (/search): يحول العربي فقط، والإنجليزي يبقى كما كتبه المستخدم."""
-
+    """يبقي الإنجليزي كما كتبه العضو، ويحوّل العربي فقط عند الحاجة."""
     query = str(query or "").strip()
-
     if not query or not has_arabic(query):
         return query
 
     candidates = search_query_candidates(query)
-
     return candidates[0] if candidates else query
 
 
@@ -1354,12 +647,12 @@ async def _scriptblox_search_async(session, query, key_mode):
     params = {
         "q": query,
         "page": 1,
-        "max": 20,
+        "max": 30,
         "mode": "free",
         "key": key_value,
         "sortBy": "accuracy",
         "order": "desc",
-        "strict": "false",
+        "strict": "true",
     }
 
     headers = {
@@ -1464,77 +757,141 @@ def _script_key(script):
     )
 
 
+def _game_name_from_script(script):
+    game = script.get("game", {})
+    if isinstance(game, dict):
+        return str(
+            game.get("name")
+            or game.get("title")
+            or ""
+        ).strip()
+    return ""
+
+
+def _game_relevance_score(game_name, query):
+    """Strictly scores the actual game name, not just the script title."""
+    if not game_name or not query:
+        return 0.0
+
+    candidates = [str(query).strip()]
+    if has_arabic(query):
+        candidates.extend(arabic_to_latin_queries(query, limit=3))
+
+    target_values = []
+    for candidate in candidates:
+        normalized = normalize_game_name(candidate)
+        compact = compact_game_name(candidate)
+        if normalized and compact:
+            target_values.append((normalized, compact))
+
+    game_norm = normalize_game_name(game_name)
+    game_compact = compact_game_name(game_name)
+
+    best = 0.0
+
+    for target_norm, target_compact in target_values:
+        if game_norm == target_norm or game_compact == target_compact:
+            best = max(best, 1.0)
+            continue
+
+        # "steal an egg 2" should still match "steal an egg".
+        if game_norm.startswith(target_norm + " ") or target_norm.startswith(game_norm + " "):
+            best = max(best, 0.94)
+            continue
+
+        if target_compact in game_compact or game_compact in target_compact:
+            # Avoid accepting tiny fragments such as "egg" -> unrelated titles.
+            if min(len(target_compact), len(game_compact)) >= 6:
+                best = max(best, 0.88)
+                continue
+
+        target_words = {
+            w for w in target_norm.split()
+            if len(w) >= 2
+        }
+        game_words = {
+            w for w in game_norm.split()
+            if len(w) >= 2
+        }
+
+        if target_words:
+            overlap = len(target_words & game_words) / len(target_words)
+            if overlap >= 1.0:
+                best = max(best, 0.91)
+            elif overlap >= 0.75 and len(target_words) >= 2:
+                best = max(best, 0.80)
+
+        similarity = difflib.SequenceMatcher(
+            None, target_compact, game_compact
+        ).ratio()
+        best = max(best, similarity)
+
+    return best
+
+
 def _score_text_match(script, query):
     target = normalize_game_name(query)
     compact_target = compact_game_name(query)
+    game_name = _game_name_from_script(script)
 
+    # Game name is the primary signal.
+    game_score = _game_relevance_score(game_name, query)
+    score = game_score * 150.0
+
+    # Script title is only secondary. This prevents "Timebomb" script titles
+    # from beating a result whose actual game is different.
     title = normalize_game_name(script.get("title", ""))
-    game = script.get("game", {})
-    game_name = (
-        normalize_game_name(game.get("name", ""))
-        if isinstance(game, dict)
-        else ""
-    )
+    if title and target:
+        compact_title = compact_game_name(title)
 
-    candidates = [title, game_name]
-    score = 0.0
-
-    for candidate in candidates:
-        if not candidate:
-            continue
-
-        compact_candidate = compact_game_name(candidate)
-
-        if candidate == target:
-            score = max(score, 100.0)
-            continue
-
-        if candidate.startswith(target) or target.startswith(candidate):
-            score = max(score, 92.0)
-            continue
-
-        if target in candidate or candidate in target:
-            score = max(score, 86.0)
-            continue
-
-        similarity = difflib.SequenceMatcher(
-            None,
-            compact_target,
-            compact_candidate,
-        ).ratio()
-
-        score = max(score, similarity * 75.0)
+        if title == target or compact_title == compact_target:
+            score += 45.0
+        elif target in title or compact_target in compact_title:
+            score += 24.0
+        else:
+            score += difflib.SequenceMatcher(
+                None, compact_target, compact_title
+            ).ratio() * 18.0
 
     return score
 
 
 def _score_auto_result(script, query):
-    targets = search_query_candidates(query) or (str(query or ""),)
-    score = 0.0
+    score = _score_text_match(script, query)
 
-    for target in targets:
-        if target:
-            score = max(score, _score_text_match(script, target))
+    game_name = _game_name_from_script(script)
+    relevance = _game_relevance_score(game_name, query)
 
-    # مطابقة صوتية: "بلوكس فروت" ↔ "Blox Fruits" حتى لو التحويل غير دقيق.
-    if has_arabic(query):
-        game = script.get("game", {})
-        game_name = game.get("name", "") if isinstance(game, dict) else ""
+    # If the API supplied a game name, require strong game relevance.
+    # Missing game metadata is tolerated because some RScripts entries omit it.
+    if game_name and relevance < 0.72:
+        return -1000.0
 
-        for text in (script.get("title", ""), game_name):
-            if text:
-                score = max(score, phonetic_similarity(query, text) * 88.0)
-
-    # دفعة خفيفة للموثوقية والشعبية، بدون كسر ترتيب الدقة.
     if script.get("verified", False):
-        score += 3
+        score += 2.0
 
     try:
-        score += min(float(script.get("views", 0) or 0) / 10000, 8)
+        score += min(float(script.get("views", 0) or 0) / 20000.0, 4.0)
     except Exception:
         pass
 
     return score
+
+
+def _filter_relevant_results(scripts, query):
+    """Remove obvious wrong-game matches before pagination/ranking."""
+    output = []
+    for script in scripts or []:
+        if not isinstance(script, dict):
+            continue
+
+        game_name = _game_name_from_script(script)
+        if game_name and _game_relevance_score(game_name, query) < 0.72:
+            continue
+
+        output.append(script)
+
+    return output
 
 
 async def fetch_auto_search_mode(search_query, key_mode):
@@ -1584,7 +941,8 @@ async def fetch_auto_search_mode(search_query, key_mode):
 
         def _merge(results):
             nonlocal any_source_ok
-            for script in results:
+            relevant_results = _filter_relevant_results(results, search_query)
+            for script in relevant_results:
                 any_source_ok = True
                 key = _script_key(script)
                 if key not in seen:
@@ -1706,7 +1064,7 @@ class AutoSearchKeySelect(discord.ui.Select):
         super().__init__(
             placeholder="🔐 اختر نوع السكربت...",
             min_values=1,
-            max_values=2,
+            max_values=1,
             options=options,
             row=0,
         )
@@ -1902,10 +1260,17 @@ async def process_auto_search_request(
                     )
                     collected.append(item)
 
+        collected = _filter_relevant_results(
+            collected,
+            query or resolved_query,
+        )
+
+        await _attach_roblox_thumbnail_if_missing(collected[:8])
+
         collected.sort(
             key=lambda script: _score_auto_result(
                 script,
-                resolved_query or query,
+                query or resolved_query,
             ),
             reverse=True,
         )
@@ -1914,30 +1279,16 @@ async def process_auto_search_request(
         elapsed = time.perf_counter() - started
 
         if not collected:
-            suggestions = get_close_game_suggestions(
-                query,
-                limit=3,
-            )
-
             if had_network_error:
                 content = (
                     "⚠️ **تعذر الوصول لمصدر البحث حاليًا.**\n"
                     "جرب البحث مرة ثانية بعد قليل."
                 )
             else:
-                suggestion_text = ""
-                if suggestions:
-                    suggestion_text = (
-                        "\n\n💡 **اقتراحات قريبة:** "
-                        + " • ".join(
-                            f"`{item}`" for item in suggestions
-                        )
-                    )
-
                 content = (
-                    f"❌ **ما لقيت نتائج** للماب **{query}**.\n"
-                    f"🔐 البحث: **{label}**"
-                    f"{suggestion_text}"
+                    f"❌ **ما لقيت نتائج مطابقة بشكل موثوق** للماب **{query}**.\n"
+                    f"🔐 البحث: **{label}**\n"
+                    "💡 ما راح أعرض مابًا مختلفًا لمجرد أن اسمه قريب من بحثك."
                 )
 
             await interaction.edit_original_response(
@@ -2317,110 +1668,24 @@ async def automatic_game_search(
     message,
     query
 ):
-
-    candidates = search_query_candidates(
+    # البحث يبدأ باختيار نوع السكربت بدل إجبار العضو على خلط
+    # نتائج بدون مفتاح وبمفتاح في نفس الصفحة.
+    view = AutoSearchKeyView(
+        message.author,
+        query,
         query
     )
 
-    understood = (
-        candidates[0]
-        if candidates
-        else query
+    sent_message = await message.channel.send(
+        content=(
+            f"🔎 **البحث عن:** `{query}`\n"
+            "🔐 اختر نوع السكربت: **بدون مفتاح / بمفتاح / جميعهم**"
+        ),
+        view=view,
+        allowed_mentions=discord.AllowedMentions.none(),
     )
 
-    recognized_text = ""
-
-    if (
-        normalize_game_name(understood)
-        != normalize_game_name(query)
-    ):
-
-        recognized_text = (
-            f"\n🎯 فهمت أنك تقصد: "
-            f"**{understood}**"
-        )
-
-    # ========================================================
-    # النظام القديم: قائمة اختيار نوع السكربت أولًا.
-    # ========================================================
-
-    if not AUTO_SEARCH_DIRECT:
-
-        view = AutoSearchKeyView(
-            message.author,
-            query,
-            query
-        )
-
-        sent_message = await message.channel.send(
-            content=(
-                f"🔎 **تم استلام طلب البحث عن {query}**"
-                f"{recognized_text}\n"
-                "🔐 اختر نوع السكربت اللي تبيه من القائمة:"
-            ),
-            view=view
-        )
-
-        view.message = sent_message
-
-        return
-
-    # ========================================================
-    # بحث تلقائي مباشر: العضو يكتب اسم الماب والبوت يبحث فورًا.
-    # ========================================================
-
-    selected_modes = [
-        "no_key",
-        "with_key"
-    ]
-
-    label = "🔓 بدون مفتاح + 🔑 بمفتاح"
-
-    content = (
-        f"⏳ **جاري البحث عن {query}...**"
-        f"{recognized_text}"
-    )
-
-    try:
-
-        sent_message = await message.reply(
-            content,
-            mention_author=False,
-            allowed_mentions=(
-                discord.AllowedMentions.none()
-            )
-        )
-
-    except Exception:
-
-        sent_message = await message.channel.send(
-            content,
-            allowed_mentions=(
-                discord.AllowedMentions.none()
-            )
-        )
-
-    responder = _MessageResponder(
-        sent_message,
-        message.guild
-    )
-
-    task = asyncio.create_task(
-        process_auto_search_request(
-            responder,
-            message.author.id,
-            query,
-            query,
-            selected_modes,
-            label
-        )
-    )
-
-    _direct_search_tasks.add(task)
-
-    task.add_done_callback(
-        _direct_search_tasks.discard
-    )
+    view.message = sent_message
 
 
 # ============================================================
@@ -3344,6 +2609,85 @@ def get_static_image_url(*candidates):
     return None
 
 
+async def _attach_roblox_thumbnail_if_missing(scripts):
+    """يحاول إضافة صورة اللعبة من Roblox فقط عند غياب الصورة الأصلية."""
+    candidates = [
+        script for script in (scripts or [])
+        if isinstance(script, dict) and not get_static_image_url(
+            script.get("image"),
+            (script.get("game") or {}).get("imageUrl") if isinstance(script.get("game"), dict) else None,
+            (script.get("game") or {}).get("image") if isinstance(script.get("game"), dict) else None,
+            (script.get("game") or {}).get("thumbnail") if isinstance(script.get("game"), dict) else None,
+        )
+    ]
+
+    # لا نفتح متصفحًا؛ طلب HTTP خفيف فقط، وبحد أقصى 8 ألعاب مختلفة.
+    place_ids = []
+    seen_ids = set()
+
+    for script in candidates:
+        game = script.get("game", {})
+        if not isinstance(game, dict):
+            continue
+
+        raw_id = (
+            game.get("gameId")
+            or game.get("placeId")
+            or script.get("placeId")
+        )
+        try:
+            place_id = int(str(raw_id))
+        except (TypeError, ValueError):
+            continue
+
+        if place_id and place_id not in seen_ids:
+            seen_ids.add(place_id)
+            place_ids.append((place_id, script))
+
+        if len(place_ids) >= 8:
+            break
+
+    if not place_ids:
+        return
+
+    ids = ",".join(str(pid) for pid, _ in place_ids)
+    url = (
+        "https://thumbnails.roblox.com/v1/games/icons"
+        f"?placeIds={ids}&returnPolicy=PlaceHolder"
+        "&size=512x512&format=Png&isCircular=false"
+    )
+
+    timeout = aiohttp.ClientTimeout(total=3, connect=1.5, sock_read=2.5)
+
+    try:
+        async with aiohttp.ClientSession(timeout=timeout) as session:
+            async with session.get(
+                url,
+                headers={"User-Agent": "Team-Fime-Search/5.0", "Accept": "application/json"},
+            ) as response:
+                if response.status != 200:
+                    return
+                data = await response.json(content_type=None)
+
+        image_by_id = {}
+        for item in data.get("data", []) if isinstance(data, dict) else []:
+            try:
+                pid = int(item.get("targetId"))
+            except (TypeError, ValueError):
+                continue
+            image = item.get("imageUrl")
+            if image:
+                image_by_id[pid] = image
+
+        for pid, script in place_ids:
+            image = image_by_id.get(pid)
+            if image:
+                script["_fime_game_image"] = image
+
+    except Exception as exc:
+        print(f"⚠️ Roblox thumbnail lookup skipped: {exc}")
+
+
 def create_embed(
     script,
     page,
@@ -3401,6 +2745,7 @@ def create_embed(
             owner.get("image"),
             owner.get("avatar"),
             owner.get("avatarUrl"),
+            script.get("_fime_game_image"),
         )
 
         views = script.get(
@@ -3725,6 +3070,7 @@ def create_embed(
 
         image_url = get_static_image_url(
             script.get("image"),
+            script.get("_fime_game_image"),
             user_avatar_url,
         )
 
