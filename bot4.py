@@ -50,9 +50,11 @@ AUTO_SEARCH_CACHE_TTL = 120
 AUTO_SEARCH_MAX_RESULTS = 30
 
 # مهلات مستقلة حتى لا يعلق طلب واحد كل البحث.
-AUTO_SEARCH_TOTAL_TIMEOUT = 7
-AUTO_SEARCH_CONNECT_TIMEOUT = 3
-AUTO_SEARCH_READ_TIMEOUT = 5
+AUTO_SEARCH_TOTAL_TIMEOUT = 2.8
+AUTO_SEARCH_CONNECT_TIMEOUT = 1.4
+AUTO_SEARCH_READ_TIMEOUT = 2.4
+# حد زمني مستهدف لمسار البحث الكامل؛ لا نسمح بسلاسل fallback طويلة.
+AUTO_SEARCH_MAX_RESULTS = 30
 
 # True = العضو يكتب اسم الماب والبوت يبحث فورًا بالنوعين (بدون قائمة اختيار).
 # False = يرجع للنظام القديم (قائمة اختيار النوع أولًا).
@@ -768,125 +770,185 @@ def _game_name_from_script(script):
     return ""
 
 
+def _search_tokens(text):
+    """كلمات الاسم بعد تنظيف الكلمات العامة؛ تستخدم فقط للمطابقة الدقيقة."""
+    value = normalize_game_name(text)
+    if not value:
+        return []
+    stop = {"a", "an", "the", "of", "and", "in", "on", "for", "game"}
+    return [
+        token for token in value.split()
+        if token and token not in stop and len(token) >= 2
+    ]
+
+
 def _game_relevance_score(game_name, query):
-    """Strictly scores the actual game name, not just the script title."""
+    """
+    مطابقة صارمة لاسم اللعبة نفسه.
+    مهم: لا نعطي نقاطًا عالية لتشابه حرفي ضعيف مثل:
+    Timebomb -> Aimbot
+    Steal an Egg -> Steal an Brainrot
+    """
     if not game_name or not query:
+        return 0.0
+
+    game_norm = normalize_game_name(game_name)
+    if not game_norm:
         return 0.0
 
     candidates = [str(query).strip()]
     if has_arabic(query):
         candidates.extend(arabic_to_latin_queries(query, limit=3))
 
-    target_values = []
-    for candidate in candidates:
-        normalized = normalize_game_name(candidate)
-        compact = compact_game_name(candidate)
-        if normalized and compact:
-            target_values.append((normalized, compact))
-
-    game_norm = normalize_game_name(game_name)
-    game_compact = compact_game_name(game_name)
-
     best = 0.0
 
-    for target_norm, target_compact in target_values:
-        if game_norm == target_norm or game_compact == target_compact:
+    for candidate in candidates:
+        target_norm = normalize_game_name(candidate)
+        if not target_norm:
+            continue
+
+        target_compact = compact_game_name(candidate)
+        game_compact = compact_game_name(game_name)
+
+        # 1) تطابق كامل.
+        if target_norm == game_norm or target_compact == game_compact:
             best = max(best, 1.0)
             continue
 
-        # "steal an egg 2" should still match "steal an egg".
-        if game_norm.startswith(target_norm + " ") or target_norm.startswith(game_norm + " "):
-            best = max(best, 0.94)
+        target_tokens = _search_tokens(candidate)
+        game_tokens = _search_tokens(game_name)
+
+        if not target_tokens or not game_tokens:
             continue
 
-        if target_compact in game_compact or game_compact in target_compact:
-            # Avoid accepting tiny fragments such as "egg" -> unrelated titles.
-            if min(len(target_compact), len(game_compact)) >= 6:
-                best = max(best, 0.88)
+        target_set = set(target_tokens)
+        game_set = set(game_tokens)
+
+        # 2) كل الكلمات المهمة المطلوبة موجودة في اسم اللعبة.
+        # يسمح بإضافة كلمات وصفية في اسم Roblox، لكن لا يسمح باستبدال كلمة.
+        missing = target_set - game_set
+        if not missing:
+            if len(target_set) >= 2:
+                extra = game_set - target_set
+                if len(extra) <= 2:
+                    best = max(best, 0.96 if not extra else 0.93)
+                    continue
+            elif len(target_tokens[0]) >= 5:
+                extra = game_set - target_set
+                if len(extra) <= 1:
+                    best = max(best, 0.94)
+                    continue
+
+        # 3) الاسم المطلوب قد يكون اختصارًا/صيغة رقمية من نفس الاسم.
+        # نسمح فقط إذا كانت السلسلة الطويلة تبدأ بالاسم المطلوب أو العكس،
+        # وليس مجرد احتواء جزء قصير منه.
+        if len(target_compact) >= 7 and (
+            game_compact.startswith(target_compact)
+            or target_compact.startswith(game_compact)
+        ):
+            length_gap = abs(len(game_compact) - len(target_compact))
+            if length_gap <= max(4, int(len(target_compact) * 0.35)):
+                best = max(best, 0.91)
                 continue
 
-        target_words = {
-            w for w in target_norm.split()
-            if len(w) >= 2
-        }
-        game_words = {
-            w for w in game_norm.split()
-            if len(w) >= 2
-        }
+        # 4) تشابه إملائي قوي جدًا، مع منع الحالات القصيرة/المضللة.
+        if len(target_compact) >= 7 and len(game_compact) >= 7:
+            length_ratio = min(len(target_compact), len(game_compact)) / max(
+                len(target_compact), len(game_compact)
+            )
+            ratio = difflib.SequenceMatcher(
+                None, target_compact, game_compact
+            ).ratio()
 
-        if target_words:
-            overlap = len(target_words & game_words) / len(target_words)
-            if overlap >= 1.0:
-                best = max(best, 0.91)
-            elif overlap >= 0.75 and len(target_words) >= 2:
-                best = max(best, 0.80)
-
-        similarity = difflib.SequenceMatcher(
-            None, target_compact, game_compact
-        ).ratio()
-        best = max(best, similarity)
+            # لا يكفي التشابه وحده؛ يجب أن تكون الأطوال متقاربة جدًا.
+            if ratio >= 0.92 and length_ratio >= 0.78:
+                best = max(best, ratio * 0.94)
 
     return best
 
 
+def _script_needs_key(script):
+    """توحيد معرفة حالة المفتاح من المصدرين."""
+    for key in ("key", "hasKey", "keySystem"):
+        if key in script:
+            value = script.get(key)
+            if isinstance(value, str):
+                return value.strip().lower() in {
+                    "true", "1", "yes", "key", "required"
+                }
+            return bool(value)
+
+    # RScripts يستخدم noKeySystem في بعض الاستجابات.
+    if "noKeySystem" in script:
+        return not bool(script.get("noKeySystem"))
+
+    return False
+
+
 def _score_text_match(script, query):
-    target = normalize_game_name(query)
-    compact_target = compact_game_name(query)
     game_name = _game_name_from_script(script)
-
-    # Game name is the primary signal.
     game_score = _game_relevance_score(game_name, query)
-    score = game_score * 150.0
+    score = game_score * 200.0
 
-    # Script title is only secondary. This prevents "Timebomb" script titles
-    # from beating a result whose actual game is different.
+    # العنوان مساعد فقط، ولا يستطيع تحويل لعبة خاطئة إلى نتيجة صحيحة.
     title = normalize_game_name(script.get("title", ""))
+    target = normalize_game_name(query)
     if title and target:
         compact_title = compact_game_name(title)
+        compact_target = compact_game_name(query)
 
         if title == target or compact_title == compact_target:
-            score += 45.0
-        elif target in title or compact_target in compact_title:
-            score += 24.0
-        else:
-            score += difflib.SequenceMatcher(
-                None, compact_target, compact_title
-            ).ratio() * 18.0
+            score += 35.0
+        elif len(compact_target) >= 7 and (
+            compact_title.startswith(compact_target)
+            or compact_target.startswith(compact_title)
+        ):
+            score += 10.0
 
     return score
 
 
 def _score_auto_result(script, query):
     score = _score_text_match(script, query)
+    relevance = _game_relevance_score(
+        _game_name_from_script(script), query
+    )
 
-    game_name = _game_name_from_script(script)
-    relevance = _game_relevance_score(game_name, query)
-
-    # If the API supplied a game name, require strong game relevance.
-    # Missing game metadata is tolerated because some RScripts entries omit it.
-    if game_name and relevance < 0.72:
-        return -1000.0
+    # إذا كان المصدر يعرف اسم اللعبة، فلا نعتمد على عنوان السكربت وحده.
+    if _game_name_from_script(script) and relevance < 0.90:
+        return -100000.0
 
     if script.get("verified", False):
         score += 2.0
 
     try:
-        score += min(float(script.get("views", 0) or 0) / 20000.0, 4.0)
+        score += min(float(script.get("views", 0) or 0) / 30000.0, 3.0)
     except Exception:
         pass
 
     return score
 
 
-def _filter_relevant_results(scripts, query):
-    """Remove obvious wrong-game matches before pagination/ranking."""
+def _filter_relevant_results(scripts, query, key_mode=None):
+    """فلترة قبل الترتيب: لا نعرض لعبة مختلفة حتى لو كان عنوان السكربت مشابهًا."""
     output = []
+
     for script in scripts or []:
         if not isinstance(script, dict):
             continue
 
         game_name = _game_name_from_script(script)
-        if game_name and _game_relevance_score(game_name, query) < 0.72:
+
+        # وجود اسم لعبة من المصدر = لازم يطابق بحث المستخدم بقوة.
+        if game_name:
+            relevance = _game_relevance_score(game_name, query)
+            if relevance < 0.90:
+                continue
+
+        if key_mode == "no_key" and _script_needs_key(script):
+            continue
+
+        if key_mode == "with_key" and not _script_needs_key(script):
             continue
 
         output.append(script)
@@ -895,15 +957,15 @@ def _filter_relevant_results(scripts, query):
 
 
 async def fetch_auto_search_mode(search_query, key_mode):
-    """بحث سريع: طلب أساسي واحد، ثم fallback واحد فقط إذا احتجنا."""
+    """مسار بحث سريع: استعلام أساسي واحد لكل مصدر، بدون fallback يلوث النتائج."""
 
     cache = await get_auto_cache(search_query, key_mode)
     if cache is not None:
         return cache, False, True
 
     cache_key = _auto_cache_key(search_query, key_mode)
-
     existing_task = _auto_search_inflight.get(cache_key)
+
     if existing_task:
         try:
             scripts, network_error = await existing_task
@@ -912,21 +974,17 @@ async def fetch_auto_search_mode(search_query, key_mode):
             pass
 
     async def worker():
-        search_queries = get_game_search_queries(search_query)
+        queries = get_game_search_queries(search_query)
+        primary = queries[0] if queries else str(search_query).strip()
 
-        # نبدأ بالصيغة التي يفهمها النظام كاسم اللعبة.
-        primary = search_queries[0] if search_queries else search_query
-        fallbacks = []
-
-        for item in search_queries[1:]:
-            if (
-                normalize_game_name(item) != normalize_game_name(primary)
-                and item not in fallbacks
-            ):
-                fallbacks.append(item)
-
-        fallbacks = fallbacks[:2]
-        worker_started = time.monotonic()
+        # للإنجليزي: استعلام واحد فقط.
+        # للعربي: الصيغ اللاتينية المولدة من نفس الاسم فقط.
+        # ممنوع البحث عن لعبة بديلة أو fallback عشوائي.
+        candidates = [primary]
+        if has_arabic(search_query):
+            candidates = list(dict.fromkeys(
+                [primary] + queries[1:3]
+            ))
 
         timeout = aiohttp.ClientTimeout(
             total=AUTO_SEARCH_TOTAL_TIMEOUT,
@@ -939,66 +997,51 @@ async def fetch_auto_search_mode(search_query, key_mode):
         had_network_error = False
         any_source_ok = False
 
-        def _merge(results):
-            nonlocal any_source_ok
-            relevant_results = _filter_relevant_results(results, search_query)
-            for script in relevant_results:
-                any_source_ok = True
-                key = _script_key(script)
-                if key not in seen:
-                    seen.add(key)
-                    collected.append(script)
-
         async with aiohttp.ClientSession(timeout=timeout) as session:
-            # نبحث بمصدرين معًا (ScriptBlox + RScripts) بالتوازي —
-            # يوسّع التغطية كثيرًا للمابات اللي ما تظهر في مصدر واحد.
-            primary_results = await asyncio.gather(
-                _scriptblox_search_async(session, primary, key_mode),
-                _rscripts_search_async(session, primary, key_mode),
-                return_exceptions=True,
-            )
-
-            network_errors = []
-
-            for result in primary_results:
-                if isinstance(result, Exception):
-                    network_errors.append(True)
-                    continue
-
-                scripts, network_error = result
-                network_errors.append(network_error)
-
-                if scripts:
-                    _merge(scripts)
-
-            had_network_error = all(network_errors) if network_errors else False
-
-            # نوسّع البحث فقط إذا لم نلقَ أي نتيجة (حتى صيغتين إضافيتين).
-            for fallback in fallbacks:
-                if collected or time.monotonic() - worker_started > 12:
-                    break
-
-                fallback_results = await asyncio.gather(
-                    _scriptblox_search_async(session, fallback, key_mode),
-                    _rscripts_search_async(session, fallback, key_mode),
+            # نستخدم أول صيغة فقط أولًا، والمصدرين بالتوازي.
+            # لا ننتظر fallback إذا كانت هناك نتائج صحيحة.
+            for candidate_index, candidate in enumerate(candidates):
+                results = await asyncio.gather(
+                    _scriptblox_search_async(session, candidate, key_mode),
+                    _rscripts_search_async(session, candidate, key_mode),
                     return_exceptions=True,
                 )
 
-                fallback_network_errors = []
+                candidate_added = 0
+                source_errors = []
 
-                for result in fallback_results:
+                for result in results:
                     if isinstance(result, Exception):
-                        fallback_network_errors.append(True)
+                        source_errors.append(True)
                         continue
 
                     scripts, network_error = result
-                    fallback_network_errors.append(network_error)
+                    source_errors.append(network_error)
 
-                    if scripts:
-                        _merge(scripts)
+                    if network_error:
+                        continue
 
-                if fallback_network_errors and not all(fallback_network_errors):
-                    had_network_error = False
+                    any_source_ok = True
+
+                    for script in _filter_relevant_results(
+                        scripts, search_query, key_mode
+                    ):
+                        key = _script_key(script)
+                        if key in seen:
+                            continue
+                        seen.add(key)
+                        collected.append(script)
+                        candidate_added += 1
+
+                if candidate_added:
+                    break
+
+                if all(source_errors) if source_errors else False:
+                    had_network_error = True
+
+                # صيغة عربية بديلة فقط إذا لم نجد أي نتيجة مطابقة.
+                if candidate_index + 1 >= len(candidates):
+                    break
 
         if any_source_ok:
             had_network_error = False
@@ -1007,14 +1050,14 @@ async def fetch_auto_search_mode(search_query, key_mode):
             key=lambda script: _score_auto_result(script, search_query),
             reverse=True,
         )
-        collected = collected[:AUTO_SEARCH_MAX_RESULTS]
 
-        await set_auto_cache(
-            search_query,
-            key_mode,
-            collected,
-        )
+        # حماية إضافية: لا تسمح بنتائج رفضها الفلتر بعد الترتيب.
+        collected = [
+            item for item in collected
+            if _score_auto_result(item, search_query) > -99999
+        ][:AUTO_SEARCH_MAX_RESULTS]
 
+        await set_auto_cache(search_query, key_mode, collected)
         return collected, had_network_error
 
     task = asyncio.create_task(worker())
@@ -1221,10 +1264,8 @@ async def process_auto_search_request(
                 )
                 collected.append(item)
 
-        # ====================================================
-        # لو الاسم المصحح ما رجع شيء، نستخدم الاسم الأصلي مرة واحدة.
-        # ====================================================
-        if not collected and normalize_game_name(query) != normalize_game_name(resolved_query):
+        # لا يوجد fallback إلى اسم لعبة مختلف؛ الدقة أهم من ملء الصفحة.
+        if False and not collected and normalize_game_name(query) != normalize_game_name(resolved_query):
             fallback_tasks = [
                 asyncio.create_task(
                     fetch_auto_search_mode(
@@ -2702,7 +2743,7 @@ def create_embed(
     if api == "scriptblox":
 
         embed.title = (
-            f"[SB] "
+            f"📜 "
             f"{script.get('title', 'No Title')}"
         )
 
@@ -2713,7 +2754,7 @@ def create_embed(
 
         game_name = game.get(
             "name",
-            "Unknown Game"
+            "لعبة غير معروفة"
         )
 
         game_id = game.get(
@@ -2754,12 +2795,12 @@ def create_embed(
         )
 
         script_type = (
-            "Free"
+            "مجاني"
             if script.get(
                 "scriptType",
                 "free"
             ).lower() == "free"
-            else "Paid"
+            else "مدفوع"
         )
 
         verified_status = (
@@ -2801,7 +2842,7 @@ def create_embed(
 
         truncated_script = script.get(
             "script",
-            "No Script"
+            "لا يوجد كود"
         )
 
         if len(
@@ -2814,7 +2855,7 @@ def create_embed(
             )
 
         embed.add_field(
-            name="Game",
+            name="🎮 الماب",
             value=(
                 f"[{game_name}]"
                 f"({game_link})"
@@ -2823,37 +2864,37 @@ def create_embed(
         )
 
         embed.add_field(
-            name="Verified",
+            name="التحقق",
             value=verified_status,
             inline=True
         )
 
         embed.add_field(
-            name="Type",
+            name="النوع",
             value=script_type,
             inline=True
         )
 
         embed.add_field(
-            name="Universal",
+            name="عالمي",
             value=universal_status,
             inline=True
         )
 
         embed.add_field(
-            name="Views",
+            name="المشاهدات",
             value=f"👁️ {views}",
             inline=True
         )
 
         embed.add_field(
-            name="Key",
+            name="🔐 المفتاح",
             value=key_status,
             inline=True
         )
 
         embed.add_field(
-            name="Patched",
+            name="الحالة",
             value=patched_status,
             inline=True
         )
@@ -2878,12 +2919,12 @@ def create_embed(
             )
 
         embed.add_field(
-            name="Links",
+            name="🔗 الروابط",
             value=(
-                f"[Raw Script]"
+                f"[الكود الخام]"
                 f"(https://rawscripts.net/raw/"
                 f"{script.get('slug','')}) - "
-                f"[Script Page]"
+                f"[صفحة السكربت]"
                 f"(https://scriptblox.com/script/"
                 f"{script.get('slug','')})"
             ),
@@ -2891,7 +2932,7 @@ def create_embed(
         )
 
         embed.add_field(
-            name="Script",
+            name="📜 السكربت",
             value=(
                 f"```\n"
                 f"{truncated_script}"
@@ -2901,7 +2942,7 @@ def create_embed(
         )
 
         embed.add_field(
-            name="Timestamps",
+            name="🕒 الوقت",
             value=format_timestamps(
                 script
             ),
@@ -3003,7 +3044,7 @@ def create_embed(
         )
 
         embed.add_field(
-            name="Views",
+            name="المشاهدات",
             value=f"👁️ {views}",
             inline=True
         )
@@ -3027,7 +3068,7 @@ def create_embed(
         )
 
         embed.add_field(
-            name="Verified",
+            name="التحقق",
             value=verified_status,
             inline=True
         )
@@ -3039,15 +3080,15 @@ def create_embed(
         )
 
         embed.add_field(
-            name="Script",
+            name="📜 السكربت",
             value=script_text,
             inline=False
         )
 
         embed.add_field(
-            name="Links",
+            name="🔗 الروابط",
             value=(
-                f"[Script Page]"
+                f"[صفحة السكربت]"
                 f"(https://rscripts.net/script/"
                 f"{script.get('slug','')})"
             ),
@@ -3465,7 +3506,7 @@ async def display_scripts_local(
 
                 title = script.get(
                     "title",
-                    "No Title"
+                    "بدون عنوان"
                 )
 
                 game = script.get(
@@ -3473,7 +3514,7 @@ async def display_scripts_local(
                     {}
                 ).get(
                     "name",
-                    "Unknown Game"
+                    "لعبة غير معروفة"
                 )
 
                 verified = (
@@ -3529,7 +3570,7 @@ async def display_scripts_local(
 
                 title = script.get(
                     "title",
-                    "No Title"
+                    "بدون عنوان"
                 )
 
                 views = script.get(
