@@ -40,8 +40,8 @@ CONFIG_FILE = Path("bot5_config.json")
 TOP_FILE = Path("bot5_top.json")
 SUGGESTIONS_FILE = Path("bot5_suggestions.json")
 WARNINGS_FILE = Path("bot5_warnings.json")
-SAY_MESSAGES_FILE = Path("bot5_say_messages.json")
 TEMP_BANS_FILE = Path("bot5_temp_bans.json")
+ROLE_PANEL_FILE = Path("bot5_role_panel.json")
 
 SAUDI_TZ = timezone(timedelta(hours=3))
 
@@ -72,14 +72,13 @@ DEFAULT_GUILD_CONFIG = {
 
     # SAY
     "say_room_definition": "",
-    "say_storage_channel_id": None,
-    "say_media_response_enabled": True,
-    "say_media_response_message": "تفضل، هذا البروفايل المطلوب.",
 
     # SUGGESTIONS
     "suggestions_channel_id": None,
     "suggestions_log_channel_id": None,
     "suggestions_allowed_role_ids": [],
+    "suggestion_options": [],
+    "suggestions_mention_role_id": None,
 
     # AUTO TRIGGERS
     "auto_triggers": {
@@ -160,20 +159,20 @@ def save_warnings(data):
     save_json(WARNINGS_FILE, data)
 
 
-def load_say_messages():
-    return load_json(SAY_MESSAGES_FILE)
-
-
-def save_say_messages(data):
-    save_json(SAY_MESSAGES_FILE, data)
-
-
 def load_temp_bans():
     return load_json(TEMP_BANS_FILE)
 
 
 def save_temp_bans(data):
     save_json(TEMP_BANS_FILE, data)
+
+
+def load_role_panels():
+    return load_json(ROLE_PANEL_FILE)
+
+
+def save_role_panels(data):
+    save_json(ROLE_PANEL_FILE, data)
 
 
 # ============================================================
@@ -220,60 +219,66 @@ class TopSelectView(discord.ui.View):
 
 
 # ============================================================
-# SAY PROFILE VIEW
+# ROLE PANEL
 # ============================================================
 
-class SayProfileButton(discord.ui.Button):
-
-    def __init__(self, cog, say_message_id, label, emoji, action, row=0):
+class RolePanelButton(discord.ui.Button):
+    def __init__(self, cog, guild_id, role_id, label, emoji=None, row=0):
         self.cog = cog
-        self.say_message_id = str(say_message_id)
-        self.action = action
-
+        self.guild_id = int(guild_id)
+        self.role_id = int(role_id)
         super().__init__(
-            label=label,
-            emoji=emoji,
-            style=(
-                discord.ButtonStyle.primary
-                if action == "profile"
-                else discord.ButtonStyle.secondary
-            ),
-            custom_id=f"fime_say_button_{action}_{say_message_id}",
+            label=str(label)[:80],
+            emoji=emoji or None,
+            style=discord.ButtonStyle.secondary,
+            custom_id=f"fime_role_panel_{guild_id}_{role_id}",
             row=row
         )
 
-    async def callback(self, interaction):
-        if self.action == "info":
-            await self.cog.send_say_profile_info(interaction, self.say_message_id)
-        elif self.action == "room":
-            await self.cog.send_say_room_definition(interaction, self.say_message_id)
-        elif self.action == "profile":
-            await self.cog.send_say_full_profile(interaction, self.say_message_id)
-        elif self.action == "avatar":
-            await self.cog.send_say_media(interaction, self.say_message_id, "avatar")
-        elif self.action == "banner":
-            await self.cog.send_say_media(interaction, self.say_message_id, "banner")
+    async def callback(self, interaction: discord.Interaction):
+        if not interaction.guild or interaction.guild.id != self.guild_id:
+            await interaction.response.send_message("❌ هذه اللوحة ليست لهذا السيرفر.", ephemeral=True)
+            return
+
+        member = interaction.user
+        if not isinstance(member, discord.Member):
+            await interaction.response.send_message("❌ تعذر التحقق من عضويتك.", ephemeral=True)
+            return
+
+        role = interaction.guild.get_role(self.role_id)
+        if not role:
+            await interaction.response.send_message("❌ هذه الرتبة لم تعد موجودة.", ephemeral=True)
+            return
+
+        me = interaction.guild.me
+        if me and role >= me.top_role:
+            await interaction.response.send_message("❌ البوت لا يستطيع إدارة هذه الرتبة. ارفع رتبة البوت فوقها.", ephemeral=True)
+            return
+
+        try:
+            if role in member.roles:
+                await member.remove_roles(role, reason="Team Fime Role Panel")
+                await interaction.response.send_message(f"➖ تمت إزالة {role.mention}.", ephemeral=True)
+            else:
+                await member.add_roles(role, reason="Team Fime Role Panel")
+                await interaction.response.send_message(f"➕ تمت إضافة {role.mention}.", ephemeral=True)
+        except discord.Forbidden:
+            await interaction.response.send_message("❌ البوت لا يملك صلاحية إدارة هذه الرتبة.", ephemeral=True)
+        except Exception as error:
+            print("❌ Role panel button error:", error)
+            await interaction.response.send_message("❌ تعذر تعديل الرتبة.", ephemeral=True)
 
 
-class SayProfileView(discord.ui.View):
-
-    def __init__(
-        self,
-        cog,
-        say_message_id,
-        avatar_url=None,
-        banner_url=None,
-        profile_url=None,
-        username=None,
-        room_definition=None
-    ):
+class RolePanelView(discord.ui.View):
+    def __init__(self, cog, guild_id, roles):
         super().__init__(timeout=None)
-
-        self.add_item(SayProfileButton(cog, say_message_id, "البروفايل الكامل", "🪪", "profile", row=0))
-        self.add_item(SayProfileButton(cog, say_message_id, "الافتار", "👤", "avatar", row=0))
-        self.add_item(SayProfileButton(cog, say_message_id, "البنر", "🎨", "banner", row=0))
-        self.add_item(SayProfileButton(cog, say_message_id, "معلومات", "📋", "info", row=1))
-        self.add_item(SayProfileButton(cog, say_message_id, "تعريف الروم", "📖", "room", row=1))
+        self.cog = cog
+        self.guild_id = int(guild_id)
+        for index, item in enumerate(roles[:25]):
+            role_id = int(item.get("role_id"))
+            label = item.get("label") or item.get("name") or "رتبة"
+            emoji = item.get("emoji")
+            self.add_item(RolePanelButton(cog, guild_id, role_id, label, emoji, row=index // 5))
 
 
 # ============================================================
@@ -405,60 +410,6 @@ class ModerationShortcutView(discord.ui.View):
 
 
 # ============================================================
-# SAY LAYOUT SELECT
-# ============================================================
-
-class SayLayoutSelect(discord.ui.Select):
-
-    def __init__(self, cog):
-        self.cog = cog
-
-        options = [
-            discord.SelectOption(label="كلاسيك — افتار واحد", value="1", emoji="👤"),
-            discord.SelectOption(label="طقم شخصين", value="2", emoji="👥"),
-        ]
-        for count in range(3, 11):
-            options.append(
-                discord.SelectOption(label=f"طقم {count}", value=str(count), emoji="👥")
-            )
-
-        super().__init__(
-            placeholder="اختر شكل طقم الافتارات...",
-            min_values=1,
-            max_values=1,
-            options=options,
-            custom_id="fime_say_layout_select"
-        )
-
-    async def callback(self, interaction):
-        if not interaction.guild:
-            await interaction.response.send_message(
-                "❌ هذا الخيار يعمل داخل السيرفر فقط.",
-                ephemeral=True
-            )
-            return
-
-        count = int(self.values[0])
-        self.cog.say_pending_layout[(interaction.guild.id, interaction.user.id)] = count
-
-        await interaction.response.send_message(
-            (
-                f"✅ تم اختيار **طقم {count}**.\n"
-                "الآن استخدم `/say` واكتب الرسالة وارفع الافتارات "
-                "في `avatar1` إلى `avatar10`، والبنر في `banner` إذا تبيه."
-            ),
-            ephemeral=True
-        )
-
-
-class SayLayoutView(discord.ui.View):
-
-    def __init__(self, cog):
-        super().__init__(timeout=120)
-        self.add_item(SayLayoutSelect(cog))
-
-
-# ============================================================
 # SERVER SELECT
 # ============================================================
 
@@ -507,13 +458,14 @@ class AutomaticLineSystem(commands.Cog):
     top_group = app_commands.Group(name="توب", description="أوامر نظام التوب (الأكثر تفاعلاً)")
     line_group = app_commands.Group(name="خط", description="أوامر نظام الخط (الصورة التلقائية)")
     fime_group = app_commands.Group(name="فيم", description="أوامر نظام رد كلمة فيم")
-    room_group = app_commands.Group(name="روم", description="أوامر تعريف الروم ورسالة بروفايل /say")
+    room_group = app_commands.Group(name="روم", description="أوامر تعريف الروم")
     control_group = app_commands.Group(name="بوت", description="أوامر معلومات البوت والتحكم برسائله")
     suggest_group = app_commands.Group(name="اقتراحات", description="أوامر نظام الاقتراحات")
     trigger_group = app_commands.Group(name="محفزات", description="أوامر المحفزات التلقائية (رد تلقائي على كلمة)")
     shortcut_group = app_commands.Group(name="اختصارات", description="أوامر اختصارات أوامر الإدارة النصية")
     filter_group = app_commands.Group(name="فلتر", description="أوامر فلتر الكلمات المحظورة")
     mention_group = app_commands.Group(name="منشن", description="أوامر منشن الأعضاء الجدد")
+    roles_group = app_commands.Group(name="رتب", description="لوحة الرتب التفاعلية")
 
     def __init__(self, bot):
         self.bot = bot
@@ -522,10 +474,9 @@ class AutomaticLineSystem(commands.Cog):
         self.top_data = load_top()
         self.suggestions = load_suggestions()
         self.warnings = load_warnings()
-        self.say_messages = load_say_messages()
         self.temp_bans = load_temp_bans()
+        self.role_panels = load_role_panels()
         self.temp_ban_tasks = {}
-        self.say_pending_layout = {}
 
         print("✅ bot5 — Line + Join + Fime + TOP + SAY + Server + Edit + Suggestions + Triggers + Moderation loaded.")
 
@@ -584,6 +535,20 @@ class AutomaticLineSystem(commands.Cog):
 
     def is_owner(self, interaction):
         return interaction.user.id == OWNER_ID
+
+    async def interaction_check(self, interaction: discord.Interaction):
+        """حماية مركزية: كل أوامر هذا الملف للمالك، باستثناء إرسال الاقتراح للمستخدمين."""
+        if interaction.user.id == OWNER_ID:
+            return True
+
+        command = interaction.command
+        qualified = getattr(command, "qualified_name", "") if command else ""
+        if qualified == "اقتراحات ارسال":
+            return True
+
+        if not interaction.response.is_done():
+            await interaction.response.send_message("❌ هذا الأمر للمالك فقط.", ephemeral=True)
+        return False
 
     async def owner_only(self, interaction):
         """يرجع True إذا تم منع المستخدم (ليس المالك أو خارج السيرفر)."""
@@ -709,71 +674,6 @@ class AutomaticLineSystem(commands.Cog):
         bbox = draw.textbbox((0, 0), text, font=font)
         width = bbox[2] - bbox[0]
         draw.text((x - width / 2, y), text, font=font, fill=fill)
-
-    # ========================================================
-    # SAY IMAGE
-    # ========================================================
-
-    def create_say_image_sync(self, avatar_images, banner_image):
-        """قالب /say الكلاسيكي: بنر في الأعلى + افتار أو أكثر في الأسفل."""
-        WIDTH = 1600
-        HEIGHT = 900
-
-        canvas = Image.new("RGBA", (WIDTH, HEIGHT), (12, 12, 12, 255))
-        draw = ImageDraw.Draw(canvas)
-
-        if banner_image:
-            banner = self.crop_to_fill(banner_image, (WIDTH, 500))
-            canvas.paste(banner.convert("RGBA"), (0, 0))
-
-        draw.rectangle((0, 500, WIDTH, 506), fill=(245, 245, 245, 255))
-
-        avatars = [
-            image.convert("RGBA")
-            for image in (avatar_images or [])
-            if image is not None
-        ]
-
-        if not avatars:
-            return self.image_to_jpeg(canvas, quality=92)
-
-        max_per_row = 5
-        avatar_size = 260 if len(avatars) <= 5 else 210
-        gap = 45
-
-        rows = [
-            avatars[index:index + max_per_row]
-            for index in range(0, len(avatars), max_per_row)
-        ]
-
-        total_rows_height = len(rows) * avatar_size + (len(rows) - 1) * gap
-        start_y = 535 + max(0, (HEIGHT - 535 - total_rows_height) // 2)
-
-        for row_index, row in enumerate(rows):
-            row_width = len(row) * avatar_size + (len(row) - 1) * gap
-            start_x = (WIDTH - row_width) // 2
-            y = start_y + row_index * (avatar_size + gap)
-
-            for item_index, image in enumerate(row):
-                x = start_x + item_index * (avatar_size + gap)
-
-                avatar = self.crop_to_fill(image, (avatar_size, avatar_size))
-
-                mask = Image.new("L", (avatar_size, avatar_size), 0)
-                ImageDraw.Draw(mask).ellipse((0, 0, avatar_size, avatar_size), fill=255)
-
-                avatar_rgba = Image.new("RGBA", (avatar_size, avatar_size), (0, 0, 0, 0))
-                avatar_rgba.paste(avatar, (0, 0), mask)
-
-                canvas.paste(avatar_rgba, (x, y), avatar_rgba)
-
-                draw.ellipse(
-                    (x - 4, y - 4, x + avatar_size + 4, y + avatar_size + 4),
-                    outline=(245, 245, 245, 255),
-                    width=4
-                )
-
-        return self.image_to_jpeg(canvas, quality=92)
 
     # ========================================================
     # TOP
@@ -1187,421 +1087,53 @@ class AutomaticLineSystem(commands.Cog):
 
         await interaction.response.send_message("🗑️ تم حذف تعريف الروم.", ephemeral=True)
 
-    @room_group.command(name="بروفايل-رسالة", description="تحديد الرسالة التي تظهر مع صور البروفايل")
-    @app_commands.describe(message="الرسالة — يمكنك استخدام {username}")
-    async def set_say_media_response(self, interaction: discord.Interaction, message: str):
-        if await self.owner_only(interaction):
-            return
-
-        if len(message) > 1000:
-            await interaction.response.send_message("❌ الرسالة طويلة جدًا.", ephemeral=True)
-            return
-
-        cfg = self.get_config(interaction.guild.id)
-        cfg["say_media_response_message"] = message
-        cfg["say_media_response_enabled"] = True
-        save_config(self.config)
-
-        await interaction.response.send_message(
-            "✅ تم حفظ رسالة البروفايل. استخدم `{username}` لاسم صاحب البروفايل.",
-            ephemeral=True
-        )
-
-    @room_group.command(name="بروفايل-رسالة-ايقاف", description="إيقاف الرسالة التي تظهر مع صور البروفايل")
-    async def disable_say_media_response(self, interaction: discord.Interaction):
-        if await self.owner_only(interaction):
-            return
-
-        cfg = self.get_config(interaction.guild.id)
-        cfg["say_media_response_enabled"] = False
-        save_config(self.config)
-
-        await interaction.response.send_message("🛑 تم إيقاف رسالة البروفايل.", ephemeral=True)
-
-    @room_group.command(name="بروفايل-رسالة-تشغيل", description="تشغيل رسالة البروفايل المحفوظة")
-    async def enable_say_media_response(self, interaction: discord.Interaction):
-        if await self.owner_only(interaction):
-            return
-
-        cfg = self.get_config(interaction.guild.id)
-        cfg["say_media_response_enabled"] = True
-        save_config(self.config)
-
-        await interaction.response.send_message("✅ تم تشغيل رسالة البروفايل.", ephemeral=True)
-
-    # ========================================================
-    # SAY PROFILE HELPERS
-    # ========================================================
-
-    def _say_media_text(self, cfg, data):
-        if not cfg.get("say_media_response_enabled", True):
-            return None
-
-        return str(
-            cfg.get("say_media_response_message", "تفضل، هذا البروفايل المطلوب.")
-        ).replace("{username}", str(data.get("username", "Unknown")))
-
-    async def send_say_profile_info(self, interaction, say_message_id):
-        data = self.say_messages.get(str(say_message_id))
-
-        if not data:
-            await interaction.response.send_message("❌ بيانات هذا الـ /say غير موجودة.", ephemeral=True)
-            return
-
-        embed = discord.Embed(title="📋 معلومات الحساب", color=discord.Color.blurple())
-
-        embed.add_field(name="👤 المستخدم", value=f"`{data.get('username', 'Unknown')}`", inline=False)
-        embed.add_field(name="🖼️ الافتار", value="متوفر ✅" if data.get("avatar_url") else "غير متوفر ❌", inline=True)
-        embed.add_field(name="🎨 البنر", value="متوفر ✅" if data.get("banner_url") else "غير متوفر ❌", inline=True)
-        embed.add_field(name="🪪 البروفايل", value="متوفر ✅" if data.get("profile_url") else "غير متوفر ❌", inline=True)
-        embed.set_footer(text="Team Fime • Say Profile")
-
-        await interaction.response.send_message(embed=embed, ephemeral=True)
-
-    async def send_say_room_definition(self, interaction, say_message_id):
-        data = self.say_messages.get(str(say_message_id))
-
-        if not data:
-            await interaction.response.send_message("❌ بيانات هذا الـ /say غير موجودة.", ephemeral=True)
-            return
-
-        definition = str(data.get("room_definition", "")).strip()
-
-        if not definition:
-            await interaction.response.send_message("❌ ما فيه تعريف محفوظ لهذا الـ /say.", ephemeral=True)
-            return
-
-        embed = discord.Embed(
-            title="📖 تعريف الروم",
-            description=definition,
-            color=discord.Color.blurple()
-        )
-        embed.set_footer(text="Team Fime • Room Information")
-
-        await interaction.response.send_message(embed=embed, ephemeral=True)
-
-    async def send_say_media(self, interaction, say_message_id, media_type):
-        data = self.say_messages.get(str(say_message_id))
-
-        if not data:
-            await interaction.response.send_message("❌ بيانات هذا الـ /say غير موجودة.", ephemeral=True)
-            return
-
-        cfg = self.get_config(interaction.guild.id)
-        message_text = self._say_media_text(cfg, data)
-
-        if media_type == "avatar":
-            urls = data.get("avatar_urls") or []
-
-            if not urls and data.get("avatar_url"):
-                urls = [data["avatar_url"]]
-
-            urls = [str(url) for url in urls if url][:10]
-
-            if not urls:
-                await interaction.response.send_message(
-                    "❌ ما فيه افتارات محفوظة لهذا البروفايل.",
-                    ephemeral=True
-                )
-                return
-
-            embeds = []
-
-            for index, url in enumerate(urls, start=1):
-                embed = discord.Embed(
-                    title="👤 الافتار" if len(urls) == 1 else f"👤 الافتار {index}",
-                    color=discord.Color.blurple()
-                )
-                embed.set_image(url=url)
-                embed.set_footer(text="Team Fime • Say Profile")
-                embeds.append(embed)
-
-            await interaction.response.send_message(
-                content=message_text,
-                embeds=embeds,
-                ephemeral=True
-            )
-            return
-
-        url = data.get("banner_url")
-
-        if not url:
-            await interaction.response.send_message("❌ البنر غير متوفر في هذا البروفايل.", ephemeral=True)
-            return
-
-        embed = discord.Embed(title="🎨 البنر", color=discord.Color.blurple())
-        embed.set_image(url=url)
-        embed.set_footer(text="Team Fime • Say Profile")
-
-        await interaction.response.send_message(
-            content=message_text,
-            embed=embed,
-            ephemeral=True
-        )
-
-    async def send_say_full_profile(self, interaction, say_message_id):
-        data = self.say_messages.get(str(say_message_id))
-
-        if not data:
-            await interaction.response.send_message("❌ بيانات هذا الـ /say غير موجودة.", ephemeral=True)
-            return
-
-        cfg = self.get_config(interaction.guild.id)
-        message_text = self._say_media_text(cfg, data)
-
-        embeds = []
-
-        profile_url = data.get("profile_url")
-        if profile_url:
-            profile_embed = discord.Embed(
-                title=f"🪪 البروفايل الكامل — {data.get('username', 'Unknown')}",
-                color=discord.Color.blurple()
-            )
-            profile_embed.set_image(url=profile_url)
-            if data.get("avatar_url"):
-                profile_embed.set_thumbnail(url=data["avatar_url"])
-            profile_embed.set_footer(text="Team Fime • Full Profile")
-            embeds.append(profile_embed)
-
-        banner_url = data.get("banner_url")
-        if banner_url:
-            banner_embed = discord.Embed(title="🎨 البنر", color=discord.Color.blurple())
-            banner_embed.set_image(url=banner_url)
-            banner_embed.set_footer(text="Team Fime • Banner")
-            embeds.append(banner_embed)
-
-        if not embeds:
-            await interaction.response.send_message("❌ ما فيه صورة محفوظة لهذا البروفايل.", ephemeral=True)
-            return
-
-        await interaction.response.send_message(
-            content=message_text,
-            embeds=embeds[:10],
-            ephemeral=True
-        )
-
     # ========================================================
     # SAY
     # ========================================================
 
-    @app_commands.command(
-        name="say",
-        description="إرسال رسالة مع بروفايل كلاسيكي وطقم افتارات"
-    )
+    @app_commands.command(name="say", description="إرسال رسالة باسم البوت")
     @app_commands.describe(
-        message="الرسالة — اتركه فارغًا لفتح قائمة الافتارات",
-        channel="الروم",
-        layout="اختيار شكل الطقم",
-        avatar1="الافتار الأول",
-        avatar2="الافتار الثاني",
-        avatar3="الافتار الثالث",
-        avatar4="الافتار الرابع",
-        avatar5="الافتار الخامس",
-        avatar6="الافتار السادس",
-        avatar7="الافتار السابع",
-        avatar8="الافتار الثامن",
-        avatar9="الافتار التاسع",
-        avatar10="الافتار العاشر",
-        banner="البنر — اختياري",
-        room_definition="تعريف اختياري لهذا الـ /say"
-    )
-    @app_commands.choices(
-        layout=[
-            app_commands.Choice(name="كلاسيك — افتار واحد", value="1"),
-            app_commands.Choice(name="طقم شخصين", value="2"),
-            app_commands.Choice(name="طقم 3", value="3"),
-            app_commands.Choice(name="طقم 4", value="4"),
-            app_commands.Choice(name="طقم 5", value="5"),
-            app_commands.Choice(name="طقم 6", value="6"),
-            app_commands.Choice(name="طقم 7", value="7"),
-            app_commands.Choice(name="طقم 8", value="8"),
-            app_commands.Choice(name="طقم 9", value="9"),
-            app_commands.Choice(name="طقم 10", value="10"),
-        ]
+        message="الرسالة التي تريد إرسالها",
+        channel="الروم الذي سترسل فيه الرسالة — اختياري"
     )
     async def say(
         self,
         interaction: discord.Interaction,
-        message: str = None,
-        channel: discord.TextChannel = None,
-        layout: app_commands.Choice[str] = None,
-        avatar1: discord.Attachment = None,
-        avatar2: discord.Attachment = None,
-        avatar3: discord.Attachment = None,
-        avatar4: discord.Attachment = None,
-        avatar5: discord.Attachment = None,
-        avatar6: discord.Attachment = None,
-        avatar7: discord.Attachment = None,
-        avatar8: discord.Attachment = None,
-        avatar9: discord.Attachment = None,
-        avatar10: discord.Attachment = None,
-        banner: discord.Attachment = None,
-        room_definition: str = None
+        message: str,
+        channel: discord.TextChannel = None
     ):
         if await self.owner_only(interaction):
             return
 
-        if message is not None and len(message) > 2000:
+        if len(message) > 2000:
             await interaction.response.send_message("❌ الرسالة لا تتجاوز 2000 حرف.", ephemeral=True)
             return
 
         target = channel or interaction.channel
-
         if not isinstance(target, discord.TextChannel):
             await interaction.response.send_message("❌ اختر رومًا نصيًا.", ephemeral=True)
             return
 
-        avatar_attachments = [
-            item for item in (
-                avatar1, avatar2, avatar3, avatar4, avatar5,
-                avatar6, avatar7, avatar8, avatar9, avatar10
-            ) if item
-        ]
-
-        # /say بدون أي شيء = قائمة اختيار الطقم.
-        if not message and not avatar_attachments and not banner and not layout:
-            await interaction.response.send_message(
-                (
-                    "🖼️ **اختر نوع طقم الافتارات:**\n"
-                    "بعد الاختيار استخدم `/say` مرة ثانية وأرسل الصور."
-                ),
-                view=SayLayoutView(self),
-                ephemeral=True
-            )
-            return
-
-        for attachment in avatar_attachments + ([banner] if banner else []):
-            if not self.is_supported_image(attachment):
-                await interaction.response.send_message(
-                    "❌ أحد الملفات المرفوعة ليس صورة مدعومة.",
-                    ephemeral=True
-                )
-                return
-
-        pending_key = (interaction.guild.id, interaction.user.id)
-
-        if layout:
-            selected_count = int(layout.value)
-            self.say_pending_layout.pop(pending_key, None)
-        else:
-            selected_count = self.say_pending_layout.pop(pending_key, None) or len(avatar_attachments)
-
-        if selected_count > len(avatar_attachments):
-            await interaction.response.send_message(
-                (
-                    f"❌ اخترت **طقم {selected_count}** لكن أرسلت "
-                    f"`{len(avatar_attachments)}` افتار فقط.\n"
-                    f"ارفع {selected_count} افتارات على الأقل."
-                ),
-                ephemeral=True
-            )
-            return
-
-        avatar_attachments = avatar_attachments[:selected_count]
-
-        cfg = self.get_config(interaction.guild.id)
-
-        definition = str(
-            room_definition
-            if room_definition is not None
-            else cfg.get("say_room_definition", "")
-        ).strip()
-
-        profile_requested = bool(avatar_attachments or banner)
-
-        # رسالة عادية بدون بروفايل.
-        if not profile_requested:
-            try:
-                await target.send(
-                    content=message,
-                    allowed_mentions=discord.AllowedMentions.none()
-                )
-            except Exception as error:
-                await interaction.response.send_message(
-                    f"❌ فشل /say: `{type(error).__name__}`",
-                    ephemeral=True
-                )
-                return
-
-            await interaction.response.send_message(
-                f"✅ **تم إرسال الرسالة.**\n📍 {target.mention}",
-                ephemeral=True
-            )
-            return
-
-        await interaction.response.defer(ephemeral=True)
-
         try:
-            avatar_results = (
-                await asyncio.gather(
-                    *[self.read_image_attachment(item) for item in avatar_attachments]
-                )
-                if avatar_attachments else []
-            )
-
-            banner_image = await self.read_image_attachment(banner) if banner else None
-
-            generated_bytes = await asyncio.to_thread(
-                self.create_say_image_sync,
-                list(avatar_results),
-                banner_image
-            )
-
             sent = await target.send(
                 content=message,
-                file=discord.File(io.BytesIO(generated_bytes), filename="fime-say.jpg"),
                 allowed_mentions=discord.AllowedMentions.none()
             )
-
-            profile_url = sent.attachments[0].url if sent.attachments else None
-
-            avatar_urls = [item.url for item in avatar_attachments]
-            first_avatar_url = avatar_urls[0] if avatar_urls else None
-            banner_url = banner.url if banner else None
-
-            self.say_messages[str(sent.id)] = {
-                "message_id": sent.id,
-                "guild_id": interaction.guild.id,
-                "channel_id": target.id,
-                "username": interaction.user.display_name,
-                "user_id": interaction.user.id,
-                "message": message,
-                "avatar_url": first_avatar_url,
-                "avatar_urls": avatar_urls,
-                "banner_url": banner_url,
-                "profile_url": profile_url,
-                "room_definition": definition,
-                "layout": selected_count,
-                "created_at": datetime.now(timezone.utc).isoformat()
-            }
-
-            save_say_messages(self.say_messages)
-
-            await sent.edit(view=SayProfileView(self, sent.id))
-
-        except ValueError as error:
-            await interaction.followup.send(f"❌ {error}", ephemeral=True)
-            return
-
         except Exception as error:
-            print("❌ SAY error:", error)
-            await interaction.followup.send(
+            await interaction.response.send_message(
                 f"❌ فشل /say: `{type(error).__name__}`",
                 ephemeral=True
             )
             return
 
-        await interaction.followup.send(
-            (
-                "✅ **تم إرسال الرسالة والبروفايل الكلاسيكي.**\n"
-                f"🖼️ الافتارات: `{len(avatar_attachments)}`\n"
-                f"📍 {target.mention}"
-            ),
+        await interaction.response.send_message(
+            f"✅ تم إرسال الرسالة باسم البوت.\n📍 {target.mention}\n🆔 `{sent.id}`",
             ephemeral=True
         )
 
     # ========================================================
     # GAME INFORMATION SYSTEM
+
     # ========================================================
 
     GAME_INFO_DATABASE = [
@@ -1781,6 +1313,9 @@ class AutomaticLineSystem(commands.Cog):
 
     @control_group.command(name="معلومات", description="معلومات السيرفرات التي يستخدم فيها البوت")
     async def server_command(self, interaction: discord.Interaction):
+        if await self.owner_only(interaction):
+            return
+
         await self.send_server_panel(interaction)
 
     # ========================================================
@@ -1896,6 +1431,7 @@ class AutomaticLineSystem(commands.Cog):
             value=f"{status_emojis.get(status, '📌')} **{status}**",
             inline=True
         )
+        embed.add_field(name="🏷️ النوع", value=str(suggestion.get("option", "عام"))[:1024], inline=True)
         embed.add_field(name="👤 صاحب الاقتراح", value=f"<@{suggestion['user_id']}>", inline=True)
 
         if suggestion.get("created_at"):
@@ -1924,7 +1460,7 @@ class AutomaticLineSystem(commands.Cog):
 
         return embed
 
-    async def create_suggestion_data(self, guild, channel, user, text, image_url=None):
+    async def create_suggestion_data(self, guild, channel, user, text, image_url=None, option="عام"):
         sid = self.get_suggestion_id()
 
         data = {
@@ -1934,6 +1470,7 @@ class AutomaticLineSystem(commands.Cog):
             "message_id": None,
             "user_id": user.id,
             "text": text,
+            "option": option or "عام",
             "image_url": image_url,
             "status": "قيد المراجعة",
             "admin_reply": "",
@@ -1947,10 +1484,16 @@ class AutomaticLineSystem(commands.Cog):
         self.suggestions[sid] = data
 
         try:
+            cfg = self.get_config(guild.id)
+            mention_role_id = cfg.get("suggestions_mention_role_id")
+            mention_role = guild.get_role(int(mention_role_id)) if str(mention_role_id).isdigit() else None
+            content = mention_role.mention if mention_role else None
+            allowed = discord.AllowedMentions(roles=True) if mention_role else discord.AllowedMentions.none()
             message = await channel.send(
+                content=content,
                 embed=self.suggestion_embed(data),
                 view=SuggestionView(self, sid),
-                allowed_mentions=discord.AllowedMentions.none()
+                allowed_mentions=allowed
             )
         except Exception:
             self.suggestions.pop(sid, None)
@@ -1995,9 +1538,21 @@ class AutomaticLineSystem(commands.Cog):
     # MANUAL SUGGESTION
     # ========================================================
 
+    async def suggestion_option_autocomplete(self, interaction: discord.Interaction, current: str):
+        cfg = self.get_config(interaction.guild.id) if interaction.guild else {}
+        options = cfg.get("suggestion_options", [])
+        current = (current or "").casefold()
+        result = []
+        for option in options:
+            option = str(option).strip()
+            if option and current in option.casefold():
+                result.append(app_commands.Choice(name=option[:100], value=option[:100]))
+        return result[:25]
+
     @suggest_group.command(name="ارسال", description="إرسال اقتراح للسيرفر")
-    @app_commands.describe(suggestion="اكتب اقتراحك")
-    async def create_suggestion(self, interaction: discord.Interaction, suggestion: str):
+    @app_commands.describe(option="اختر نوع الاقتراح", suggestion="اكتب اقتراحك")
+    @app_commands.autocomplete(option=suggestion_option_autocomplete)
+    async def create_suggestion(self, interaction: discord.Interaction, option: str, suggestion: str):
         if not interaction.guild:
             await interaction.response.send_message("❌ هذا الأمر داخل السيرفر فقط.", ephemeral=True)
             return
@@ -2018,6 +1573,14 @@ class AutomaticLineSystem(commands.Cog):
             await interaction.response.send_message("❌ الاقتراح قصير جدًا.", ephemeral=True)
             return
 
+        options = [str(x).strip() for x in cfg.get("suggestion_options", []) if str(x).strip()]
+        option = str(option or "").strip()
+        if options and option not in options:
+            await interaction.response.send_message("❌ اختر نوعًا من الخيارات التي حددها المالك.", ephemeral=True)
+            return
+        if not options:
+            option = "عام"
+
         if len(suggestion) > 1500:
             await interaction.response.send_message("❌ الاقتراح طويل جدًا.", ephemeral=True)
             return
@@ -2029,7 +1592,8 @@ class AutomaticLineSystem(commands.Cog):
                 interaction.guild,
                 channel,
                 interaction.user,
-                suggestion
+                suggestion,
+                option=option
             )
 
             await interaction.followup.send(
@@ -2084,7 +1648,8 @@ class AutomaticLineSystem(commands.Cog):
                 message.channel,
                 message.author,
                 text or "—",
-                image_url=image_url
+                image_url=image_url,
+                option="عام"
             )
         except Exception as error:
             print("❌ Auto suggestion error:", error)
@@ -2183,6 +1748,65 @@ class AutomaticLineSystem(commands.Cog):
             ephemeral=True
         )
 
+    @suggest_group.command(name="خيار-اضافة", description="إضافة خيار يظهر للمستخدم قبل إرسال الاقتراح")
+    async def suggestion_option_add(self, interaction: discord.Interaction, option: str):
+        if await self.owner_only(interaction):
+            return
+        option = option.strip()
+        if not option or len(option) > 100:
+            await interaction.response.send_message("❌ الخيار يجب أن يكون بين 1 و100 حرف.", ephemeral=True)
+            return
+        cfg = self.get_config(interaction.guild.id)
+        options = [str(x) for x in cfg.get("suggestion_options", []) if str(x).strip()]
+        if option.casefold() in {x.casefold() for x in options}:
+            await interaction.response.send_message("ℹ️ هذا الخيار موجود أصلًا.", ephemeral=True)
+            return
+        if len(options) >= 25:
+            await interaction.response.send_message("❌ الحد الأقصى 25 خيارًا.", ephemeral=True)
+            return
+        options.append(option)
+        cfg["suggestion_options"] = options
+        save_config(self.config)
+        await interaction.response.send_message(f"✅ تمت إضافة خيار **{option}**.", ephemeral=True)
+
+    @suggest_group.command(name="خيار-حذف", description="حذف خيار من الاقتراحات")
+    async def suggestion_option_remove(self, interaction: discord.Interaction, option: str):
+        if await self.owner_only(interaction):
+            return
+        cfg = self.get_config(interaction.guild.id)
+        options = [str(x) for x in cfg.get("suggestion_options", [])]
+        match = next((x for x in options if x.casefold() == option.strip().casefold()), None)
+        if not match:
+            await interaction.response.send_message("❌ الخيار غير موجود.", ephemeral=True)
+            return
+        options.remove(match)
+        cfg["suggestion_options"] = options
+        save_config(self.config)
+        await interaction.response.send_message(f"🗑️ تم حذف **{match}**.", ephemeral=True)
+
+    @suggest_group.command(name="خيارات", description="عرض خيارات الاقتراحات")
+    async def suggestion_option_list(self, interaction: discord.Interaction):
+        if await self.owner_only(interaction):
+            return
+        cfg = self.get_config(interaction.guild.id)
+        options = [str(x) for x in cfg.get("suggestion_options", []) if str(x).strip()]
+        await interaction.response.send_message(
+            "## 🏷️ خيارات الاقتراحات\n\n" + ("\n".join(f"• `{x}`" for x in options) if options else "لا توجد خيارات؛ سيظهر النوع كـ `عام`."),
+            ephemeral=True
+        )
+
+    @suggest_group.command(name="منشن", description="تحديد رتبة يتم منشنها عند وصول اقتراح جديد")
+    async def suggestion_mention_role(self, interaction: discord.Interaction, role: discord.Role = None):
+        if await self.owner_only(interaction):
+            return
+        cfg = self.get_config(interaction.guild.id)
+        cfg["suggestions_mention_role_id"] = role.id if role else None
+        save_config(self.config)
+        await interaction.response.send_message(
+            f"✅ تاق الاقتراحات: {role.mention}" if role else "🛑 تم إلغاء تاق الاقتراحات.",
+            ephemeral=True
+        )
+
     # ========================================================
     # SUGGESTION STATUS
     # ========================================================
@@ -2204,6 +1828,8 @@ class AutomaticLineSystem(commands.Cog):
         suggestion_id: str,
         status: app_commands.Choice[str]
     ):
+        if await self.owner_only(interaction):
+            return
         if not interaction.guild:
             await interaction.response.send_message("❌ هذا الأمر داخل السيرفر فقط.", ephemeral=True)
             return
@@ -2249,6 +1875,9 @@ class AutomaticLineSystem(commands.Cog):
 
     @suggest_group.command(name="رد", description="إضافة رد الإدارة على اقتراح")
     async def suggestion_reply(self, interaction: discord.Interaction, suggestion_id: str, reply: str):
+        if await self.owner_only(interaction):
+            return
+
         if not interaction.guild:
             await interaction.response.send_message("❌ هذا الأمر داخل السيرفر فقط.", ephemeral=True)
             return
@@ -3167,6 +2796,135 @@ class AutomaticLineSystem(commands.Cog):
         return False
 
     # ========================================================
+    # ROLE PANEL COMMANDS
+    # ========================================================
+
+    def get_role_panel(self, guild_id):
+        key = str(guild_id)
+        data = self.role_panels.setdefault(key, {})
+        data.setdefault("channel_id", None)
+        data.setdefault("message_id", None)
+        data.setdefault("roles", [])
+        return data
+
+    def build_role_panel_embed(self, guild):
+        panel = self.get_role_panel(guild.id)
+        roles = []
+        for item in panel.get("roles", [])[:25]:
+            role = guild.get_role(int(item.get("role_id", 0)))
+            if role:
+                roles.append((role, item.get("label") or role.name, item.get("emoji") or "•"))
+        if not roles:
+            description = "لا توجد رتب مضافة حاليًا.\n\nيستطيع المالك إضافة الرتب من أوامر `/رتب`."
+        else:
+            description = "\n".join(f"{emoji} {role.mention} — **{label}**" for role, label, emoji in roles)
+        embed = discord.Embed(title="🎖️ لوحة الرتب", description=description, color=discord.Color.blurple())
+        embed.set_footer(text="اضغط على الرتبة لإضافتها أو إزالتها")
+        return embed
+
+    async def refresh_role_panel(self, guild):
+        panel = self.get_role_panel(guild.id)
+        channel_id = panel.get("channel_id")
+        message_id = panel.get("message_id")
+        if not channel_id or not message_id:
+            return False
+        channel = guild.get_channel(int(channel_id))
+        if not isinstance(channel, discord.TextChannel):
+            return False
+        try:
+            message = await channel.fetch_message(int(message_id))
+            await message.edit(
+                embed=self.build_role_panel_embed(guild),
+                view=RolePanelView(self, guild.id, panel.get("roles", [])),
+                allowed_mentions=discord.AllowedMentions.none()
+            )
+            return True
+        except Exception as error:
+            print("⚠️ Role panel refresh error:", error)
+            return False
+
+    @roles_group.command(name="لوحة", description="إنشاء أو استعادة لوحة الرتب في روم محدد")
+    async def role_panel_create(self, interaction: discord.Interaction, channel: discord.TextChannel = None):
+        if await self.owner_only(interaction):
+            return
+        panel = self.get_role_panel(interaction.guild.id)
+        target = channel or interaction.channel
+        if not isinstance(target, discord.TextChannel):
+            await interaction.response.send_message("❌ اختر رومًا نصيًا.", ephemeral=True)
+            return
+
+        panel["channel_id"] = target.id
+        save_role_panels(self.role_panels)
+        if await self.refresh_role_panel(interaction.guild):
+            await interaction.response.send_message("✅ تم تحديث لوحة الرتب القديمة بدون حذف إعداداتها.", ephemeral=True)
+            return
+
+        message = await target.send(
+            embed=self.build_role_panel_embed(interaction.guild),
+            view=RolePanelView(self, interaction.guild.id, panel.get("roles", [])),
+            allowed_mentions=discord.AllowedMentions.none()
+        )
+        panel["message_id"] = message.id
+        save_role_panels(self.role_panels)
+        await interaction.response.send_message(f"✅ تم إنشاء لوحة الرتب في {target.mention}.", ephemeral=True)
+
+    @roles_group.command(name="اضافة", description="إضافة رتبة إلى لوحة الرتب")
+    async def role_panel_add(self, interaction: discord.Interaction, role: discord.Role, label: str = None, emoji: str = None):
+        if await self.owner_only(interaction):
+            return
+        panel = self.get_role_panel(interaction.guild.id)
+        roles = panel.setdefault("roles", [])
+        if any(int(x.get("role_id", 0)) == role.id for x in roles):
+            await interaction.response.send_message("ℹ️ هذه الرتبة موجودة في اللوحة أصلًا.", ephemeral=True)
+            return
+        if len(roles) >= 25:
+            await interaction.response.send_message("❌ الحد الأقصى 25 رتبة في اللوحة.", ephemeral=True)
+            return
+        roles.append({"role_id": role.id, "label": (label or role.name)[:80], "emoji": (emoji or "•")[:2]})
+        save_role_panels(self.role_panels)
+        updated = await self.refresh_role_panel(interaction.guild)
+        await interaction.response.send_message(
+            f"✅ تمت إضافة {role.mention} إلى اللوحة." + ("" if updated else " استخدم `/رتب لوحة` لإنشائها أو ربطها."),
+            ephemeral=True
+        )
+
+    @roles_group.command(name="حذف", description="حذف رتبة من لوحة الرتب")
+    async def role_panel_remove(self, interaction: discord.Interaction, role: discord.Role):
+        if await self.owner_only(interaction):
+            return
+        panel = self.get_role_panel(interaction.guild.id)
+        old = len(panel.get("roles", []))
+        panel["roles"] = [x for x in panel.get("roles", []) if int(x.get("role_id", 0)) != role.id]
+        if len(panel["roles"]) == old:
+            await interaction.response.send_message("❌ هذه الرتبة ليست في اللوحة.", ephemeral=True)
+            return
+        save_role_panels(self.role_panels)
+        await self.refresh_role_panel(interaction.guild)
+        await interaction.response.send_message(f"🗑️ تمت إزالة {role.mention} من اللوحة.", ephemeral=True)
+
+    @roles_group.command(name="تحديث", description="تحديث لوحة الرتب مع الحفاظ على الرتب المحفوظة")
+    async def role_panel_refresh(self, interaction: discord.Interaction):
+        if await self.owner_only(interaction):
+            return
+        if await self.refresh_role_panel(interaction.guild):
+            await interaction.response.send_message("✅ تم تحديث لوحة الرتب بدون إعادة إضافة الرتب.", ephemeral=True)
+        else:
+            await interaction.response.send_message("❌ ما لقيت لوحة محفوظة. استخدم `/رتب لوحة` أولًا.", ephemeral=True)
+
+    @roles_group.command(name="حالة", description="عرض إعدادات لوحة الرتب")
+    async def role_panel_status(self, interaction: discord.Interaction):
+        if await self.owner_only(interaction):
+            return
+        panel = self.get_role_panel(interaction.guild.id)
+        channel = interaction.guild.get_channel(int(panel["channel_id"])) if panel.get("channel_id") else None
+        roles = [interaction.guild.get_role(int(x.get("role_id", 0))) for x in panel.get("roles", [])]
+        roles = [r.mention for r in roles if r]
+        await interaction.response.send_message(
+            f"## 🎖️ حالة لوحة الرتب\n\n📍 الروم: {channel.mention if channel else 'غير محدد'}\n🆔 الرسالة: `{panel.get('message_id') or 'غير محددة'}`\n🎖️ الرتب: {', '.join(roles) if roles else 'لا توجد'}",
+            ephemeral=True
+        )
+
+    # ========================================================
     # JOIN
     # ========================================================
 
@@ -3401,6 +3159,15 @@ async def setup(bot):
     except Exception as error:
         print("⚠️ Temp ban restore error:", error)
 
+    # RESTORE ROLE PANEL
+    for guild_id, panel in cog.role_panels.items():
+        try:
+            roles = panel.get("roles", []) if isinstance(panel, dict) else []
+            if panel.get("message_id") and roles:
+                bot.add_view(RolePanelView(cog, int(guild_id), roles))
+        except Exception as error:
+            print("⚠️ Role panel persistent view error:", error)
+
     # RESTORE SUGGESTION BUTTONS
     for suggestion in cog.suggestions.values():
         try:
@@ -3411,12 +3178,5 @@ async def setup(bot):
 
         except Exception as error:
             print("⚠️ Suggestion persistent view error:", error)
-
-    # RESTORE SAY BUTTONS
-    for say_data in cog.say_messages.values():
-        try:
-            bot.add_view(SayProfileView(cog, say_data["message_id"]))
-        except Exception as error:
-            print("⚠️ SAY persistent view error:", error)
 
     print("✅ Team Fime bot5 loaded successfully.")
