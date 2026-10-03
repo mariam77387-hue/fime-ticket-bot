@@ -227,13 +227,17 @@ class RolePanelButton(discord.ui.Button):
         self.cog = cog
         self.guild_id = int(guild_id)
         self.role_id = int(role_id)
-        super().__init__(
-            label=str(label)[:80],
-            emoji=emoji or None,
-            style=discord.ButtonStyle.secondary,
-            custom_id=f"fime_role_panel_{guild_id}_{role_id}",
-            row=row
-        )
+        kwargs = {
+            "label": str(label or "رتبة")[:80],
+            "style": discord.ButtonStyle.secondary,
+            "custom_id": f"fime_role_panel_{guild_id}_{role_id}",
+            "row": row,
+        }
+        # الإيموجي اختياري بالكامل. لا نرسل أي قيمة إلى Discord إذا كان فارغًا.
+        clean_emoji = str(emoji).strip() if emoji else ""
+        if clean_emoji and clean_emoji != "•":
+            kwargs["emoji"] = clean_emoji
+        super().__init__(**kwargs)
 
     async def callback(self, interaction: discord.Interaction):
         if not interaction.guild or interaction.guild.id != self.guild_id:
@@ -2805,6 +2809,23 @@ class AutomaticLineSystem(commands.Cog):
         data.setdefault("channel_id", None)
         data.setdefault("message_id", None)
         data.setdefault("roles", [])
+
+        # ترحيل بيانات النسخ القديمة: الرمز "•" كان placeholder غير صالح كإيموجي.
+        changed = False
+        cleaned_roles = []
+        for item in data.get("roles", []):
+            if not isinstance(item, dict):
+                continue
+            item = dict(item)
+            if item.get("emoji") == "•":
+                item["emoji"] = ""
+                changed = True
+            cleaned_roles.append(item)
+        if cleaned_roles != data.get("roles", []):
+            data["roles"] = cleaned_roles
+            changed = True
+        if changed:
+            save_role_panels(self.role_panels)
         return data
 
     def build_role_panel_embed(self, guild):
@@ -2813,11 +2834,17 @@ class AutomaticLineSystem(commands.Cog):
         for item in panel.get("roles", [])[:25]:
             role = guild.get_role(int(item.get("role_id", 0)))
             if role:
-                roles.append((role, item.get("label") or role.name, item.get("emoji") or "•"))
+                emoji = str(item.get("emoji") or "").strip()
+                if emoji == "•":
+                    emoji = ""
+                roles.append((role, item.get("label") or role.name, emoji))
         if not roles:
             description = "لا توجد رتب مضافة حاليًا.\n\nيستطيع المالك إضافة الرتب من أوامر `/رتب`."
         else:
-            description = "\n".join(f"{emoji} {role.mention} — **{label}**" for role, label, emoji in roles)
+            description = "\n".join(
+                f"{(emoji + ' ') if emoji else ''}{role.mention} — **{label}**"
+                for role, label, emoji in roles
+            )
         embed = discord.Embed(title="🎖️ لوحة الرتب", description=description, color=discord.Color.blurple())
         embed.set_footer(text="اضغط على الرتبة لإضافتها أو إزالتها")
         return embed
@@ -2868,7 +2895,7 @@ class AutomaticLineSystem(commands.Cog):
         save_role_panels(self.role_panels)
         await interaction.response.send_message(f"✅ تم إنشاء لوحة الرتب في {target.mention}.", ephemeral=True)
 
-    @roles_group.command(name="اضافة", description="إضافة رتبة إلى لوحة الرتب")
+    @roles_group.command(name="اضافة", description="إضافة رتبة إلى لوحة الرتب (الإيموجي اختياري)")
     async def role_panel_add(self, interaction: discord.Interaction, role: discord.Role, label: str = None, emoji: str = None):
         if await self.owner_only(interaction):
             return
@@ -2880,7 +2907,14 @@ class AutomaticLineSystem(commands.Cog):
         if len(roles) >= 25:
             await interaction.response.send_message("❌ الحد الأقصى 25 رتبة في اللوحة.", ephemeral=True)
             return
-        roles.append({"role_id": role.id, "label": (label or role.name)[:80], "emoji": (emoji or "•")[:2]})
+        clean_emoji = str(emoji).strip() if emoji else ""
+        if clean_emoji == "•":
+            clean_emoji = ""
+        roles.append({
+            "role_id": role.id,
+            "label": (label or role.name)[:80],
+            "emoji": clean_emoji[:100],
+        })
         save_role_panels(self.role_panels)
         updated = await self.refresh_role_panel(interaction.guild)
         await interaction.response.send_message(
