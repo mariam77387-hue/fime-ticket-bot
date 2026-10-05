@@ -619,10 +619,16 @@ def search_query_candidates(query):
     add(query)
 
     if has_arabic(query):
-        for item in arabic_to_latin_queries(query, limit=3):
+        for item in arabic_to_latin_queries(query, limit=4):
             add(item)
 
-    return tuple(output[:4])
+        # صيغ شائعة للبحث المختلط؛ لا نختار لعبة من قائمة ثابتة.
+        mixed = re.sub(r"[\u200f\u200e]", " ", query)
+        mixed = re.sub(r"\s+", " ", mixed).strip()
+        if mixed != query:
+            add(mixed)
+
+    return tuple(output[:5])
 
 
 def prepare_search_query(query):
@@ -643,7 +649,7 @@ def get_game_search_queries(
         search_query_candidates(
             query
         )
-    )[:4]
+    )[:5]
 
 
 # ============================================================
@@ -709,16 +715,20 @@ async def _scriptblox_search_async(session, query, key_mode):
 async def _rscripts_search_async(session, query, key_mode):
     """طلب بحث موازٍ من RScripts (مصدر ثانٍ يوسّع تغطية النتائج)."""
 
+    # مهم: aiohttp/URL encoding لا يقبل بعض Boolean القيم مباشرة
+    # في هذا endpoint؛ RScripts يتوقع query-string values.
     params = {
-        "q": query,
+        "q": str(query),
         "page": 1,
-        "notPaid": True,
+        "notPaid": "true",
     }
 
-    # RScripts يدعم فلترة "بدون مفتاح" فقط؛ نوع "بمفتاح" يترك بدون
-    # فلترة صارمة لأنه ما فيه علم صريح يعكسه.
+    # RScripts يدعم فلترة noKeySystem. نرسلها كنص صراحةً
+    # حتى لا يظهر: Invalid variable type ... got True.
     if key_mode == "no_key":
-        params["noKeySystem"] = True
+        params["noKeySystem"] = "true"
+    elif key_mode == "with_key":
+        params["noKeySystem"] = "false"
 
     headers = {
         "User-Agent": "Team-Fime-Search/4.0",
@@ -826,6 +836,204 @@ async def _haxhell_search_async(session, query, key_mode):
     except Exception as e:
         print(f"❌ HaxHell search error: {e}")
         return [], True
+
+
+async def _roscripts_search_async(session, query, key_mode):
+    """RoScripts: مصدر ويب إضافي؛ best-effort scraping مع حماية من تغيّر HTML."""
+    query = str(query or "").strip()
+    if len(query) < 2:
+        return [], False
+
+    params = {"q": query}
+    headers = {
+        "User-Agent": "Team-Fime-Search/6.0",
+        "Accept": "text/html,application/xhtml+xml",
+        "Accept-Language": "en-US,en;q=0.8",
+    }
+
+    try:
+        async with session.get(
+            "https://roscripts.io/search",
+            params=params,
+            headers=headers,
+        ) as response:
+            if response.status != 200:
+                return [], True
+
+            html = await response.text(errors="ignore")
+
+        # نستخرج روابط صفحات السكربتات من HTML بدون dependency إضافية.
+        links = re.findall(
+            r'href=["\'](\/(?:script|scripts)\/[^"\']+)["\']',
+            html,
+            flags=re.I,
+        )
+
+        # بعض نسخ الموقع تستخدم روابط مباشرة للصفحات؛ ندعمها أيضًا.
+        links += re.findall(
+            r'href=["\'](https?:\/\/roscripts\.io\/(?:script|scripts)\/[^"\']+)["\']',
+            html,
+            flags=re.I,
+        )
+
+        output = []
+        seen = set()
+
+        for href in links[:40]:
+            href = str(href).strip()
+            if not href:
+                continue
+
+            if href.startswith("/"):
+                url = urllib.parse.urljoin("https://roscripts.io", href)
+            else:
+                url = href
+
+            if url in seen:
+                continue
+            seen.add(url)
+
+            slug = url.rstrip("/").split("/")[-1]
+            title = urllib.parse.unquote(slug).replace("-", " ").strip()
+
+            item = {
+                "_fime_api": "roscripts",
+                "_fime_source_url": url,
+                "_fime_raw_url": (
+                    "https://script.roscripts.io/"
+                    + urllib.parse.quote(slug, safe="")
+                ),
+                "title": title or "RoScripts result",
+                "slug": slug,
+                "gameName": "",
+                "views": 0,
+            }
+            output.append(item)
+
+        return output, False
+
+    except (asyncio.TimeoutError, aiohttp.ClientError):
+        return [], True
+    except Exception as e:
+        print(f"❌ RoScripts search error: {e}")
+        return [], True
+
+
+async def _rbxscripts_search_async(session, query, key_mode):
+    """RBXScripts: مصدر ويب إضافي للبحث الاحتياطي."""
+    query = str(query or "").strip()
+    if len(query) < 2:
+        return [], False
+
+    headers = {
+        "User-Agent": "Team-Fime-Search/6.0",
+        "Accept": "text/html,application/xhtml+xml",
+        "Accept-Language": "en-US,en;q=0.8",
+    }
+
+    # الموقع لا يعلن API بحث عامًا موحدًا، لذلك نستخدم صفحة الأرشيف
+    # كـ fallback فقط، ثم نطبّق المطابقة الصارمة محليًا.
+    params = {"search": query}
+
+    try:
+        async with session.get(
+            "https://rbxscripts.net/scripts/",
+            params=params,
+            headers=headers,
+        ) as response:
+            if response.status != 200:
+                return [], True
+
+            html = await response.text(errors="ignore")
+
+        links = re.findall(
+            r'href=["\'](\/scripts\/[^"\']+)["\']',
+            html,
+            flags=re.I,
+        )
+
+        output = []
+        seen = set()
+
+        for href in links[:60]:
+            href = str(href).strip()
+            if not href or href.rstrip("/") in {"/scripts", "/scripts/"}:
+                continue
+
+            url = urllib.parse.urljoin("https://rbxscripts.net", href)
+            if url in seen:
+                continue
+            seen.add(url)
+
+            slug = url.rstrip("/").split("/")[-1]
+            title = urllib.parse.unquote(slug).replace("-", " ").strip()
+
+            output.append({
+                "_fime_api": "rbxscripts",
+                "_fime_source_url": url,
+                "_fime_raw_url": "",
+                "title": title or "RBXScripts result",
+                "slug": slug,
+                "gameName": "",
+                "views": 0,
+            })
+
+        return output, False
+
+    except (asyncio.TimeoutError, aiohttp.ClientError):
+        return [], True
+    except Exception as e:
+        print(f"❌ RBXScripts search error: {e}")
+        return [], True
+
+
+def _normalize_external_script(script):
+    """يوحّد الحقول المهمة من المصادر الستة."""
+    if not isinstance(script, dict):
+        return {}
+
+    item = dict(script)
+    source = str(item.get("_fime_api") or "").lower()
+
+    if isinstance(item.get("game"), dict):
+        game_obj = item["game"]
+        item.setdefault(
+            "gameName",
+            game_obj.get("name")
+            or game_obj.get("title")
+            or game_obj.get("gameName")
+        )
+
+    if isinstance(item.get("stats"), dict):
+        stats = item["stats"]
+        item.setdefault("views", stats.get("views", 0))
+        item.setdefault("likes", stats.get("likes", 0))
+
+    if isinstance(item.get("flags"), dict):
+        flags = item["flags"]
+        item.setdefault("verified", flags.get("verified", False))
+        item.setdefault("keySystem", flags.get("keySystem", False))
+
+    if source == "robloxscripts":
+        item.setdefault("script", item.get("script", ""))
+        item.setdefault("rawScript", item.get("rawScriptUrl", ""))
+        item.setdefault(
+            "gameName",
+            (
+                item.get("game") or {}
+            ).get("name") if isinstance(item.get("game"), dict) else item.get("gameName")
+        )
+
+    elif source == "haxhell":
+        links = item.get("links") or {}
+        item.setdefault("_fime_source_url", links.get("webpage", ""))
+        item.setdefault("_fime_raw_url", links.get("raw", ""))
+
+    elif source == "rscripts":
+        item.setdefault("_fime_source_url", item.get("url", ""))
+        item.setdefault("_fime_raw_url", item.get("rawScript", ""))
+
+    return item
 
 
 def _script_key(script):
@@ -1041,12 +1249,22 @@ def _filter_relevant_results(scripts, query, key_mode=None):
         if not isinstance(script, dict):
             continue
 
+        script = _normalize_external_script(script)
         game_name = _game_name_from_script(script)
 
         # وجود اسم لعبة من المصدر = لازم يطابق بحث المستخدم بقوة.
         if game_name:
             relevance = _game_relevance_score(game_name, query)
             if relevance < 0.90:
+                continue
+        else:
+            # المصادر HTML قد لا تعيد game metadata. لا نسمح لها
+            # بتمرير نتائج عشوائية: يجب أن يطابق عنوان السكربت البحث بقوة.
+            title_relevance = _game_relevance_score(
+                str(script.get("title", "")),
+                query,
+            )
+            if title_relevance < 0.90:
                 continue
 
         if key_mode == "no_key" and _script_needs_key(script):
@@ -1061,7 +1279,7 @@ def _filter_relevant_results(scripts, query, key_mode=None):
 
 
 async def fetch_auto_search_mode(search_query, key_mode):
-    """محرك بحث موحّد: 4 مصادر بالتوازي + عدة صيغ + فلترة دقيقة."""
+    """محرك بحث موحّد: 6 مصادر بالتوازي + عدة صيغ + فلترة دقيقة."""
     cache = await get_auto_cache(search_query, key_mode)
     if cache is not None:
         return cache, False, True
@@ -1108,6 +1326,8 @@ async def fetch_auto_search_mode(search_query, key_mode):
                     _rscripts_search_async(session, candidate, key_mode),
                     _robloxscripts_search_async(session, candidate, key_mode),
                     _haxhell_search_async(session, candidate, key_mode),
+                    _roscripts_search_async(session, candidate, key_mode),
+                    _rbxscripts_search_async(session, candidate, key_mode),
                     return_exceptions=True,
                 )
 
