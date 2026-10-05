@@ -47,7 +47,7 @@ MEMORY_LIMIT     = 20       # نبقي تاريخ كافي عشان ما يكر�
 MEMORY_TTL       = 4.5 * 60 * 60
 
 MAX_MESSAGE_LENGTH = 2500
-MAX_OUTPUT_TOKENS  = 120    # سطرين بالكثير، مو رواية
+MAX_OUTPUT_TOKENS  = 450
 REQUEST_TIMEOUT    = 12     # ← السرعة: كان 35
 MAX_RETRIES        = 1      # ← السرعة: كان 2
 
