@@ -5670,7 +5670,7 @@ async def setup(
                 f"!{command_name}"
             )
 
-          else:
+        else:
             print(
                 f"❌ Arabic command missing: "
                 f"!{command_name}"
