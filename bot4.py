@@ -65,6 +65,15 @@ _search_cooldowns = {}
 _auto_search_cache = {}
 _auto_search_inflight = {}
 
+# مصادر البحث الإضافية. كلها HTTP/JSON خفيفة بدون متصفح أو Playwright.
+SEARCH_SOURCE_NAMES = {
+    "scriptblox": "ScriptBlox",
+    "rscripts": "RScripts",
+    "robloxscripts": "RobloxScripts",
+    "haxhell": "HaxHell",
+}
+SEARCH_MAX_QUERIES_PER_SOURCE = 3
+
 
 def _auto_cache_key(query, key_mode):
     return f"{compact_game_name(query)}|{key_mode}"
@@ -750,6 +759,75 @@ async def _rscripts_search_async(session, query, key_mode):
         return [], True
 
 
+async def _robloxscripts_search_async(session, query, key_mode):
+    params = {"q": query, "page": 1, "limit": 24, "sort": "most-liked"}
+    headers = {"User-Agent": "Team-Fime-Search/5.0", "Accept": "application/json"}
+    try:
+        async with session.get(
+            "https://robloxscripts.com/api/v1/scripts",
+            params=params,
+            headers=headers,
+        ) as response:
+            if response.status != 200:
+                return [], True
+            data = await response.json(content_type=None)
+            raw = data.get("data", []) if isinstance(data, dict) else []
+            if not isinstance(raw, list):
+                return [], False
+            output = []
+            for script in raw:
+                if not isinstance(script, dict):
+                    continue
+                item = dict(script)
+                item["_fime_api"] = "robloxscripts"
+                item.setdefault("title", item.get("name") or "بدون عنوان")
+                item.setdefault("views", item.get("viewCount", 0) or 0)
+                output.append(item)
+            return output, False
+    except (asyncio.TimeoutError, aiohttp.ClientError):
+        return [], True
+    except Exception as e:
+        print(f"❌ RobloxScripts search error: {e}")
+        return [], True
+
+
+async def _haxhell_search_async(session, query, key_mode):
+    params = {"q": query, "page": 1, "limit": 30, "sort": "views"}
+    if key_mode == "no_key":
+        params["keySystem"] = "false"
+    elif key_mode == "with_key":
+        params["keySystem"] = "true"
+
+    headers = {"User-Agent": "Team-Fime-Search/5.0", "Accept": "application/json"}
+    try:
+        async with session.get(
+            "https://haxhell.com/api/v1/search/scripts",
+            params=params,
+            headers=headers,
+        ) as response:
+            if response.status != 200:
+                return [], True
+            data = await response.json(content_type=None)
+            raw = data.get("data", []) if isinstance(data, dict) else []
+            if not isinstance(raw, list):
+                return [], False
+            output = []
+            for script in raw:
+                if not isinstance(script, dict):
+                    continue
+                item = dict(script)
+                item["_fime_api"] = "haxhell"
+                item.setdefault("title", item.get("name") or "بدون عنوان")
+                item.setdefault("views", item.get("viewCount", 0) or 0)
+                output.append(item)
+            return output, False
+    except (asyncio.TimeoutError, aiohttp.ClientError):
+        return [], True
+    except Exception as e:
+        print(f"❌ HaxHell search error: {e}")
+        return [], True
+
+
 def _script_key(script):
     return (
         script.get("_id")
@@ -760,13 +838,39 @@ def _script_key(script):
 
 
 def _game_name_from_script(script):
-    game = script.get("game", {})
+    """استخراج اسم اللعبة من اختلافات JSON بين مصادر البحث."""
+    if not isinstance(script, dict):
+        return ""
+
+    candidates = []
+    game = script.get("game")
     if isinstance(game, dict):
-        return str(
-            game.get("name")
-            or game.get("title")
-            or ""
-        ).strip()
+        candidates += [game.get("name"), game.get("title"), game.get("displayName")]
+    elif isinstance(game, str):
+        candidates.append(game)
+
+    candidates += [
+        script.get("gameName"),
+        script.get("gameTitle"),
+        script.get("supportedGame"),
+        script.get("experienceName"),
+    ]
+
+    for key in ("games", "supportedGames"):
+        value = script.get(key)
+        if isinstance(value, list):
+            for item in value[:5]:
+                if isinstance(item, dict):
+                    candidates += [item.get("name"), item.get("title")]
+                elif isinstance(item, str):
+                    candidates.append(item)
+        elif isinstance(value, str):
+            candidates.append(value)
+
+    for value in candidates:
+        value = str(value or "").strip()
+        if value:
+            return value
     return ""
 
 
@@ -957,15 +1061,13 @@ def _filter_relevant_results(scripts, query, key_mode=None):
 
 
 async def fetch_auto_search_mode(search_query, key_mode):
-    """مسار بحث سريع: استعلام أساسي واحد لكل مصدر، بدون fallback يلوث النتائج."""
-
+    """محرك بحث موحّد: 4 مصادر بالتوازي + عدة صيغ + فلترة دقيقة."""
     cache = await get_auto_cache(search_query, key_mode)
     if cache is not None:
         return cache, False, True
 
     cache_key = _auto_cache_key(search_query, key_mode)
     existing_task = _auto_search_inflight.get(cache_key)
-
     if existing_task:
         try:
             scripts, network_error = await existing_task
@@ -974,17 +1076,19 @@ async def fetch_auto_search_mode(search_query, key_mode):
             pass
 
     async def worker():
-        queries = get_game_search_queries(search_query)
-        primary = queries[0] if queries else str(search_query).strip()
+        queries = list(get_game_search_queries(search_query))
+        candidates = []
+        seen_candidates = set()
 
-        # للإنجليزي: استعلام واحد فقط.
-        # للعربي: الصيغ اللاتينية المولدة من نفس الاسم فقط.
-        # ممنوع البحث عن لعبة بديلة أو fallback عشوائي.
-        candidates = [primary]
-        if has_arabic(search_query):
-            candidates = list(dict.fromkeys(
-                [primary] + queries[1:3]
-            ))
+        for candidate in queries[:SEARCH_MAX_QUERIES_PER_SOURCE]:
+            candidate = str(candidate or "").strip()
+            norm = normalize_game_name(candidate)
+            if candidate and norm and norm not in seen_candidates:
+                seen_candidates.add(norm)
+                candidates.append(candidate)
+
+        if not candidates:
+            candidates = [str(search_query).strip()]
 
         timeout = aiohttp.ClientTimeout(
             total=AUTO_SEARCH_TOTAL_TIMEOUT,
@@ -994,31 +1098,30 @@ async def fetch_auto_search_mode(search_query, key_mode):
 
         collected = []
         seen = set()
-        had_network_error = False
         any_source_ok = False
+        had_network_error = False
 
         async with aiohttp.ClientSession(timeout=timeout) as session:
-            # نستخدم أول صيغة فقط أولًا، والمصدرين بالتوازي.
-            # لا ننتظر fallback إذا كانت هناك نتائج صحيحة.
             for candidate_index, candidate in enumerate(candidates):
                 results = await asyncio.gather(
                     _scriptblox_search_async(session, candidate, key_mode),
                     _rscripts_search_async(session, candidate, key_mode),
+                    _robloxscripts_search_async(session, candidate, key_mode),
+                    _haxhell_search_async(session, candidate, key_mode),
                     return_exceptions=True,
                 )
 
                 candidate_added = 0
-                source_errors = []
+                source_failures = 0
 
                 for result in results:
                     if isinstance(result, Exception):
-                        source_errors.append(True)
+                        source_failures += 1
                         continue
 
                     scripts, network_error = result
-                    source_errors.append(network_error)
-
                     if network_error:
+                        source_failures += 1
                         continue
 
                     any_source_ok = True
@@ -1026,20 +1129,21 @@ async def fetch_auto_search_mode(search_query, key_mode):
                     for script in _filter_relevant_results(
                         scripts, search_query, key_mode
                     ):
-                        key = _script_key(script)
+                        source = str(script.get("_fime_api") or "unknown")
+                        key = f"{source}:{_script_key(script)}"
                         if key in seen:
                             continue
                         seen.add(key)
                         collected.append(script)
                         candidate_added += 1
 
-                if candidate_added:
+                # لا نضيف صيغًا أضعف إذا أعطت الصيغة الأصلية نتائج كافية.
+                if candidate_added >= 3:
                     break
 
-                if all(source_errors) if source_errors else False:
+                if source_failures >= 4:
                     had_network_error = True
 
-                # صيغة عربية بديلة فقط إذا لم نجد أي نتيجة مطابقة.
                 if candidate_index + 1 >= len(candidates):
                     break
 
@@ -1051,7 +1155,6 @@ async def fetch_auto_search_mode(search_query, key_mode):
             reverse=True,
         )
 
-        # حماية إضافية: لا تسمح بنتائج رفضها الفلتر بعد الترتيب.
         collected = [
             item for item in collected
             if _score_auto_result(item, search_query) > -99999
@@ -3130,6 +3233,53 @@ def create_embed(
     return embed
 
 
+def _script_source_label(script):
+    return SEARCH_SOURCE_NAMES.get(
+        str(script.get("_fime_api") or ""),
+        "مصدر خارجي",
+    )
+
+
+def _script_view_url(script):
+    source = str(script.get("_fime_api") or "")
+    slug = str(
+        script.get("slug")
+        or script.get("_id")
+        or script.get("id")
+        or ""
+    ).strip()
+
+    if source == "scriptblox" and slug:
+        return f"https://scriptblox.com/script/{urllib.parse.quote(slug)}"
+    if source == "rscripts" and slug:
+        return f"https://rscripts.net/script/{urllib.parse.quote(slug)}"
+
+    for key in ("url", "scriptUrl", "webUrl", "pageUrl", "link"):
+        value = str(script.get(key) or "").strip()
+        if value.startswith(("http://", "https://")):
+            return value
+    return ""
+
+
+def _script_raw_url(script):
+    source = str(script.get("_fime_api") or "")
+    slug = str(
+        script.get("slug")
+        or script.get("_id")
+        or script.get("id")
+        or ""
+    ).strip()
+
+    if source == "scriptblox" and slug:
+        return f"https://rawscripts.net/raw/{urllib.parse.quote(slug)}"
+
+    for key in ("rawScriptUrl", "rawUrl", "raw_url"):
+        value = str(script.get(key) or "").strip()
+        if value.startswith(("http://", "https://")):
+            return value
+    return ""
+
+
 async def display_scripts_dynamic(
     interaction,
     message,
@@ -3477,7 +3627,7 @@ async def display_scripts_local(
 
         embed = discord.Embed(
             title=(
-                f"{'📊 ScriptBlox' if api == 'scriptblox' else '📜 RScripts'} Scripts"
+                f"🔎 Team Fime Multi-Search • {SEARCH_SOURCE_NAMES.get(api, 'Scripts')}"
             ),
             description=(
                 f"Showing {len(scripts)} "
