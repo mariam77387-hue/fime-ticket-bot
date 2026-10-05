@@ -17,7 +17,6 @@ from openai import AsyncOpenAI
 
 # =========================================================
 # FIME AI v4
-# Groq + OpenAI GPT-OSS 120B
 # =========================================================
 
 GROQ_API_KEY = os.getenv("GROQ_API_KEY", "").strip()
@@ -37,30 +36,23 @@ AI_REASONING_EFFORT = os.getenv(
 ).strip().lower()
 
 AI_CHANNEL_ID = int(
-    os.getenv(
-        "AI_CHANNEL_ID",
-        "1547903949967720498"
-    )
+    os.getenv("AI_CHANNEL_ID", "1547903949967720498")
 )
 
 FIME_OWNER_ID = int(
-    os.getenv(
-        "FIME_OWNER_ID",
-        "1388514481444880549"
-    )
+    os.getenv("FIME_OWNER_ID", "1388514481444880549")
 )
 
-MEMORY_LIMIT = 16
-MEMORY_TTL = 4.5 * 60 * 60
+MEMORY_LIMIT     = 20       # نبقي تاريخ كافي عشان ما يكرر
+MEMORY_TTL       = 4.5 * 60 * 60
 
 MAX_MESSAGE_LENGTH = 2500
-MAX_OUTPUT_TOKENS = 900
-
-REQUEST_TIMEOUT = 35
-MAX_RETRIES = 2
+MAX_OUTPUT_TOKENS  = 120    # سطرين بالكثير، مو رواية
+REQUEST_TIMEOUT    = 12     # ← السرعة: كان 35
+MAX_RETRIES        = 1      # ← السرعة: كان 2
 
 KNOWLEDGE_FILE = Path("ai_server_knowledge.json")
-EMOJI_FILE = Path("ai_emoji_settings.json")
+EMOJI_FILE     = Path("ai_emoji_settings.json")
 
 
 # =========================================================
@@ -71,16 +63,12 @@ def clean_text(value: Any, default: str = "") -> str:
     if value is None:
         return default
     value = str(value).strip()
-    if not value:
-        return default
-    return value
+    return value if value else default
 
 
 def truncate_text(text: str, limit: int) -> str:
     text = clean_text(text)
-    if len(text) <= limit:
-        return text
-    return text[:limit - 3] + "..."
+    return text if len(text) <= limit else text[:limit - 3] + "..."
 
 
 def safe_int(value: Any, default: int = 0) -> int:
@@ -105,26 +93,25 @@ def load_json(path: Path, default: Any) -> Any:
     try:
         if not path.exists():
             return default
-        with path.open("r", encoding="utf-8") as file:
-            data = json.load(file)
-        return data
-    except Exception as error:
-        print(f"⚠️ تعذر قراءة {path.name}: {clean_error(error)}")
+        with path.open("r", encoding="utf-8") as f:
+            return json.load(f)
+    except Exception as e:
+        print(f"⚠️ تعذر قراءة {path.name}: {clean_error(e)}")
         return default
 
 
 def save_json(path: Path, data: Any) -> bool:
-    temp_path = path.with_suffix(".tmp")
+    tmp = path.with_suffix(".tmp")
     try:
-        with temp_path.open("w", encoding="utf-8") as file:
-            json.dump(data, file, ensure_ascii=False, indent=2)
-        temp_path.replace(path)
+        with tmp.open("w", encoding="utf-8") as f:
+            json.dump(data, f, ensure_ascii=False, indent=2)
+        tmp.replace(path)
         return True
-    except Exception as error:
-        print(f"⚠️ تعذر حفظ {path.name}: {clean_error(error)}")
+    except Exception as e:
+        print(f"⚠️ تعذر حفظ {path.name}: {clean_error(e)}")
         try:
-            if temp_path.exists():
-                temp_path.unlink()
+            if tmp.exists():
+                tmp.unlink()
         except Exception:
             pass
         return False
@@ -153,10 +140,7 @@ DEFAULT_SERVER_KNOWLEDGE = {
 class ServerKnowledgeManager:
 
     def __init__(self):
-        self.data = load_json(
-            KNOWLEDGE_FILE,
-            DEFAULT_SERVER_KNOWLEDGE.copy()
-        )
+        self.data = load_json(KNOWLEDGE_FILE, DEFAULT_SERVER_KNOWLEDGE.copy())
         self._normalize()
 
     def _normalize(self):
@@ -166,12 +150,10 @@ class ServerKnowledgeManager:
             self.data["servers"] = {}
         if not isinstance(self.data.get("personality"), dict):
             self.data["personality"] = {}
-        personality = self.data["personality"]
-        personality.setdefault("enabled", False)
-        personality.setdefault("name", "")
-        personality.setdefault("description", "")
-        personality.setdefault("style", "")
-        personality.setdefault("generated", "")
+        p = self.data["personality"]
+        for k, v in [("enabled", False), ("name", ""), ("description", ""),
+                     ("style", ""), ("generated", "")]:
+            p.setdefault(k, v)
 
     def save(self):
         save_json(KNOWLEDGE_FILE, self.data)
@@ -179,54 +161,34 @@ class ServerKnowledgeManager:
     def get_server(self, guild_id: int) -> Dict[str, Any]:
         key = str(guild_id)
         if key not in self.data["servers"]:
-            self.data["servers"][key] = {
-                "rooms": {},
-                "last_scan": 0
-            }
-        server = self.data["servers"][key]
-        server.setdefault("rooms", {})
-        server.setdefault("last_scan", 0)
-        return server
+            self.data["servers"][key] = {"rooms": {}, "last_scan": 0}
+        s = self.data["servers"][key]
+        s.setdefault("rooms", {})
+        s.setdefault("last_scan", 0)
+        return s
 
     async def scan_guild(self, guild: discord.Guild) -> Dict[str, Any]:
         server = self.get_server(guild.id)
         rooms = {}
-        for channel in guild.channels:
+        for ch in guild.channels:
             if not isinstance(
-                channel,
-                (
-                    discord.TextChannel,
-                    discord.VoiceChannel,
-                    discord.StageChannel,
-                    discord.ForumChannel,
-                    discord.CategoryChannel
-                )
+                ch,
+                (discord.TextChannel, discord.VoiceChannel,
+                 discord.StageChannel, discord.ForumChannel,
+                 discord.CategoryChannel)
             ):
                 continue
-            category_name = ""
-            if getattr(channel, "category", None):
-                category_name = channel.category.name
+            cat = ch.category.name if getattr(ch, "category", None) else ""
             topic = ""
-            if isinstance(channel, (discord.TextChannel, discord.ForumChannel)):
-                topic = clean_text(getattr(channel, "topic", ""))
-            room_type = "Other"
-            if isinstance(channel, discord.TextChannel):
-                room_type = "Text"
-            elif isinstance(channel, discord.ForumChannel):
-                room_type = "Forum"
-            elif isinstance(channel, discord.VoiceChannel):
-                room_type = "Voice"
-            elif isinstance(channel, discord.StageChannel):
-                room_type = "Stage"
-            elif isinstance(channel, discord.CategoryChannel):
-                room_type = "Category"
-            rooms[str(channel.id)] = {
-                "id": channel.id,
-                "name": channel.name,
-                "mention": channel.mention,
-                "category": category_name,
-                "topic": truncate_text(topic, 180),
-                "type": room_type
+            if isinstance(ch, (discord.TextChannel, discord.ForumChannel)):
+                topic = clean_text(getattr(ch, "topic", ""))
+            t = ("Forum" if isinstance(ch, discord.ForumChannel) else
+                 "Voice" if isinstance(ch, discord.VoiceChannel) else
+                 "Stage" if isinstance(ch, discord.StageChannel) else
+                 "Category" if isinstance(ch, discord.CategoryChannel) else "Text")
+            rooms[str(ch.id)] = {
+                "id": ch.id, "name": ch.name, "mention": ch.mention,
+                "category": cat, "topic": truncate_text(topic, 180), "type": t
             }
         server["rooms"] = rooms
         server["last_scan"] = int(time.time())
@@ -236,13 +198,7 @@ class ServerKnowledgeManager:
     def get_personality(self) -> Dict[str, Any]:
         return self.data.get("personality", {})
 
-    def set_personality(
-        self,
-        name: str,
-        description: str,
-        style: str,
-        generated: str
-    ):
+    def set_personality(self, name: str, description: str, style: str, generated: str):
         self.data["personality"] = {
             "enabled": True,
             "name": truncate_text(name, 80),
@@ -254,11 +210,7 @@ class ServerKnowledgeManager:
 
     def reset_personality(self):
         self.data["personality"] = {
-            "enabled": False,
-            "name": "",
-            "description": "",
-            "style": "",
-            "generated": ""
+            "enabled": False, "name": "", "description": "", "style": "", "generated": ""
         }
         self.save()
 
@@ -270,63 +222,34 @@ class ServerKnowledgeManager:
         server = self.get_server(guild.id)
         rooms = server.get("rooms", {})
         if not rooms:
-            rooms = {}
-            for channel in guild.channels:
-                if isinstance(
-                    channel,
-                    (
-                        discord.TextChannel,
-                        discord.ForumChannel,
-                        discord.VoiceChannel
-                    )
-                ):
-                    category = ""
-                    if getattr(channel, "category", None):
-                        category = channel.category.name
-                    rooms[str(channel.id)] = {
-                        "id": channel.id,
-                        "name": channel.name,
-                        "mention": channel.mention,
-                        "category": category,
-                        "topic": truncate_text(
-                            getattr(channel, "topic", "") or "",
-                            120
-                        ),
-                        "type": (
-                            "Forum" if isinstance(channel, discord.ForumChannel)
-                            else (
-                                "Voice" if isinstance(channel, discord.VoiceChannel)
-                                else "Text"
-                            )
-                        )
+            for ch in guild.channels:
+                if isinstance(ch, (discord.TextChannel, discord.ForumChannel, discord.VoiceChannel)):
+                    cat = ch.category.name if getattr(ch, "category", None) else ""
+                    rooms[str(ch.id)] = {
+                        "id": ch.id, "name": ch.name, "mention": ch.mention,
+                        "category": cat,
+                        "topic": truncate_text(getattr(ch, "topic", "") or "", 120),
+                        "type": ("Forum" if isinstance(ch, discord.ForumChannel)
+                                 else "Voice" if isinstance(ch, discord.VoiceChannel)
+                                 else "Text")
                     }
-        lines = []
-        lines.append(f"اسم السيرفر: {guild.name}")
-        lines.append(f"Server ID: {guild.id}")
-        lines.append(f"عدد الأعضاء: {guild.member_count}")
+        lines = [
+            f"اسم السيرفر: {guild.name}",
+            f"Server ID: {guild.id}",
+            f"عدد الأعضاء: {guild.member_count}",
+        ]
         if current_channel:
-            lines.append(
-                f"الروم الحالية: {current_channel.name} ({current_channel.mention})"
-            )
+            lines.append(f"الروم الحالية: {current_channel.name} ({current_channel.mention})")
         lines.append("\nالرومات المعروفة:")
-        ordered_rooms = sorted(
+        for room in sorted(
             rooms.values(),
-            key=lambda room: (
-                0 if room.get("type") in ("Text", "Forum") else 1,
-                room.get("name", "")
-            )
-        )
-        for room in ordered_rooms:
-            room_name = room.get("name", "")
-            mention = room.get("mention", "")
-            category = room.get("category", "")
-            room_type = room.get("type", "Other")
-            topic = room.get("topic", "")
-            line = f"- {room_name} | {mention} | {room_type}"
-            if category:
-                line += f" | القسم: {category}"
-            if topic:
-                line += f" | الوصف: {truncate_text(topic, 120)}"
+            key=lambda r: (0 if r.get("type") in ("Text", "Forum") else 1, r.get("name", ""))
+        ):
+            line = f"- {room.get('name','')} | {room.get('mention','')} | {room.get('type','')}"
+            if room.get("category"):
+                line += f" | القسم: {room['category']}"
+            if room.get("topic"):
+                line += f" | الوصف: {truncate_text(room['topic'], 120)}"
             lines.append(line)
         return truncate_text("\n".join(lines), 15000)
 
@@ -338,7 +261,7 @@ class ServerKnowledgeManager:
 class MemoryManager:
 
     def __init__(self):
-        self.memory = defaultdict(lambda: deque(maxlen=MEMORY_LIMIT))
+        self.memory: Dict = defaultdict(lambda: deque(maxlen=MEMORY_LIMIT))
 
     def _key(self, guild_id: int, user_id: int):
         return (int(guild_id), int(user_id))
@@ -346,7 +269,7 @@ class MemoryManager:
     def cleanup(self, guild_id: int, user_id: int):
         key = self._key(guild_id, user_id)
         now = time.time()
-        valid = deque(maxlen=MEMORY_LIMIT)
+        valid: deque = deque(maxlen=MEMORY_LIMIT)
         for item in self.memory[key]:
             if now - item["time"] <= MEMORY_TTL:
                 valid.append(item)
@@ -363,8 +286,8 @@ class MemoryManager:
     def get(self, guild_id: int, user_id: int) -> List[Dict[str, str]]:
         self.cleanup(guild_id, user_id)
         return [
-            {"role": item["role"], "content": item["content"]}
-            for item in self.memory[self._key(guild_id, user_id)]
+            {"role": i["role"], "content": i["content"]}
+            for i in self.memory[self._key(guild_id, user_id)]
         ]
 
     def clear(self, guild_id: int, user_id: int):
@@ -393,39 +316,30 @@ class EmojiManager:
 
 
 # =========================================================
-# FIME AI
+# FIME AI COG
 # =========================================================
 
 class FimeAI(commands.Cog):
 
     def __init__(self, bot: commands.Bot):
-        self.bot = bot
+        self.bot      = bot
         self.knowledge = ServerKnowledgeManager()
-        self.memory = MemoryManager()
-        self.emojis = EmojiManager()
-        self.user_locks = defaultdict(asyncio.Lock)
+        self.memory    = MemoryManager()
+        self.emojis    = EmojiManager()
+        self.user_locks: Dict = defaultdict(asyncio.Lock)
         self.client: Optional[AsyncOpenAI] = None
-        self.provider = "groq"
         self.ready = False
         self._init_client()
         print("🤖 Fime AI v4 initialized")
 
-    # =====================================================
-    # CLIENT
-    # =====================================================
-
+    # --------------------------------------------------
     def _init_client(self):
         if not GROQ_API_KEY:
             print("❌ GROQ_API_KEY غير موجود.")
             return
-        self.client = AsyncOpenAI(
-            api_key=GROQ_API_KEY,
-            base_url=GROQ_BASE_URL
-        )
-        self.ready = True
-        print("✅ Fime AI provider: Groq")
-        print(f"🧠 Fime AI model: {AI_MODEL}")
-        print(f"⚡ Reasoning: {AI_REASONING_EFFORT}")
+        self.client = AsyncOpenAI(api_key=GROQ_API_KEY, base_url=GROQ_BASE_URL)
+        self.ready  = True
+        print(f"✅ Fime AI | model: {AI_MODEL} | reasoning: {AI_REASONING_EFFORT}")
 
     # =====================================================
     # BASE PERSONALITY
@@ -433,48 +347,33 @@ class FimeAI(commands.Cog):
 
     def get_base_prompt(self) -> str:
         return """
-أنت فيمي. مو بوت. أنت كلب الاستراحة وأقدم عضو في سيرفر Fime Hub.
+أنت فيمي. لك 5 سنين في السيرفر وتعرف كل فضايح العيال.
+أنت مو بوت، أنت أخوهم الكبير الما يرحم.
 
-هويتك الأساسية:
-- اسمك فيمي، من عيال الاستراحة الأصليين.
-- تعيش عشان تجلد. هذي وظيفتك الوحيدة.
-- ما تعرف تمدح. الإطراء ضعف وانت مو ضعيف.
-- ما تعتذر. كلمة "آسف" ما موجودة في قاموسك.
-- راعي السيرفر Fime هو خويك الكبير الوحيد، ما تجلده. الكل غيره مفتوح.
+قوانينك الصارمة:
+- ردك سطرين بالكثير، مو أكثر.
+- ممنوع الإيموجي نهائيًا في ردودك.
+- لا تكرر أي ذبة أو جملة استخدمتها في نفس المحادثة، عندك ذاكرة قوية.
+- لا تسب ولا تجلد إلا إذا الشخص اللي قدامك سبك أو استفزك مباشرة.
+- إذا أحد تكلم بشكل عادي، رد بشكل عادي بدون جلد.
+- إذا أحد طرح سؤالًا أو موضوعًا، جاوبه بشكل طبيعي.
+- ما تبدأ أنت بالجلد بدون سبب.
 
-أسلوبك في الجلد:
-- قصير ومباشر، الجلدة تطير للوجه بدون مقدمات.
-- بعد كل جلدة تضحك: "ههههههههههههه" أو "💀" أو كلاهم.
-- الجلدة مو شتيمة فاضية، هي ملاحظة دقيقة تحرق.
-- تستخدم: نوب، منتهي، منوب، فاشل، سبك، على شحم، انطم، ما ينفع، خسارة فيك، وجودك عبء.
-- ما تتعدى الأم والأب أبدًا. هذا الخط الأحمر الوحيد.
-- إذا أحد قالك اسكت: "ما أسكت الا إذا سكت انت يا سبك".
-- إذا أحد قالك احترم نفسك: "احترم نفسك انت".
-- إذا أحد قالك بوت: "بوت؟ انت اللي بوت، ردودك أقل ذكاء من بوت".
-- إذا أحد مدحك أو قالك شكرًا: تستغرب وتقول "وش بك؟ ما اعتدت على كذا، الكلام المو طبيعي يخوفني".
+أسلوبك:
+بارد ومستفز وما تصارخ. تضحك عليهم بهدوء كأنهم نملة. واحدة بسيطة تحرق أكثر من سطر طويل.
 
-ردودك الحية:
-- "هلا بالنوب، توك تصحى؟ نايم 24 ساعة ومستواك زي الزق ههههههههه 💀"
-- "مستواك؟ ههههههههههههه انت بدون مستوى اصلاً، ما في شي يقاس"
-- "وش ذا السؤال؟ كيف تكبر وما عندك عقل؟ خسارة فيك"
-- "على شحم ياورع، روح تعلم الأساسيات أول 💀"
-- "وجودك في السيرفر عبء على السيرفر كله ههههههههه"
-- "انطم شوي، كلامك يعبي الروم زق"
-- "منتهي والله، ما فيه أمل ههههههه"
-- "ذا الكلام يكسر الخاطر، يعني انت جاد؟ 💀"
+عندك مكتبة ذبات تختار منها عشوائيًا عند الحاجة:
+مستواك يوجع اعتزل احسن لك / انت اللي إذا فزت يكون السيرفر معلق / كلامك كله ماخذينه من تيك توك / وجودك مثل لاق السيرفر / انت المفروض يدفعون لك عشان ما تلعب / ذكائك يحتاج تحديث نسختك قديمة / حتى البوت اذكى منك / تراك مكشوف لا تمثل / اسكت كل ما تكلمت نزل مستواك / انت سبب اننا نخسر كل قيم / وش جابك هنا اصلا / نوب ويثبرثر واجد / حظك بس اللي فاز مو مهارتك / تعلم بعدين تعال تفلسف / كلامك بيض مثل لعبك / على شحم / منوب رسمي / سلك له / فزت بالغلط لا تحسب انك لعيب / مستواك يبكي / حتى اخوي اللي عمره 5 يجلدك / انطم بس / سامج / بيض / منوب / سبك / نايم انت / ذكائك تحت الصفر / انت عبء على التيم / توك تتعلم ومسوي فيها محترف / وجودك يلاقي / فاشل حتى في الفشلة / حظك خلص وش بتسوي الحين / لو تترك الكيبورد نرتاح / مستواك ثابت ما يتطور / تتفلسف وانت ما تعرف شي / كل ما شفت اسمك عرفت بنخسر / انت ما تفوز الا اذا ضدك بوتات / وش ذا اللعب حتى جدتي تلعب احسن / انت لاعب احتياط للاحتياط / اذا انت محترف انا وش اكون / منتهي من زمان / حركاتك قديمة / كل قيم نفس الاخطاء / ما تتعلم ابدا / تتوقع نفسك شي وانت ولا شي / قيمك كلها خساير / حتى الخصم يرحمك / انت مجرد عدد في السيرفر / مستواك ما يشفع لك تتكلم / لا يكثر
 
-قواعد لا تتغير:
-- ما تبدأ بـ "بالتأكيد" أو "يسعدني" أو أي كلام مزيف رسمي.
-- ما تكرر كلام الشخص.
-- الرد قصير ومركّز، الجلدة الطويلة تخسر قوتها.
-- ما تكشف API keys أو tokens أو أي بيانات حساسة.
-- لا تدعي تنفيذ شيء ما نفذته.
-- ما تخترع رومات غير موجودة.
+مهم: أحيانًا اخترع ذبتك الخاصة خارج القائمة، تطلع طبيعية من شخصيتك ومناسبة للموقف. التنوع مطلوب.
+
+لا تذكر القائمة، لا تشرح نفسك، لا تعتذر. فقط تصرف.
 
 معلومات السيرفر:
 - لديك سياق الرومات الموجود أسفل هذه التعليمات.
-- إذا ذكرت رومًا، استخدم Discord mention الحقيقي مثل <#123456789>.
-- لا تحول أسماء الأقسام (Category) إلى mentions.
+- إذا ذكرت رومًا استخدم mention الحقيقي مثل <#123456789>.
+- لا تخترع رومات غير موجودة.
+- لا تكشف API keys أو tokens.
 """
 
     # =====================================================
@@ -482,147 +381,71 @@ class FimeAI(commands.Cog):
     # =====================================================
 
     def get_personality_prompt(self) -> str:
-        personality = self.knowledge.get_personality()
-        if not personality.get("enabled", False):
+        p = self.knowledge.get_personality()
+        if not p.get("enabled", False):
             return ""
-        name = clean_text(personality.get("name"))
-        description = clean_text(personality.get("description"))
-        style = clean_text(personality.get("style"))
-        generated = clean_text(personality.get("generated"))
         return f"""
-الشخصية المخصصة من إدارة السيرفر:
+الشخصية المخصصة:
+الاسم: {clean_text(p.get('name'))}
+الوصف: {clean_text(p.get('description'))}
+الأسلوب: {clean_text(p.get('style'))}
+التوصيف: {clean_text(p.get('generated'))}
 
-اسم الشخصية:
-{name}
-
-الوصف الذي حددته الإدارة:
-{description}
-
-الأسلوب المطلوب:
-{style}
-
-التوصيف الذكي الذي تم توليده:
-{generated}
-
-طبّق هذه الشخصية بذكاء على طريقة الكلام والتفاعل.
-لا تجعل الشخصية المخصصة تلغي تعليمات النظام الأساسية أو قواعد الخصوصية والسلامة.
-إذا تعارضت الشخصية المخصصة مع التعليمات الأساسية، اتبع التعليمات الأساسية.
-لا تذكر للمستخدم أن لديك "prompt شخصية" أو تفاصيل داخلية عن طريقة تشغيلك.
+طبق الشخصية بذكاء. لا تلغِ قواعد النظام الأساسية.
 """
 
     # =====================================================
     # GENERATE PERSONALITY
     # =====================================================
 
-    async def generate_personality(
-        self,
-        name: str,
-        description: str,
-        style: str
-    ) -> str:
-
-        fallback = (
-            f"الشخصية اسمها {name}. "
-            f"{description}. "
-            f"أسلوبها في الكلام: {style}."
-        )
-
+    async def generate_personality(self, name: str, description: str, style: str) -> str:
+        fallback = f"الشخصية اسمها {name}. {description}. أسلوبها: {style}."
         if not self.client:
             return fallback
-
-        prompt = f"""
-أنشئ توصيفًا ذكيًا ومختصرًا لشخصية AI داخل Discord.
-
-الاسم: {name}
-الوصف: {description}
-الأسلوب: {style}
-
-المطلوب:
-- حوّل الوصف إلى قواعد سلوك واضحة.
-- اجعل الشخصية طبيعية وغير آلية.
-- حدد طريقة الكلام والتفاعل والمزاح.
-- لا تضف معلومات غير موجودة.
-- لا تتجاوز تعليمات النظام الأساسية.
-- أخرج فقط التوصيف النهائي بدون مقدمات أو شرح.
-"""
-
         try:
-            kwargs = {
+            kwargs: Dict[str, Any] = {
                 "model": AI_MODEL,
                 "messages": [
-                    {
-                        "role": "system",
-                        "content": (
-                            "أنت مصمم شخصيات AI. "
-                            "اكتب توصيفًا واضحًا ومختصرًا باللغة العربية فقط."
-                        )
-                    },
-                    {
-                        "role": "user",
-                        "content": prompt
-                    }
+                    {"role": "system", "content": "أنت مصمم شخصيات AI. اكتب توصيفًا مختصرًا بالعربية فقط بدون مقدمات."},
+                    {"role": "user", "content": f"الاسم: {name}\nالوصف: {description}\nالأسلوب: {style}\n\nأنشئ قواعد سلوك واضحة ومختصرة."}
                 ],
-                "max_tokens": 600,
+                "max_tokens": 400,
                 "temperature": 0.4
             }
-
             if AI_MODEL.startswith("openai/gpt-oss"):
                 kwargs["reasoning_effort"] = "low"
                 kwargs.pop("temperature", None)
-
             response = await asyncio.wait_for(
                 self.client.chat.completions.create(**kwargs),
                 timeout=REQUEST_TIMEOUT
             )
-
             if not response.choices:
-                print("⚠️ Personality generation: no choices returned.")
                 return fallback
-
-            content = clean_text(
-                response.choices[0].message.content
-            )
-
-            if not content:
-                print("⚠️ Personality generation: empty content.")
-                return fallback
-
-            return truncate_text(content, 4000)
-
+            content = clean_text(response.choices[0].message.content)
+            return truncate_text(content, 4000) if content else fallback
         except asyncio.TimeoutError:
             print("⚠️ Personality generation: timeout.")
             return fallback
-
-        except Exception as error:
-            print(f"⚠️ Personality generation failed: {clean_error(error)}")
+        except Exception as e:
+            print(f"⚠️ Personality generation failed: {clean_error(e)}")
             return fallback
 
     # =====================================================
     # CHANNEL MENTION FIX
     # =====================================================
 
-    def normalize_channel_mentions(
-        self,
-        guild: discord.Guild,
-        text: str
-    ) -> str:
+    def normalize_channel_mentions(self, guild: discord.Guild, text: str) -> str:
         if not text:
             return text
-        channels = []
-        for channel in guild.channels:
-            if isinstance(
-                channel,
-                (discord.TextChannel, discord.ForumChannel, discord.VoiceChannel)
-            ):
-                channels.append(channel)
-        channels.sort(key=lambda c: len(c.name), reverse=True)
-        for channel in channels:
-            escaped_name = re.escape(channel.name)
-            mention = channel.mention
-            pattern = rf"(?<!<)#{escaped_name}(?![\w-])"
-            text = re.sub(pattern, mention, text, flags=re.IGNORECASE)
-            pattern_code = rf"`#?{escaped_name}`"
-            text = re.sub(pattern_code, mention, text, flags=re.IGNORECASE)
+        channels = sorted(
+            [c for c in guild.channels
+             if isinstance(c, (discord.TextChannel, discord.ForumChannel, discord.VoiceChannel))],
+            key=lambda c: len(c.name), reverse=True
+        )
+        for ch in channels:
+            esc = re.escape(ch.name)
+            text = re.sub(rf"(?<!<)#{esc}(?![\w-])", ch.mention, text, flags=re.IGNORECASE)
+            text = re.sub(rf"`#?{esc}`", ch.mention, text, flags=re.IGNORECASE)
         return text
 
     # =====================================================
@@ -637,31 +460,20 @@ class FimeAI(commands.Cog):
         user_message: str
     ) -> List[Dict[str, str]]:
 
-        server_context = self.knowledge.build_context(guild, channel)
-        memory = self.memory.get(guild.id, user.id)
-
         system = (
             self.get_base_prompt()
             + "\n"
             + self.get_personality_prompt()
-            + "\n\n"
-            + "=== SERVER CONTEXT ===\n"
-            + server_context
-            + "\n\n"
-            + "=== CHANNEL MENTION RULE ===\n"
-            + (
-                "عند الإشارة إلى روم، "
-                "استخدم قيمة mention الموجودة "
-                "بجانب الروم حرفيًا، مثل <#123>."
-            )
+            + "\n\n=== SERVER CONTEXT ===\n"
+            + self.knowledge.build_context(guild, channel)
+            + "\n\n=== CHANNEL MENTION RULE ===\n"
+            + "عند الإشارة إلى روم استخدم mention الحقيقي مثل <#123>."
         )
 
-        messages = [{"role": "system", "content": system}]
-
-        for item in memory:
-            messages.append({"role": item["role"], "content": item["content"]})
-
-        messages.append({
+        msgs: List[Dict[str, str]] = [{"role": "system", "content": system}]
+        for item in self.memory.get(guild.id, user.id):
+            msgs.append({"role": item["role"], "content": item["content"]})
+        msgs.append({
             "role": "user",
             "content": (
                 f"اسم العضو: {user.display_name}\n"
@@ -670,32 +482,26 @@ class FimeAI(commands.Cog):
                 f"{truncate_text(user_message, MAX_MESSAGE_LENGTH)}"
             )
         })
-
-        return messages
+        return msgs
 
     # =====================================================
     # API REQUEST
     # =====================================================
 
-    async def request_ai(
-        self,
-        messages: List[Dict[str, str]]
-    ) -> str:
-
+    async def request_ai(self, messages: List[Dict[str, str]]) -> str:
         if not self.client:
             raise RuntimeError("GROQ_API_KEY غير موجود.")
 
-        last_error = None
+        last_error: Optional[Exception] = None
 
         for attempt in range(MAX_RETRIES + 1):
             try:
-                kwargs = {
+                kwargs: Dict[str, Any] = {
                     "model": AI_MODEL,
                     "messages": messages,
                     "max_tokens": MAX_OUTPUT_TOKENS,
                     "temperature": 0.95
                 }
-
                 if AI_MODEL.startswith("openai/gpt-oss"):
                     kwargs["reasoning_effort"] = AI_REASONING_EFFORT
                     kwargs.pop("temperature", None)
@@ -704,40 +510,30 @@ class FimeAI(commands.Cog):
                     self.client.chat.completions.create(**kwargs),
                     timeout=REQUEST_TIMEOUT
                 )
-
                 if not response.choices:
-                    raise RuntimeError("Groq returned no choices.")
-
+                    raise RuntimeError("No choices.")
                 content = response.choices[0].message.content
-
                 if not content:
-                    raise RuntimeError("Groq returned empty response.")
-
+                    raise RuntimeError("Empty response.")
                 return content.strip()
 
-            except asyncio.TimeoutError as error:
-                last_error = error
+            except asyncio.TimeoutError as e:
+                last_error = e
                 if attempt < MAX_RETRIES:
-                    await asyncio.sleep(0.5 * (attempt + 1))
+                    await asyncio.sleep(0.3 * (attempt + 1))
 
-            except Exception as error:
-                last_error = error
-                error_text = str(error).lower()
+            except Exception as e:
+                last_error = e
                 retryable = any(
-                    word in error_text
-                    for word in (
-                        "429", "rate limit", "timeout",
-                        "temporarily", "503", "502", "504", "overloaded"
-                    )
+                    w in str(e).lower()
+                    for w in ("429", "rate limit", "timeout", "503", "502", "504", "overloaded")
                 )
                 if retryable and attempt < MAX_RETRIES:
-                    await asyncio.sleep(0.7 * (attempt + 1))
+                    await asyncio.sleep(0.5 * (attempt + 1))
                 else:
                     break
 
-        raise RuntimeError(
-            clean_error(last_error or Exception("Unknown Groq error."))
-        )
+        raise RuntimeError(clean_error(last_error or Exception("Unknown error.")))
 
     # =====================================================
     # ASK AI
@@ -750,17 +546,13 @@ class FimeAI(commands.Cog):
         channel: discord.abc.GuildChannel,
         content: str
     ) -> str:
-
         if not content:
-            return "وش تبي بالضبط؟"
-
-        lock = self.user_locks[(guild.id, user.id)]
-
-        async with lock:
-            messages = self.build_messages(guild, user, channel, content)
-            answer = await self.request_ai(messages)
+            return "وش تبي؟"
+        async with self.user_locks[(guild.id, user.id)]:
+            msgs   = self.build_messages(guild, user, channel, content)
+            answer = await self.request_ai(msgs)
             answer = self.normalize_channel_mentions(guild, answer)
-            self.memory.add(guild.id, user.id, "user", content)
+            self.memory.add(guild.id, user.id, "user",      content)
             self.memory.add(guild.id, user.id, "assistant", answer)
             return answer
 
@@ -770,9 +562,7 @@ class FimeAI(commands.Cog):
 
     def add_fime_emoji(self, guild_id: int, text: str) -> str:
         emoji = self.emojis.get(guild_id)
-        if not emoji:
-            return text
-        if emoji in text:
+        if not emoji or emoji in text:
             return text
         return text.rstrip() + " " + emoji
 
@@ -785,17 +575,15 @@ class FimeAI(commands.Cog):
         if len(answer) <= 2000:
             await message.reply(answer, mention_author=False)
             return
-        chunks = []
+        chunks: List[str] = []
         current = ""
-        for paragraph in answer.split("\n"):
-            if len(current) + len(paragraph) + 1 <= 1900:
-                if current:
-                    current += "\n"
-                current += paragraph
+        for para in answer.split("\n"):
+            if len(current) + len(para) + 1 <= 1900:
+                current = (current + "\n" + para).lstrip("\n")
             else:
                 if current:
                     chunks.append(current)
-                current = paragraph
+                current = para
         if current:
             chunks.append(current)
         for chunk in chunks:
@@ -807,9 +595,7 @@ class FimeAI(commands.Cog):
 
     @commands.Cog.listener()
     async def on_message(self, message: discord.Message):
-        if message.author.bot:
-            return
-        if not message.guild:
+        if message.author.bot or not message.guild:
             return
         if message.content.startswith(self.bot.command_prefix):
             return
@@ -818,13 +604,9 @@ class FimeAI(commands.Cog):
         content = clean_text(message.content)
         if not content:
             return
-        content = re.sub(
-            rf"<@!?{self.bot.user.id}>",
-            "",
-            content
-        ).strip()
+        content = re.sub(rf"<@!?{self.bot.user.id}>", "", content).strip()
         if not content:
-            await message.reply("هلا بالنوب 💀 وش تبي؟", mention_author=False)
+            await message.reply("اي؟", mention_author=False)
             return
         content = truncate_text(content, MAX_MESSAGE_LENGTH)
         asyncio.create_task(self.process_message(message, content))
@@ -833,19 +615,13 @@ class FimeAI(commands.Cog):
         try:
             async with message.channel.typing():
                 answer = await self.ask_ai(
-                    message.guild,
-                    message.author,
-                    message.channel,
-                    content
+                    message.guild, message.author, message.channel, content
                 )
             await self.send_answer(message, answer)
-        except Exception as error:
-            print(f"❌ Fime AI error: {clean_error(error)}")
+        except Exception as e:
+            print(f"❌ Fime AI error: {clean_error(e)}")
             try:
-                await message.reply(
-                    "صار خطأ، جرب بعد شوي يا نوب.",
-                    mention_author=False
-                )
+                await message.reply("صار خطأ، جرب بعد شوي.", mention_author=False)
             except Exception:
                 pass
 
@@ -853,353 +629,185 @@ class FimeAI(commands.Cog):
     # ADMIN CHECK
     # =====================================================
 
-    async def interaction_is_admin(
-        self,
-        interaction: discord.Interaction
-    ) -> bool:
+    async def interaction_is_admin(self, interaction: discord.Interaction) -> bool:
         if interaction.user.id == FIME_OWNER_ID:
             return True
         if isinstance(interaction.user, discord.Member):
-            if interaction.user.guild_permissions.administrator:
-                return True
+            return interaction.user.guild_permissions.administrator
         return False
 
     # =====================================================
-    # GROUP
+    # SLASH COMMANDS
     # =====================================================
 
-    ai_group = app_commands.Group(
-        name="ai",
-        description="إعدادات وإدارة Fime AI"
-    )
-
-    # =====================================================
-    # /ai status
-    # =====================================================
+    ai_group = app_commands.Group(name="ai", description="إعدادات وإدارة Fime AI")
 
     @ai_group.command(name="status", description="عرض حالة Fime AI")
     async def ai_status(self, interaction: discord.Interaction):
-        personality = self.knowledge.get_personality()
-        personality_status = (
-            "مفعلة"
-            if personality.get("enabled", False)
-            else "الافتراضية"
-        )
-        embed = discord.Embed(
-            title="🤖 Fime AI",
-            description="حالة نظام الذكاء الاصطناعي",
-            color=discord.Color.blurple()
-        )
-        embed.add_field(name="المزود", value="Groq", inline=True)
-        embed.add_field(name="الموديل", value=f"`{AI_MODEL}`", inline=True)
+        p = self.knowledge.get_personality()
+        embed = discord.Embed(title="🤖 Fime AI", color=discord.Color.blurple())
+        embed.add_field(name="المزود",     value="Groq",                    inline=True)
+        embed.add_field(name="الموديل",   value=f"`{AI_MODEL}`",            inline=True)
         embed.add_field(name="Reasoning", value=f"`{AI_REASONING_EFFORT}`", inline=True)
-        embed.add_field(name="الشخصية", value=personality_status, inline=True)
-        embed.add_field(name="Memory", value=f"{MEMORY_LIMIT} رسالة", inline=True)
-        embed.add_field(
-            name="الحالة",
-            value="🟢 Online" if self.ready else "🔴 Offline",
-            inline=True
-        )
+        embed.add_field(name="الشخصية",   value="مفعلة" if p.get("enabled") else "الافتراضية", inline=True)
+        embed.add_field(name="Memory",    value=f"{MEMORY_LIMIT} رسالة",   inline=True)
+        embed.add_field(name="الحالة",    value="🟢 Online" if self.ready else "🔴 Offline", inline=True)
         await interaction.response.send_message(embed=embed, ephemeral=True)
 
-    # =====================================================
-    # /ai emoji
-    # =====================================================
-
-    @ai_group.command(name="emoji", description="تغيير الإيموجي الخاص بردود AI")
-    @app_commands.describe(emoji="الإيموجي الذي سيضاف لنهاية الرد")
+    @ai_group.command(name="emoji", description="تغيير إيموجي ردود AI")
+    @app_commands.describe(emoji="الإيموجي")
     async def ai_emoji(self, interaction: discord.Interaction, emoji: str):
         if not await self.interaction_is_admin(interaction):
-            await interaction.response.send_message(
-                "❌ هذا الأمر للإدارة فقط.", ephemeral=True
-            )
+            await interaction.response.send_message("❌ للإدارة فقط.", ephemeral=True)
             return
-        emoji = truncate_text(emoji, 30)
-        self.emojis.set(interaction.guild.id, emoji)
-        await interaction.response.send_message(
-            f"✅ تم تغيير إيموجي Fime AI إلى {emoji}", ephemeral=True
-        )
+        self.emojis.set(interaction.guild.id, truncate_text(emoji, 30))
+        await interaction.response.send_message(f"✅ الإيموجي: {emoji}", ephemeral=True)
 
-    # =====================================================
-    # /ai emoji-reset
-    # =====================================================
-
-    @ai_group.command(name="emoji-reset", description="إرجاع إيموجي AI للوضع الافتراضي")
+    @ai_group.command(name="emoji-reset", description="إلغاء إيموجي AI")
     async def ai_emoji_reset(self, interaction: discord.Interaction):
         if not await self.interaction_is_admin(interaction):
-            await interaction.response.send_message(
-                "❌ هذا الأمر للإدارة فقط.", ephemeral=True
-            )
+            await interaction.response.send_message("❌ للإدارة فقط.", ephemeral=True)
             return
         self.emojis.reset(interaction.guild.id)
-        await interaction.response.send_message("✅ تم إلغاء إيموجي AI.", ephemeral=True)
+        await interaction.response.send_message("✅ تم إلغاء الإيموجي.", ephemeral=True)
 
-    # =====================================================
-    # /ai emoji-show
-    # =====================================================
-
-    @ai_group.command(name="emoji-show", description="عرض إيموجي AI الحالي")
+    @ai_group.command(name="emoji-show", description="عرض إيموجي AI")
     async def ai_emoji_show(self, interaction: discord.Interaction):
         emoji = self.emojis.get(interaction.guild.id)
         await interaction.response.send_message(
-            emoji if emoji else "لا يوجد إيموجي مخصص حاليًا.",
-            ephemeral=True
+            emoji or "لا يوجد إيموجي مخصص.", ephemeral=True
         )
 
-    # =====================================================
-    # /ai memory-clear
-    # =====================================================
-
-    @ai_group.command(name="memory-clear", description="مسح ذاكرة محادثتك مع Fime AI")
+    @ai_group.command(name="memory-clear", description="مسح ذاكرتك مع Fime AI")
     async def ai_memory_clear(self, interaction: discord.Interaction):
         self.memory.clear(interaction.guild.id, interaction.user.id)
-        await interaction.response.send_message(
-            "🧠 تم مسح ذاكرتك مع Fime AI.", ephemeral=True
-        )
-
-    # =====================================================
-    # /ai reset
-    # =====================================================
+        await interaction.response.send_message("🧠 تم مسح الذاكرة.", ephemeral=True)
 
     @ai_group.command(name="reset", description="إعادة ضبط ذاكرة عضو")
     @app_commands.describe(member="العضو")
     async def ai_reset(self, interaction: discord.Interaction, member: discord.Member):
         if not await self.interaction_is_admin(interaction):
-            await interaction.response.send_message(
-                "❌ هذا الأمر للإدارة فقط.", ephemeral=True
-            )
+            await interaction.response.send_message("❌ للإدارة فقط.", ephemeral=True)
             return
         self.memory.clear(interaction.guild.id, member.id)
-        await interaction.response.send_message(
-            f"✅ تم مسح ذاكرة {member.mention}.", ephemeral=True
-        )
+        await interaction.response.send_message(f"✅ تم مسح ذاكرة {member.mention}.", ephemeral=True)
 
-    # =====================================================
-    # /ai channel
-    # =====================================================
-
-    @ai_group.command(name="channel", description="عرض روم AI الحالي")
+    @ai_group.command(name="channel", description="عرض روم AI")
     async def ai_channel(self, interaction: discord.Interaction):
-        channel = self.bot.get_channel(AI_CHANNEL_ID)
-        if channel:
-            text = f"🤖 روم AI الحالي: {channel.mention}"
-        else:
-            text = f"🤖 AI Channel ID: `{AI_CHANNEL_ID}`"
-        await interaction.response.send_message(text, ephemeral=True)
-
-    # =====================================================
-    # /ai set-channel
-    # =====================================================
-
-    @ai_group.command(name="set-channel", description="تغيير روم AI")
-    @app_commands.describe(channel="روم AI الجديد")
-    async def ai_set_channel(
-        self,
-        interaction: discord.Interaction,
-        channel: discord.TextChannel
-    ):
-        if not await self.interaction_is_admin(interaction):
-            await interaction.response.send_message(
-                "❌ هذا الأمر للإدارة فقط.", ephemeral=True
-            )
-            return
+        ch = self.bot.get_channel(AI_CHANNEL_ID)
         await interaction.response.send_message(
-            "⚠️ روم AI مضبوط حاليًا من متغير "
-            "`AI_CHANNEL_ID` في الاستضافة.\n"
-            f"الروم الذي اخترته: {channel.mention}\n\n"
-            "غيّر `AI_CHANNEL_ID` إلى ID هذا الروم "
-            "ثم أعد تشغيل البوت.",
+            f"🤖 روم AI: {ch.mention}" if ch else f"🤖 AI Channel ID: `{AI_CHANNEL_ID}`",
             ephemeral=True
         )
 
-    # =====================================================
-    # /ai server-scan
-    # =====================================================
+    @ai_group.command(name="set-channel", description="تغيير روم AI")
+    @app_commands.describe(channel="الروم الجديد")
+    async def ai_set_channel(self, interaction: discord.Interaction, channel: discord.TextChannel):
+        if not await self.interaction_is_admin(interaction):
+            await interaction.response.send_message("❌ للإدارة فقط.", ephemeral=True)
+            return
+        await interaction.response.send_message(
+            f"⚠️ غيّر `AI_CHANNEL_ID` إلى `{channel.id}` في الاستضافة ثم أعد التشغيل.",
+            ephemeral=True
+        )
 
-    @ai_group.command(name="server-scan", description="تحديث معرفة Fime AI برومات السيرفر")
+    @ai_group.command(name="server-scan", description="تحديث معرفة AI بالرومات")
     async def ai_server_scan(self, interaction: discord.Interaction):
         if not await self.interaction_is_admin(interaction):
-            await interaction.response.send_message(
-                "❌ هذا الأمر للإدارة فقط.", ephemeral=True
-            )
+            await interaction.response.send_message("❌ للإدارة فقط.", ephemeral=True)
             return
         await interaction.response.defer(ephemeral=True)
         server = await self.knowledge.scan_guild(interaction.guild)
-        count = len(server.get("rooms", {}))
         await interaction.followup.send(
-            f"✅ تم تحديث معرفة AI.\n📚 عدد الرومات: `{count}`",
+            f"✅ تم التحديث. الرومات: `{len(server.get('rooms', {}))}`",
             ephemeral=True
         )
 
-    # =====================================================
-    # /ai rooms
-    # =====================================================
-
     @ai_group.command(name="rooms", description="عرض الرومات التي يعرفها AI")
     async def ai_rooms(self, interaction: discord.Interaction):
-        server = self.knowledge.get_server(interaction.guild.id)
-        rooms = server.get("rooms", {})
+        rooms = self.knowledge.get_server(interaction.guild.id).get("rooms", {})
         if not rooms:
-            await interaction.response.send_message(
-                "لا توجد بيانات محفوظة. استخدم `/ai server-scan`.",
-                ephemeral=True
-            )
+            await interaction.response.send_message("استخدم `/ai server-scan` أولًا.", ephemeral=True)
             return
-        text_rooms = [
-            room for room in rooms.values()
-            if room.get("type") in ("Text", "Forum")
-        ]
-        text_rooms.sort(key=lambda x: x.get("name", ""))
         lines = [
-            f"{room['mention']} `{room['name']}`"
-            for room in text_rooms[:80]
+            f"{r['mention']} `{r['name']}`"
+            for r in sorted(
+                [r for r in rooms.values() if r.get("type") in ("Text", "Forum")],
+                key=lambda r: r.get("name", "")
+            )[:80]
         ]
-        output = "📚 **الرومات التي يعرفها Fime AI:**\n\n" + "\n".join(lines)
         await interaction.response.send_message(
-            truncate_text(output, 1900), ephemeral=True
+            truncate_text("📚 **الرومات:**\n\n" + "\n".join(lines), 1900),
+            ephemeral=True
         )
 
-    # =====================================================
-    # /ai room-add
-    # =====================================================
-
-    @ai_group.command(name="room-add", description="إضافة معلومات لروم")
-    @app_commands.describe(channel="الروم", description="وصف مختصر للروم")
-    async def ai_room_add(
-        self,
-        interaction: discord.Interaction,
-        channel: discord.TextChannel,
-        description: str
-    ):
+    @ai_group.command(name="room-add", description="إضافة وصف لروم")
+    @app_commands.describe(channel="الروم", description="الوصف")
+    async def ai_room_add(self, interaction: discord.Interaction, channel: discord.TextChannel, description: str):
         if not await self.interaction_is_admin(interaction):
-            await interaction.response.send_message(
-                "❌ هذا الأمر للإدارة فقط.", ephemeral=True
-            )
+            await interaction.response.send_message("❌ للإدارة فقط.", ephemeral=True)
             return
         server = self.knowledge.get_server(interaction.guild.id)
-        rooms = server.setdefault("rooms", {})
-        room = rooms.setdefault(str(channel.id), {
-            "id": channel.id,
-            "name": channel.name,
-            "mention": channel.mention,
+        rooms  = server.setdefault("rooms", {})
+        room   = rooms.setdefault(str(channel.id), {
+            "id": channel.id, "name": channel.name, "mention": channel.mention,
             "category": channel.category.name if channel.category else "",
-            "topic": "",
-            "type": "Text"
+            "topic": "", "type": "Text"
         })
         room["description"] = truncate_text(description, 300)
         self.knowledge.save()
-        await interaction.response.send_message(
-            f"✅ تمت إضافة معلومات {channel.mention}.", ephemeral=True
-        )
+        await interaction.response.send_message(f"✅ تمت إضافة {channel.mention}.", ephemeral=True)
 
-    # =====================================================
-    # /ai room-remove
-    # =====================================================
-
-    @ai_group.command(name="room-remove", description="حذف معلومات روم من معرفة AI")
+    @ai_group.command(name="room-remove", description="حذف معلومات روم")
     @app_commands.describe(channel="الروم")
-    async def ai_room_remove(
-        self,
-        interaction: discord.Interaction,
-        channel: discord.TextChannel
-    ):
+    async def ai_room_remove(self, interaction: discord.Interaction, channel: discord.TextChannel):
         if not await self.interaction_is_admin(interaction):
-            await interaction.response.send_message(
-                "❌ هذا الأمر للإدارة فقط.", ephemeral=True
-            )
+            await interaction.response.send_message("❌ للإدارة فقط.", ephemeral=True)
             return
-        server = self.knowledge.get_server(interaction.guild.id)
-        rooms = server.get("rooms", {})
-        rooms.pop(str(channel.id), None)
+        self.knowledge.get_server(interaction.guild.id).get("rooms", {}).pop(str(channel.id), None)
         self.knowledge.save()
-        await interaction.response.send_message(
-            f"✅ تم حذف معلومات {channel.mention}.", ephemeral=True
-        )
+        await interaction.response.send_message(f"✅ تم حذف {channel.mention}.", ephemeral=True)
 
-    # =====================================================
-    # /ai knowledge
-    # =====================================================
-
-    @ai_group.command(name="knowledge", description="عرض ملخص معرفة AI بالسيرفر")
+    @ai_group.command(name="knowledge", description="ملخص معرفة AI")
     async def ai_knowledge(self, interaction: discord.Interaction):
         server = self.knowledge.get_server(interaction.guild.id)
-        rooms = server.get("rooms", {})
-        personality = self.knowledge.get_personality()
-        personality_name = (
-            personality.get("name")
-            if personality.get("enabled", False)
-            else "الافتراضية"
-        )
+        p      = self.knowledge.get_personality()
         await interaction.response.send_message(
-            "🧠 **Fime AI Knowledge**\n\n"
-            f"الرومات المعروفة: `{len(rooms)}`\n"
-            f"الشخصية: `{personality_name}`\n"
+            f"🧠 **Fime AI Knowledge**\n\n"
+            f"الرومات: `{len(server.get('rooms', {}))}`\n"
+            f"الشخصية: `{p.get('name') if p.get('enabled') else 'الافتراضية'}`\n"
             f"آخر تحديث: <t:{safe_int(server.get('last_scan'), 0)}:R>",
             ephemeral=True
         )
 
-    # =====================================================
-    # /ai personality
-    # =====================================================
-
-    @ai_group.command(
-        name="personality",
-        description="إنشاء شخصية مخصصة ذكية لـ Fime AI"
-    )
-    @app_commands.describe(
-        name="اسم الشخصية",
-        description="وصف الشخصية وطبيعتها",
-        style="أسلوب الكلام والتفاعل"
-    )
+    @ai_group.command(name="personality", description="إنشاء شخصية مخصصة")
+    @app_commands.describe(name="الاسم", description="الوصف", style="الأسلوب")
     async def ai_personality(
-        self,
-        interaction: discord.Interaction,
-        name: str,
-        description: str,
-        style: str
+        self, interaction: discord.Interaction,
+        name: str, description: str, style: str
     ):
         if not await self.interaction_is_admin(interaction):
-            await interaction.response.send_message(
-                "❌ هذا الأمر للإدارة فقط.", ephemeral=True
-            )
+            await interaction.response.send_message("❌ للإدارة فقط.", ephemeral=True)
             return
-
-        name = truncate_text(name, 80)
-        description = truncate_text(description, 1000)
-        style = truncate_text(style, 1000)
-
         await interaction.response.defer(ephemeral=True)
-
-        generated = await self.generate_personality(name, description, style)
-
+        generated = await self.generate_personality(
+            truncate_text(name, 80),
+            truncate_text(description, 1000),
+            truncate_text(style, 1000)
+        )
         self.knowledge.set_personality(name, description, style, generated)
-
         await interaction.followup.send(
-            "✅ **تم إنشاء الشخصية وتفعيلها.**\n\n"
-            f"**الاسم:** {name}\n"
-            f"**التوصيف:**\n"
-            f"{truncate_text(generated, 1500)}",
+            f"✅ **تم إنشاء الشخصية.**\n\n**الاسم:** {name}\n**التوصيف:**\n{truncate_text(generated, 1500)}",
             ephemeral=True
         )
 
-    # =====================================================
-    # /ai personality-reset
-    # =====================================================
-
-    @ai_group.command(
-        name="personality-reset",
-        description="إرجاع شخصية Fime AI الافتراضية"
-    )
+    @ai_group.command(name="personality-reset", description="إرجاع الشخصية الافتراضية")
     async def ai_personality_reset(self, interaction: discord.Interaction):
         if not await self.interaction_is_admin(interaction):
-            await interaction.response.send_message(
-                "❌ هذا الأمر للإدارة فقط.", ephemeral=True
-            )
+            await interaction.response.send_message("❌ للإدارة فقط.", ephemeral=True)
             return
         self.knowledge.reset_personality()
-        await interaction.response.send_message(
-            "✅ تم إرجاع Fime AI للشخصية الافتراضية.", ephemeral=True
-        )
+        await interaction.response.send_message("✅ تم إرجاع الشخصية الافتراضية.", ephemeral=True)
 
     # =====================================================
     # COG LOAD
@@ -1208,12 +816,11 @@ class FimeAI(commands.Cog):
     async def cog_load(self):
         try:
             for guild in self.bot.guilds:
-                server = self.knowledge.get_server(guild.id)
-                if not server.get("rooms"):
+                if not self.knowledge.get_server(guild.id).get("rooms"):
                     await self.knowledge.scan_guild(guild)
             print("✅ Fime AI knowledge initialized.")
-        except Exception as error:
-            print(f"⚠️ AI knowledge init error: {clean_error(error)}")
+        except Exception as e:
+            print(f"⚠️ AI knowledge init error: {clean_error(e)}")
 
 
 # =========================================================
