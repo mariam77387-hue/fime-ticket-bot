@@ -26,6 +26,7 @@ import time
 import aiohttp
 from functools import lru_cache
 import ipaddress
+import hashlib
 
 load_dotenv()
 TOKEN = os.getenv("BOT_TOKEN")
@@ -676,6 +677,31 @@ def get_game_search_queries(
             query
         )
     )[:4]
+
+
+def _script_key(script):
+    """يعطي كل نتيجة بحث مفتاحًا ثابتًا لإزالة التكرار بدون الحاجة لأي API key."""
+    if not isinstance(script, dict):
+        return hashlib.sha1(str(script).encode("utf-8", "ignore")).hexdigest()
+
+    # نفضّل المعرفات التي ترسلها المصادر نفسها.
+    for field in (
+        "_id", "id", "scriptId", "script_id", "uuid", "_fime_id",
+        "url", "scriptUrl", "webUrl", "pageUrl", "rawScriptUrl", "rawUrl",
+    ):
+        value = script.get(field)
+        if isinstance(value, (str, int, float)) and str(value).strip():
+            return str(value).strip()
+
+    # إذا لم يوجد ID، نكوّن مفتاحًا من المصدر + اسم الماب + العنوان + الكود.
+    parts = [
+        str(script.get("_fime_api") or ""),
+        str(script.get("gameName") or script.get("game") or ""),
+        str(script.get("title") or script.get("name") or ""),
+        str(script.get("script") or script.get("rawScript") or ""),
+    ]
+    raw = "|".join(parts).strip()
+    return hashlib.sha1(raw.encode("utf-8", "ignore")).hexdigest()
 
 
 # ============================================================
