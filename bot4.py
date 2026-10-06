@@ -3,8 +3,8 @@
 # Game Search System
 # ============================================================
 
-# Last Updated: 2026-09-25
-# Version: 6.0
+# Last Updated: 2026-10-06
+# Version: 7.1
 
 import discord
 from discord.ext import commands
@@ -704,6 +704,184 @@ def _script_key(script):
     return hashlib.sha1(raw.encode("utf-8", "ignore")).hexdigest()
 
 
+def _game_name_from_script(script):
+    """يستخرج اسم اللعبة بأمان من اختلاف بنية نتائج المصادر المختلفة."""
+    if not isinstance(script, dict):
+        return ""
+
+    # الاسم الموحد الذي تضيفه طبقات API الجديدة.
+    for field in (
+        "gameName", "game_name", "gameTitle", "game_title",
+        "placeName", "place_name", "experienceName", "experience_name",
+    ):
+        value = script.get(field)
+        if isinstance(value, str) and value.strip():
+            return value.strip()
+
+    # بعض المصادر ترسل game ككائن، وبعضها كنص أو ID فقط.
+    game = script.get("game")
+    if isinstance(game, dict):
+        for field in ("name", "title", "displayName", "gameName", "experienceName"):
+            value = game.get(field)
+            if isinstance(value, str) and value.strip():
+                return value.strip()
+    elif isinstance(game, str) and game.strip():
+        return game.strip()
+
+    # صيغ إضافية قد تظهر في المصادر الخارجية.
+    nested = script.get("experience") or script.get("place")
+    if isinstance(nested, dict):
+        for field in ("name", "title", "displayName"):
+            value = nested.get(field)
+            if isinstance(value, str) and value.strip():
+                return value.strip()
+
+    return ""
+
+
+def _game_relevance_score(game_name, query):
+    """درجة تطابق اسم اللعبة مع الاستعلام، مع دعم العربي والإنجليزي."""
+    game = str(game_name or "").strip()
+    q = str(query or "").strip()
+    if not game or not q:
+        return 0.0
+
+    game_norm = normalize_game_name(game)
+    q_norm = normalize_game_name(q)
+    if not game_norm or not q_norm:
+        return 0.0
+
+    game_compact = compact_game_name(game_norm)
+    q_compact = compact_game_name(q_norm)
+
+    if game_norm == q_norm or game_compact == q_compact:
+        return 1.0
+    if q_norm in game_norm or q_compact in game_compact:
+        return 0.90
+    if game_norm in q_norm:
+        return 0.86
+
+    best = difflib.SequenceMatcher(None, q_norm, game_norm).ratio()
+
+    # الاستعلام العربي قد يكون مجرد نطق عربي للاسم الإنجليزي.
+    best = max(best, phonetic_similarity(q_norm, game_norm))
+    for candidate in search_query_candidates(q):
+        cand_norm = normalize_game_name(candidate)
+        if not cand_norm:
+            continue
+        cand_compact = compact_game_name(cand_norm)
+        if cand_norm == game_norm or cand_compact == game_compact:
+            best = max(best, 1.0)
+        elif cand_norm in game_norm or cand_compact in game_compact:
+            best = max(best, 0.90)
+        else:
+            best = max(best, difflib.SequenceMatcher(None, cand_norm, game_norm).ratio())
+            best = max(best, phonetic_similarity(cand_norm, game_norm))
+
+    return min(1.0, best)
+
+
+def _script_needs_key(script):
+    """يحدد وجود نظام مفتاح من عدة أسماء حقول مستخدمة لدى المصادر."""
+    if not isinstance(script, dict):
+        return False
+
+    truthy_fields = (
+        "keySystem", "key_system", "requiresKey", "requires_key",
+        "keyRequired", "key_required", "hasKeySystem", "has_key_system",
+        "isKey", "key",
+    )
+    for field in truthy_fields:
+        value = script.get(field)
+        if isinstance(value, bool):
+            if value:
+                return True
+        elif isinstance(value, (int, float)) and value == 1:
+            return True
+        elif isinstance(value, str):
+            lowered = value.strip().lower()
+            if lowered in {"true", "yes", "1", "required", "key", "withkey", "with_key", "keysystem"}:
+                return True
+
+    # بعض النتائج تضع بيانات المفتاح داخل كائن.
+    for field in ("key", "keySystem", "key_system", "access"):
+        value = script.get(field)
+        if isinstance(value, dict) and value:
+            for nested_field in ("required", "enabled", "active", "hasKey", "has_key"):
+                nested = value.get(nested_field)
+                if nested is True or nested == 1 or (isinstance(nested, str) and nested.strip().lower() in {"true", "yes", "1"}):
+                    return True
+
+    # إذا كان المصدر يصف نظام المفتاح نصيًا، نلتقطه بحذر.
+    for field in ("description", "desc", "notes", "status"):
+        value = script.get(field)
+        if isinstance(value, str) and value.strip():
+            text = normalize_game_name(value)
+            if re.search(r"\b(key system|key required|requires key|keys?ystem)\b", text):
+                return True
+            if any(token in text for token in ("مفتاح", "كي سيستم", "keysystem", "key required", "requires key")):
+                return True
+
+    return False
+
+
+def _score_auto_result(script, query):
+    """ترتيب النتائج: اسم الماب أولًا ثم تطابق العنوان وبعض مؤشرات الجودة."""
+    if not isinstance(script, dict):
+        return 0.0
+
+    game_score = _game_relevance_score(_game_name_from_script(script), query)
+
+    title = str(script.get("title") or script.get("name") or "")
+    title_score = _game_relevance_score(title, query) if title else 0.0
+
+    views = script.get("views", script.get("viewCount", 0)) or 0
+    likes = script.get("likes", script.get("likeCount", 0)) or 0
+    try:
+        views_score = min(1.0, max(0.0, float(views)) / 100000.0)
+    except (TypeError, ValueError):
+        views_score = 0.0
+    try:
+        likes_score = min(1.0, max(0.0, float(likes)) / 10000.0)
+    except (TypeError, ValueError):
+        likes_score = 0.0
+
+    source_bonus = {
+        "scriptblox": 0.05,
+        "robloxscripts": 0.045,
+        "rscripts": 0.04,
+        "haxhell": 0.01,
+        "roscripts": 0.01,
+        "rbxscripts": 0.01,
+    }.get(str(script.get("_fime_api") or ""), 0.0)
+
+    return (game_score * 0.72) + (title_score * 0.18) + (views_score * 0.06) + (likes_score * 0.03) + source_bonus
+
+
+def _filter_relevant_results(results, query, key_mode=None):
+    """فلترة آمنة للنتائج مع عدم إسقاط النتائج التي لا تملك اسم لعبة صريحًا."""
+    output = []
+    for item in results or []:
+        if not isinstance(item, dict):
+            continue
+
+        game_name = _game_name_from_script(item)
+        # النتائج التي لا تملك اسم لعبة صريحًا تُترك لأنها قد تكون fallback من موقع خارجي.
+        if game_name:
+            score = _game_relevance_score(game_name, query)
+            if score < 0.42:
+                continue
+
+        if key_mode == "no_key" and _script_needs_key(item):
+            continue
+        if key_mode == "with_key" and not _script_needs_key(item):
+            continue
+
+        output.append(item)
+
+    return output
+
+
 # ============================================================
 # AUTO SEARCH API WORKER — HIGH RECALL MULTI-SOURCE
 # ============================================================
@@ -735,7 +913,7 @@ async def _scriptblox_page(session, query, page):
         session,
         "https://scriptblox.com/api/script/search",
         params=params,
-        headers={"User-Agent": "Team-Fime-Search/7.0", "Accept": "application/json"},
+        headers={"User-Agent": "Team-Fime-Search/7.1", "Accept": "application/json"},
     )
     if not isinstance(data, dict):
         return [], status == -1
@@ -762,7 +940,7 @@ async def _robloxscripts_page(session, query, page):
         session,
         "https://robloxscripts.com/api/v1/scripts",
         params=params,
-        headers={"User-Agent": "Team-Fime-Search/7.0", "Accept": "application/json"},
+        headers={"User-Agent": "Team-Fime-Search/7.1", "Accept": "application/json"},
     )
     if not isinstance(data, dict):
         return [], status == -1
@@ -802,7 +980,7 @@ async def _rscripts_page(session, query, page):
         "https://api.rscripts.net/v1/search",
         params=params,
         headers={
-            "User-Agent": "Team-Fime-Search/7.0",
+            "User-Agent": "Team-Fime-Search/7.1",
             "Accept": "application/json",
             "Authorization": f"Bearer {RSCRIPTS_API_KEY}",
         },
@@ -832,7 +1010,7 @@ async def _generic_site_search_async(session, query, source, base_url):
     """HTML fallback. لا يدعي أنه API: يلتقط الروابط والصور المتاحة فقط."""
     q = urllib.parse.quote_plus(str(query))
     url = base_url.format(query=q)
-    headers = {"User-Agent": "Team-Fime-Search/7.0", "Accept": "text/html,application/xhtml+xml"}
+    headers = {"User-Agent": "Team-Fime-Search/7.1", "Accept": "text/html,application/xhtml+xml"}
     try:
         async with session.get(url, headers=headers, allow_redirects=True) as response:
             if response.status != 200:
