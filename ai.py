@@ -65,6 +65,12 @@ MAX_RETRIES = 2
 KNOWLEDGE_FILE = Path("ai_server_knowledge.json")
 EMOJI_FILE = Path("ai_emoji_settings.json")
 
+SCRIPT_KEYWORDS = ("سكربت", "سكريبت", "سكرببت", "scripts", "script", "scripting", "scriptblox", "rscripts")
+SCRIPT_ROOM_LIMIT = 25
+PERSONALITY_DESCRIPTION_LIMIT = 3000
+PERSONALITY_STYLE_LIMIT = 3000
+PERSONALITY_GENERATED_LIMIT = 6000
+
 
 # =========================================================
 # HELPERS
@@ -262,6 +268,7 @@ class ServerKnowledgeManager:
         if key not in self.data["servers"]:
             self.data["servers"][key] = {
                 "rooms": {},
+                "script_rooms": {},
                 "last_scan": 0
             }
 
@@ -275,6 +282,11 @@ class ServerKnowledgeManager:
         server.setdefault(
             "last_scan",
             0
+        )
+
+        server.setdefault(
+            "script_rooms",
+            {}
         )
 
         return server
@@ -387,6 +399,28 @@ class ServerKnowledgeManager:
 
     # -----------------------------------------------------
 
+    def get_script_rooms(self, guild_id: int) -> Dict[str, Any]:
+        server = self.get_server(guild_id)
+        return server.setdefault("script_rooms", {})
+
+    def add_script_room(self, guild_id: int, channel: discord.abc.GuildChannel):
+        rooms = self.get_script_rooms(guild_id)
+        rooms[str(channel.id)] = {
+            "id": channel.id,
+            "name": channel.name,
+            "mention": channel.mention,
+            "type": type(channel).__name__,
+        }
+        self.save()
+
+    def remove_script_room(self, guild_id: int, channel_id: int) -> bool:
+        rooms = self.get_script_rooms(guild_id)
+        removed = rooms.pop(str(channel_id), None) is not None
+        self.save()
+        return removed
+
+    # -----------------------------------------------------
+
     def get_personality(
         self
     ) -> Dict[str, Any]:
@@ -414,15 +448,15 @@ class ServerKnowledgeManager:
             ),
             "description": truncate_text(
                 description,
-                1000
+                PERSONALITY_DESCRIPTION_LIMIT
             ),
             "style": truncate_text(
                 style,
-                1000
+                PERSONALITY_STYLE_LIMIT
             ),
             "generated": truncate_text(
                 generated,
-                4000
+                PERSONALITY_GENERATED_LIMIT
             )
         }
 
@@ -1048,7 +1082,7 @@ class FimeAI(commands.Cog):
                         "content": prompt
                     }
                 ],
-                "max_tokens": 500,
+                "max_tokens": 800,
                 "temperature": 0.35
             }
 
@@ -1408,6 +1442,52 @@ class FimeAI(commands.Cog):
             return answer
 
     # =====================================================
+    # SCRIPT ROOM ROUTING
+    # =====================================================
+
+    @staticmethod
+    def normalize_script_text(text: str) -> str:
+        text = clean_text(text).lower()
+        for old, new in {"إ": "ا", "أ": "ا", "آ": "ا", "ى": "ي", "ة": "ه", "ـ": ""}.items():
+            text = text.replace(old, new)
+        return re.sub(r"\s+", " ", text)
+
+    def is_script_request(self, text: str) -> bool:
+        normalized = self.normalize_script_text(text)
+        if any(word in normalized for word in ("سكربت", "سكريبت", "سكرببت")):
+            return True
+        return any(word in normalized for word in SCRIPT_KEYWORDS if word.isascii())
+
+    def get_script_room_mentions(self, guild: discord.Guild) -> List[str]:
+        configured = self.knowledge.get_script_rooms(guild.id)
+        mentions = []
+        stale = []
+        for channel_id in list(configured):
+            channel = guild.get_channel(safe_int(channel_id, 0))
+            if channel is None:
+                stale.append(channel_id)
+            else:
+                mentions.append(channel.mention)
+        if stale:
+            for channel_id in stale:
+                configured.pop(channel_id, None)
+            self.knowledge.save()
+        return mentions[:SCRIPT_ROOM_LIMIT]
+
+    async def route_script_request(self, message: discord.Message) -> bool:
+        if not self.is_script_request(message.content):
+            return False
+        rooms = self.get_script_room_mentions(message.guild)
+        if not rooms:
+            return False
+        await message.reply(
+            "إذا تبي السكربتات، تلقاها هنا: " + " ".join(rooms) +
+            "\nاكتب طلبك هناك عشان يروح للمكان المخصص لها.",
+            mention_author=False
+        )
+        return True
+
+    # =====================================================
     # ADD EMOJI
     # =====================================================
 
@@ -1546,6 +1626,10 @@ class FimeAI(commands.Cog):
                 "هلا 😂 وش تبي؟",
                 mention_author=False
             )
+            return
+
+        # توجيه طلبات السكربتات قبل استدعاء النموذج.
+        if await self.route_script_request(message):
             return
 
         # يمنع ضخ رسائل ضخمة
@@ -2222,6 +2306,63 @@ class FimeAI(commands.Cog):
         )
 
     # =====================================================
+    # /ai script-room-add
+    # =====================================================
+
+    @ai_group.command(
+        name="script-room-add",
+        description="تحديد روم مخصصة لطلبات السكربتات"
+    )
+    @app_commands.describe(channel="الروم التي توجه إليها طلبات السكربتات")
+    async def ai_script_room_add(self, interaction: discord.Interaction, channel: discord.TextChannel):
+        if not await self.interaction_is_admin(interaction):
+            await interaction.response.send_message("❌ هذا الأمر للإدارة فقط.", ephemeral=True)
+            return
+        self.knowledge.add_script_room(interaction.guild.id, channel)
+        await interaction.response.send_message(
+            f"✅ تم تحديد {channel.mention} كروم للسكربتات.\n"
+            "سيتم اكتشاف كلمات مثل «سكربت» و«سكريبت» و«script» داخل الرسالة.",
+            ephemeral=True
+        )
+
+    # =====================================================
+    # /ai script-room-remove
+    # =====================================================
+
+    @ai_group.command(
+        name="script-room-remove",
+        description="إزالة روم من توجيه طلبات السكربتات"
+    )
+    @app_commands.describe(channel="الروم التي تريد إزالتها")
+    async def ai_script_room_remove(self, interaction: discord.Interaction, channel: discord.TextChannel):
+        if not await self.interaction_is_admin(interaction):
+            await interaction.response.send_message("❌ هذا الأمر للإدارة فقط.", ephemeral=True)
+            return
+        removed = self.knowledge.remove_script_room(interaction.guild.id, channel.id)
+        await interaction.response.send_message(
+            "✅ تمت إزالة الروم." if removed else "ℹ️ الروم ليست ضمن رومات السكربتات.",
+            ephemeral=True
+        )
+
+    # =====================================================
+    # /ai script-rooms
+    # =====================================================
+
+    @ai_group.command(
+        name="script-rooms",
+        description="عرض رومات السكربتات المحددة"
+    )
+    async def ai_script_rooms(self, interaction: discord.Interaction):
+        if not await self.interaction_is_admin(interaction):
+            await interaction.response.send_message("❌ هذا الأمر للإدارة فقط.", ephemeral=True)
+            return
+        rooms = self.get_script_room_mentions(interaction.guild)
+        text = ("🧩 **رومات السكربتات:**\n" + "\n".join(rooms)) if rooms else (
+            "لا توجد رومات سكربتات محددة. استخدم `/ai script-room-add`."
+        )
+        await interaction.response.send_message(text, ephemeral=True)
+
+    # =====================================================
     # /ai personality
     # =====================================================
 
@@ -2260,12 +2401,12 @@ class FimeAI(commands.Cog):
 
         description = truncate_text(
             description,
-            1000
+            PERSONALITY_DESCRIPTION_LIMIT
         )
 
         style = truncate_text(
             style,
-            1000
+            PERSONALITY_STYLE_LIMIT
         )
 
         await interaction.response.defer(
