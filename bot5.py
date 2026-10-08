@@ -1,7 +1,7 @@
 # ============================================================
-# Team Fime — bot5.py (النسخة المصححة)
+# Team Fime — bot5.py (بعد حذف نظام الإدارة والتحذيرات)
 # Line / Join Mention / Fime Word / TOP / SAY / Server Info /
-# Bot Message Edit / Suggestions / Auto Triggers / Moderation
+# Bot Message Edit / Suggestions / Auto Triggers / Blocked Words
 # ============================================================
 
 from __future__ import annotations
@@ -39,13 +39,9 @@ OWNER_ID = 1388514481444880549
 CONFIG_FILE = Path("bot5_config.json")
 TOP_FILE = Path("bot5_top.json")
 SUGGESTIONS_FILE = Path("bot5_suggestions.json")
-WARNINGS_FILE = Path("bot5_warnings.json")
-TEMP_BANS_FILE = Path("bot5_temp_bans.json")
 ROLE_PANEL_FILE = Path("bot5_role_panel.json")
 
 SAUDI_TZ = timezone(timedelta(hours=3))
-
-MOD_ACTIONS = {"حظر", "روح", "فارق", "ت", "مح"}
 
 DEFAULT_GUILD_CONFIG = {
     # LINE
@@ -89,9 +85,7 @@ DEFAULT_GUILD_CONFIG = {
     "game_info_enabled": False,
     "game_info_channel_id": None,
 
-    # MODERATION
-    "moderation_enabled": True,
-    "moderation_aliases": {},
+    # BLOCKED WORDS
     "blocked_words": [],
 }
 
@@ -149,22 +143,6 @@ def load_suggestions():
 
 def save_suggestions(data):
     save_json(SUGGESTIONS_FILE, data)
-
-
-def load_warnings():
-    return load_json(WARNINGS_FILE)
-
-
-def save_warnings(data):
-    save_json(WARNINGS_FILE, data)
-
-
-def load_temp_bans():
-    return load_json(TEMP_BANS_FILE)
-
-
-def save_temp_bans(data):
-    save_json(TEMP_BANS_FILE, data)
 
 
 def load_role_panels():
@@ -350,70 +328,6 @@ class SuggestionView(discord.ui.View):
 
 
 # ============================================================
-# MODERATION SHORTCUT MENU
-# ============================================================
-
-class ModerationShortcutSelect(discord.ui.Select):
-
-    def __init__(self, shortcuts):
-        options = [
-            discord.SelectOption(label="حظر", value="حظر", emoji="🔨", description="حظر عضو بشكل دائم أو بمدة"),
-            discord.SelectOption(label="روح", value="روح", emoji="🦶", description="طرد عضو من السيرفر"),
-            discord.SelectOption(label="فارق", value="فارق", emoji="🔓", description="فك حظر عضو باستخدام الـ ID"),
-            discord.SelectOption(label="ت", value="ت", emoji="⚠️", description="تحذير عضو"),
-            discord.SelectOption(label="مح", value="مح", emoji="🧹", description="حذف رسائل عضو"),
-        ]
-
-        for alias, action in list(shortcuts.items())[:20]:
-            if alias and action in MOD_ACTIONS:
-                options.append(
-                    discord.SelectOption(
-                        label=str(alias)[:100],
-                        value=f"alias:{alias}"[:100],
-                        emoji="⌨️",
-                        description=f"اختصار لـ {action}"[:100]
-                    )
-                )
-
-        super().__init__(
-            placeholder="اختر الاختصار الذي تبي تعرف طريقته...",
-            min_values=1,
-            max_values=1,
-            options=options[:25]
-        )
-
-        self.shortcuts = shortcuts
-
-    async def callback(self, interaction):
-        selected = self.values[0]
-        action = selected
-
-        if selected.startswith("alias:"):
-            alias = selected[6:]
-            action = self.shortcuts.get(alias, alias)
-
-        usages = {
-            "حظر": "`حظر @عضو` أو `حظر @عضو 7d السبب`",
-            "روح": "`روح @عضو`",
-            "فارق": "`فارق USER_ID`",
-            "ت": "`ت @عضو السبب`",
-            "مح": "`مح @عضو`"
-        }
-
-        await interaction.response.send_message(
-            f"📌 **طريقة الاستخدام:**\n{usages.get(action, 'استخدم الاختصار المضاف من المالك.')}",
-            ephemeral=True
-        )
-
-
-class ModerationShortcutView(discord.ui.View):
-
-    def __init__(self, shortcuts):
-        super().__init__(timeout=90)
-        self.add_item(ModerationShortcutSelect(shortcuts))
-
-
-# ============================================================
 # SERVER SELECT
 # ============================================================
 
@@ -466,7 +380,6 @@ class AutomaticLineSystem(commands.Cog):
     control_group = app_commands.Group(name="بوت", description="أوامر معلومات البوت والتحكم برسائله")
     suggest_group = app_commands.Group(name="اقتراحات", description="أوامر نظام الاقتراحات")
     trigger_group = app_commands.Group(name="محفزات", description="أوامر المحفزات التلقائية (رد تلقائي على كلمة)")
-    shortcut_group = app_commands.Group(name="اختصارات", description="أوامر اختصارات أوامر الإدارة النصية")
     filter_group = app_commands.Group(name="فلتر", description="أوامر فلتر الكلمات المحظورة")
     mention_group = app_commands.Group(name="منشن", description="أوامر منشن الأعضاء الجدد")
     roles_group = app_commands.Group(name="رتب", description="لوحة الرتب التفاعلية")
@@ -477,22 +390,15 @@ class AutomaticLineSystem(commands.Cog):
         self.config = load_config()
         self.top_data = load_top()
         self.suggestions = load_suggestions()
-        self.warnings = load_warnings()
-        self.temp_bans = load_temp_bans()
         self.role_panels = load_role_panels()
-        self.temp_ban_tasks = {}
 
-        print("✅ bot5 — Line + Join + Fime + TOP + SAY + Server + Edit + Suggestions + Triggers + Moderation loaded.")
+        print("✅ bot5 — Line + Join + Fime + TOP + SAY + Server + Edit + Suggestions + Triggers + Filter loaded.")
 
     def cog_unload(self):
         try:
             self.game_info_loop.cancel()
         except Exception:
             pass
-
-        for task in list(self.temp_ban_tasks.values()):
-            if not task.done():
-                task.cancel()
 
     # ========================================================
     # CONFIG
@@ -517,10 +423,9 @@ class AutomaticLineSystem(commands.Cog):
                 current[key] = []
                 changed = True
 
-        for key in ("auto_triggers", "moderation_aliases"):
-            if not isinstance(current.get(key), dict):
-                current[key] = {}
-                changed = True
+        if not isinstance(current.get("auto_triggers"), dict):
+            current["auto_triggers"] = {}
+            changed = True
 
         if not current["auto_triggers"]:
             current["auto_triggers"] = {
@@ -1137,7 +1042,6 @@ class AutomaticLineSystem(commands.Cog):
 
     # ========================================================
     # GAME INFORMATION SYSTEM
-
     # ========================================================
 
     GAME_INFO_DATABASE = [
@@ -2127,77 +2031,8 @@ class AutomaticLineSystem(commands.Cog):
         await interaction.response.send_message(text[:2000], ephemeral=True)
 
     # ========================================================
-    # MODERATION HELPERS
+    # BLOCKED WORDS HELPERS
     # ========================================================
-
-    def has_moderation_permission(self, member, action):
-        if member.id == OWNER_ID:
-            return True
-
-        permissions = member.guild_permissions
-
-        if permissions.administrator:
-            return True
-
-        if action in ("ban", "unban"):
-            return permissions.ban_members
-
-        if action == "kick":
-            return permissions.kick_members
-
-        if action == "warn":
-            return permissions.moderate_members or permissions.manage_messages
-
-        if action == "delete":
-            return permissions.manage_messages
-
-        return False
-
-    def is_moderator(self, member):
-        """هل العضو يملك أي صلاحية إدارية؟ (لتجاهل رسائل الأعضاء العاديين)"""
-        if member.id == OWNER_ID:
-            return True
-
-        p = member.guild_permissions
-
-        return bool(
-            p.administrator or p.ban_members or p.kick_members
-            or p.moderate_members or p.manage_messages
-        )
-
-    def can_act_on_member(self, actor, target):
-        if target.id == actor.id:
-            return False
-
-        if target.id == OWNER_ID:
-            return False
-
-        if actor.id == OWNER_ID:
-            return True
-
-        if target.id == actor.guild.owner_id:
-            return False
-
-        return target.top_role < actor.top_role
-
-    def add_warning(self, guild_id, user_id, moderator_id, reason):
-        guild_key = str(guild_id)
-        user_key = str(user_id)
-
-        self.warnings.setdefault(guild_key, {})
-        self.warnings[guild_key].setdefault(user_key, [])
-
-        self.warnings[guild_key][user_key].append(
-            {
-                "moderator_id": moderator_id,
-                "reason": reason,
-                "created_at": datetime.now(timezone.utc).isoformat()
-            }
-        )
-
-        save_warnings(self.warnings)
-
-        return len(self.warnings[guild_key][user_key])
 
     def normalize_filter_text(self, text):
         text = str(text or "").casefold()
@@ -2216,124 +2051,6 @@ class AutomaticLineSystem(commands.Cog):
             for word in words
             if self.normalize_filter_text(word)
         ]
-
-    def get_moderation_aliases(self, cfg):
-        aliases = cfg.get("moderation_aliases", {})
-
-        if not isinstance(aliases, dict):
-            return {}
-
-        return {
-            str(alias).strip(): action
-            for alias, action in aliases.items()
-            if str(alias).strip() and action in MOD_ACTIONS
-        }
-
-    def resolve_moderation_command(self, command, cfg):
-        return self.get_moderation_aliases(cfg).get(command, command)
-
-    def parse_duration(self, value):
-        if not value:
-            return None
-
-        text = str(value).strip().casefold()
-        match = re.fullmatch(
-            r"(\d+(?:\.\d+)?)\s*(ثانية|دقيقة|ساعة|أسبوع|اسبوع|يوم|ث|s|m|د|h|س|d|ي|w)",
-            text
-        )
-
-        if not match:
-            return None
-
-        amount = float(match.group(1))
-        unit = match.group(2)
-
-        multipliers = {
-            "ث": 1, "ثانية": 1, "s": 1,
-            "m": 60, "د": 60, "دقيقة": 60,
-            "h": 3600, "س": 3600, "ساعة": 3600,
-            "d": 86400, "ي": 86400, "يوم": 86400,
-            "w": 604800, "أسبوع": 604800, "اسبوع": 604800,
-        }
-
-        return max(1, int(amount * multipliers[unit]))
-
-    def format_duration(self, seconds):
-        seconds = int(seconds)
-        parts = []
-
-        for amount, label in (
-            (604800, "أسبوع"),
-            (86400, "يوم"),
-            (3600, "ساعة"),
-            (60, "دقيقة"),
-            (1, "ثانية"),
-        ):
-            if seconds >= amount:
-                value, seconds = divmod(seconds, amount)
-                parts.append(f"{value} {label}")
-
-            if len(parts) >= 2:
-                break
-
-        return " و ".join(parts) or "ثانية"
-
-    async def schedule_temp_unban(self, guild_id, user_id, unban_at):
-        key = f"{guild_id}:{user_id}"
-
-        old = self.temp_ban_tasks.get(key)
-        if old and not old.done():
-            old.cancel()
-
-        async def worker():
-            try:
-                wait_for = max(0, float(unban_at) - datetime.now(timezone.utc).timestamp())
-
-                if wait_for:
-                    await asyncio.sleep(wait_for)
-
-                guild = self.bot.get_guild(int(guild_id))
-
-                if guild:
-                    try:
-                        await guild.unban(
-                            discord.Object(id=int(user_id)),
-                            reason="انتهاء مدة الحظر المؤقت"
-                        )
-                    except discord.NotFound:
-                        pass
-                    except discord.Forbidden:
-                        print(f"❌ لا أستطيع فك الحظر المؤقت عن {user_id}.")
-
-                self.temp_bans.pop(key, None)
-                save_temp_bans(self.temp_bans)
-
-            except asyncio.CancelledError:
-                return
-            except Exception as error:
-                print("❌ Temp ban worker error:", error)
-            finally:
-                # لا نحذف المهمة إلا إذا كانت هي المهمة الحالية (لا مهمة جديدة حلّت مكانها).
-                if self.temp_ban_tasks.get(key) is asyncio.current_task():
-                    self.temp_ban_tasks.pop(key, None)
-
-        self.temp_ban_tasks[key] = asyncio.create_task(worker())
-
-    async def restore_temp_bans(self):
-        if not isinstance(self.temp_bans, dict):
-            self.temp_bans = {}
-
-        for key, data in list(self.temp_bans.items()):
-            try:
-                await self.schedule_temp_unban(
-                    int(data["guild_id"]),
-                    int(data["user_id"]),
-                    float(data["unban_at"])
-                )
-            except Exception:
-                self.temp_bans.pop(key, None)
-
-        save_temp_bans(self.temp_bans)
 
     async def handle_blocked_words(self, message, cfg):
         if message.author.id == OWNER_ID:
@@ -2370,89 +2087,7 @@ class AutomaticLineSystem(commands.Cog):
         return False
 
     # ========================================================
-    # MODERATION SETTINGS — ALIASES
-    # ========================================================
-
-    @shortcut_group.command(name="اضافة", description="إضافة اختصار مخصص لأوامر الإدارة")
-    @app_commands.describe(
-        shortcut="الاختصار الذي سيكتبه العضو",
-        action="الأمر الذي سينفذه الاختصار"
-    )
-    @app_commands.choices(
-        action=[
-            app_commands.Choice(name="حظر", value="حظر"),
-            app_commands.Choice(name="روح", value="روح"),
-            app_commands.Choice(name="فارق", value="فارق"),
-            app_commands.Choice(name="تحذير", value="ت"),
-            app_commands.Choice(name="حذف رسائل", value="مح"),
-        ]
-    )
-    async def moderation_alias_add(
-        self,
-        interaction: discord.Interaction,
-        shortcut: str,
-        action: app_commands.Choice[str]
-    ):
-        if await self.owner_only(interaction):
-            return
-
-        shortcut = shortcut.strip()
-
-        if not shortcut or len(shortcut) > 32 or " " in shortcut:
-            await interaction.response.send_message(
-                "❌ اكتب اختصارًا من كلمة واحدة (1 إلى 32 حرفًا).",
-                ephemeral=True
-            )
-            return
-
-        cfg = self.get_config(interaction.guild.id)
-        aliases = self.get_moderation_aliases(cfg)
-        aliases[shortcut] = action.value
-        cfg["moderation_aliases"] = aliases
-        save_config(self.config)
-
-        await interaction.response.send_message(
-            f"✅ تم حفظ `{shortcut}` كاختصار لـ **{action.name}**.",
-            ephemeral=True
-        )
-
-    @shortcut_group.command(name="حذف", description="حذف اختصار مخصص")
-    @app_commands.describe(shortcut="الاختصار")
-    async def moderation_alias_remove(self, interaction: discord.Interaction, shortcut: str):
-        if await self.owner_only(interaction):
-            return
-
-        cfg = self.get_config(interaction.guild.id)
-        aliases = self.get_moderation_aliases(cfg)
-
-        if shortcut not in aliases:
-            await interaction.response.send_message("❌ هذا الاختصار غير موجود.", ephemeral=True)
-            return
-
-        aliases.pop(shortcut, None)
-        cfg["moderation_aliases"] = aliases
-        save_config(self.config)
-
-        await interaction.response.send_message(f"🗑️ تم حذف الاختصار `{shortcut}`.", ephemeral=True)
-
-    @shortcut_group.command(name="قائمة", description="عرض اختصارات الإدارة المخصصة")
-    async def moderation_alias_list(self, interaction: discord.Interaction):
-        if await self.owner_only(interaction):
-            return
-
-        cfg = self.get_config(interaction.guild.id)
-        aliases = self.get_moderation_aliases(cfg)
-
-        lines = [f"• `{alias}` → **{action}**" for alias, action in aliases.items()]
-
-        await interaction.response.send_message(
-            "## ⌨️ اختصارات الإدارة\n\n"
-            + ("\n".join(lines) if lines else "لا توجد اختصارات مخصصة."),
-            ephemeral=True
-        )
-
-    # ========================================================
-    # BLOCKED WORDS
+    # BLOCKED WORDS COMMANDS
     # ========================================================
 
     @filter_group.command(name="اضافة", description="إضافة كلمة إلى فلتر الكلمات المحظورة")
@@ -2516,288 +2151,6 @@ class AutomaticLineSystem(commands.Cog):
         )
 
         await interaction.response.send_message(text[:2000], ephemeral=True)
-
-    # ========================================================
-    # MODERATION SHORTCUTS (TEXT)
-    # ========================================================
-
-    async def handle_moderation_shortcut(self, message):
-        content = (message.content or "").strip()
-
-        if not content:
-            return False
-
-        parts = content.split()
-
-        cfg = self.get_config(message.guild.id)
-        command = self.resolve_moderation_command(parts[0], cfg)
-
-        # ليست كلمة أمر إدارة أصلًا.
-        if command not in MOD_ACTIONS:
-            return False
-
-        # الأعضاء العاديون يمرون كأي رسالة عادية (لا يتم استهلاك كلمة مثل "ت").
-        if not isinstance(message.author, discord.Member) or not self.is_moderator(message.author):
-            return False
-
-        # حظر بدون أي شيء = قائمة الاختصارات.
-        if command == "حظر" and len(parts) == 1:
-            try:
-                await message.channel.send(
-                    "🛡️ **اختصارات الإدارة**\nاختر الأمر الذي تبي تعرف طريقته:",
-                    view=ModerationShortcutView(self.get_moderation_aliases(cfg)),
-                    delete_after=90
-                )
-            except Exception:
-                pass
-            return True
-
-        # ----------------------------------------------------
-        # BAN — حظر دائم أو مؤقت، والسبب اختياري
-        # ----------------------------------------------------
-        if command == "حظر":
-            if not message.mentions:
-                return False
-
-            target = message.mentions[0]
-
-            if not isinstance(target, discord.Member):
-                return True
-
-            if not self.has_moderation_permission(message.author, "ban"):
-                await message.channel.send("❌ ما عندك صلاحية الحظر.", delete_after=6)
-                return True
-
-            if not self.can_act_on_member(message.author, target):
-                await message.channel.send(
-                    "❌ ما تقدر تحظر هذا العضو بسبب الرتبة أو الصلاحيات.",
-                    delete_after=6
-                )
-                return True
-
-            remaining = parts[2:]
-            duration_seconds = None
-            reason = "بدون سبب محدد"
-
-            if remaining:
-                parsed = self.parse_duration(remaining[0])
-
-                if parsed is not None:
-                    duration_seconds = parsed
-                    if len(remaining) > 1:
-                        reason = " ".join(remaining[1:]).strip() or reason
-                else:
-                    reason = " ".join(remaining).strip() or reason
-
-            try:
-                try:
-                    await target.send(
-                        f"🔨 تم حظرك من **{message.guild.name}**.\nالسبب: **{reason}**"
-                        + (
-                            f"\nالمدة: **{self.format_duration(duration_seconds)}**"
-                            if duration_seconds else "\nالمدة: **دائم**"
-                        )
-                    )
-                except Exception:
-                    pass
-
-                await target.ban(reason=f"{message.author} — {reason}"[:512])
-
-                if duration_seconds:
-                    unban_at = datetime.now(timezone.utc).timestamp() + duration_seconds
-                    key = f"{message.guild.id}:{target.id}"
-
-                    self.temp_bans[key] = {
-                        "guild_id": message.guild.id,
-                        "user_id": target.id,
-                        "unban_at": unban_at,
-                        "reason": reason,
-                    }
-                    save_temp_bans(self.temp_bans)
-
-                    await self.schedule_temp_unban(message.guild.id, target.id, unban_at)
-
-                    text = (
-                        f"🔨 تم حظر **{target}** لمدة "
-                        f"**{self.format_duration(duration_seconds)}**."
-                    )
-                else:
-                    text = f"🔨 تم حظر **{target}** بشكل دائم."
-
-                await message.channel.send(f"{text}\nالسبب: **{reason}**", delete_after=8)
-
-            except Exception as error:
-                await message.channel.send(
-                    f"❌ فشل الحظر: `{type(error).__name__}`",
-                    delete_after=8
-                )
-
-            return True
-
-        # ----------------------------------------------------
-        # KICK — روح
-        # ----------------------------------------------------
-        if command == "روح":
-            if not message.mentions:
-                if len(parts) == 1:
-                    await message.channel.send("`روح @عضو`", delete_after=8)
-                    return True
-                return False
-
-            target = message.mentions[0]
-
-            if not isinstance(target, discord.Member):
-                return True
-
-            if not self.has_moderation_permission(message.author, "kick"):
-                await message.channel.send("❌ ما عندك صلاحية الطرد.", delete_after=6)
-                return True
-
-            if not self.can_act_on_member(message.author, target):
-                await message.channel.send("❌ ما تقدر تطرد هذا العضو.", delete_after=6)
-                return True
-
-            reason = " ".join(parts[2:]).strip() or "بدون سبب محدد"
-
-            try:
-                await target.kick(reason=f"{message.author} — {reason}"[:512])
-                await message.channel.send(
-                    f"🦶 تم طرد **{target}**.\nالسبب: **{reason}**",
-                    delete_after=8
-                )
-            except Exception as error:
-                await message.channel.send(
-                    f"❌ فشل الطرد: `{type(error).__name__}`",
-                    delete_after=8
-                )
-
-            return True
-
-        # ----------------------------------------------------
-        # UNBAN — فارق
-        # ----------------------------------------------------
-        if command == "فارق":
-            if len(parts) < 2:
-                await message.channel.send("`فارق USER_ID` لفك حظر عضو.", delete_after=8)
-                return True
-
-            if not self.has_moderation_permission(message.author, "unban"):
-                await message.channel.send("❌ ما عندك صلاحية فك الحظر.", delete_after=6)
-                return True
-
-            raw_id = re.sub(r"[^0-9]", "", parts[1])
-
-            if not raw_id:
-                await message.channel.send("❌ اكتب ID العضو المحظور.", delete_after=6)
-                return True
-
-            reason = " ".join(parts[2:]).strip() or "بدون سبب محدد"
-
-            try:
-                await message.guild.unban(
-                    discord.Object(id=int(raw_id)),
-                    reason=f"{message.author} — {reason}"[:512]
-                )
-
-                key = f"{message.guild.id}:{int(raw_id)}"
-                self.temp_bans.pop(key, None)
-                save_temp_bans(self.temp_bans)
-
-                task = self.temp_ban_tasks.pop(key, None)
-                if task and not task.done():
-                    task.cancel()
-
-                await message.channel.send(f"🔓 تم فك حظر `{raw_id}`.", delete_after=8)
-
-            except discord.NotFound:
-                await message.channel.send("❌ هذا العضو غير موجود في قائمة المحظورين.", delete_after=7)
-            except Exception as error:
-                await message.channel.send(
-                    f"❌ فشل فك الحظر: `{type(error).__name__}`",
-                    delete_after=8
-                )
-
-            return True
-
-        # ----------------------------------------------------
-        # WARN — ت
-        # ----------------------------------------------------
-        if command == "ت":
-            if not message.mentions:
-                if len(parts) == 1:
-                    await message.channel.send("`ت @عضو السبب`", delete_after=8)
-                    return True
-                return False
-
-            target = message.mentions[0]
-
-            if not isinstance(target, discord.Member):
-                return True
-
-            if not self.has_moderation_permission(message.author, "warn"):
-                await message.channel.send("❌ ما عندك صلاحية التحذير.", delete_after=6)
-                return True
-
-            if not self.can_act_on_member(message.author, target):
-                await message.channel.send("❌ ما تقدر تحذر هذا العضو.", delete_after=6)
-                return True
-
-            reason = " ".join(parts[2:]).strip() or "بدون سبب محدد"
-
-            count = self.add_warning(
-                message.guild.id,
-                target.id,
-                message.author.id,
-                reason
-            )
-
-            await message.channel.send(
-                (
-                    f"⚠️ تم تحذير **{target}**.\n"
-                    f"السبب: **{reason}**\n"
-                    f"عدد التحذيرات: **{count}**"
-                ),
-                delete_after=10
-            )
-            return True
-
-        # ----------------------------------------------------
-        # PURGE MEMBER — مح
-        # ----------------------------------------------------
-        if command == "مح":
-            if not message.mentions:
-                if len(parts) == 1:
-                    await message.channel.send("`مح @عضو`", delete_after=8)
-                    return True
-                return False
-
-            target = message.mentions[0]
-
-            if not isinstance(target, discord.Member):
-                return True
-
-            if not self.has_moderation_permission(message.author, "delete"):
-                await message.channel.send("❌ ما عندك صلاحية حذف الرسائل.", delete_after=6)
-                return True
-
-            try:
-                deleted = await message.channel.purge(
-                    limit=100,
-                    check=lambda m: m.author.id == target.id
-                )
-                await message.channel.send(
-                    f"🧹 تم حذف **{len(deleted)}** رسالة من {target.mention}.",
-                    delete_after=6
-                )
-            except Exception as error:
-                await message.channel.send(
-                    f"❌ فشل الحذف: `{type(error).__name__}`",
-                    delete_after=8
-                )
-
-            return True
-
-        return False
 
     # ========================================================
     # ROLE PANEL COMMANDS
@@ -3079,11 +2432,6 @@ class AutomaticLineSystem(commands.Cog):
         if await self.handle_suggestion_message(message, cfg):
             return
 
-        # MODERATION SHORTCUTS
-        if cfg.get("moderation_enabled", True):
-            if await self.handle_moderation_shortcut(message):
-                return
-
         # BLOCKED WORDS
         if await self.handle_blocked_words(message, cfg):
             return
@@ -3187,11 +2535,6 @@ async def setup(bot):
             cog.game_info_loop.start()
     except Exception as error:
         print("⚠️ Game info task start error:", error)
-
-    try:
-        await cog.restore_temp_bans()
-    except Exception as error:
-        print("⚠️ Temp ban restore error:", error)
 
     # RESTORE ROLE PANEL
     for guild_id, panel in cog.role_panels.items():
