@@ -614,7 +614,7 @@ async def require_kick_permission(ctx: commands.Context) -> bool:
 # أوامر المالك / الإعداد
 # ============================================================
 
-@bot.command(name="مساعدة", aliases=["help", "مساعده"])
+@bot.command(name="مساعدة", aliases=["مساعده"])
 async def help_command(ctx: commands.Context):
     embed = discord.Embed(title="🛡️ نظام الإدارة - bot7", description="كل أوامر الإدارة الأساسية موجودة هنا.")
     embed.add_field(
@@ -1238,13 +1238,35 @@ async def setup(bot_instance: commands.Bot):
     global bot
     bot = bot_instance
 
-    # الأوامر سُجلت أثناء استيراد الملف على الـBot المؤقت، ثم ننقلها للـBot الرئيسي.
+    # نقل الأوامر إلى البوت الرئيسي مع منع أي تعارض في الاسم أو aliases.
     loaded_commands = []
+    skipped_commands = []
+
     for command in list(_DECORATOR_BOT.commands):
         if bot.get_command(command.name) is not None:
-            raise commands.CommandRegistrationError(command.name, alias_conflict=False)
-        bot.add_command(command)
-        loaded_commands.append(command.name)
+            skipped_commands.append(f"{command.name} (name)")
+            continue
+
+        safe_aliases = []
+        for alias in getattr(command, "aliases", ()):
+            if bot.get_command(alias) is None:
+                safe_aliases.append(alias)
+            else:
+                skipped_commands.append(f"{command.name} -> {alias} (alias)")
+
+        command.aliases = safe_aliases
+
+        try:
+            bot.add_command(command)
+            loaded_commands.append(command.name)
+        except commands.CommandRegistrationError as exc:
+            skipped_commands.append(f"{command.name} ({exc})")
+        except Exception as exc:
+            print(f"[BOT7 COMMAND LOAD ERROR] {command.name}: {exc}")
+            skipped_commands.append(f"{command.name} ({type(exc).__name__})")
+
+    if skipped_commands:
+        print("⚠️ تم تجاهل أوامر/اختصارات متعارضة في bot7.py: " + ", ".join(skipped_commands))
 
     # أحداث bot7 التي يجب أن تعمل مع الـBot الرئيسي.
     bot.add_listener(on_ready, "on_ready")
