@@ -146,6 +146,22 @@ async def save_database_async() -> None:
 # ============================================================
 
 
+async def resolve_role(ctx: commands.Context, token: str) -> Optional[discord.Role]:
+    """يحل الرتبة من منشن أو ID أو اسم، بدون الاعتماد على RoleConverter."""
+    token = token.strip()
+    match = re.fullmatch(r"<@&(\d+)>", token)
+    role_id = int(match.group(1)) if match else (int(token) if token.isdigit() else None)
+
+    if role_id is not None:
+        return ctx.guild.get_role(role_id)
+
+    normalized = normalize_text(token)
+    for role in ctx.guild.roles:
+        if normalize_text(role.name) == normalized:
+            return role
+    return None
+
+
 def normalize_text(value: str) -> str:
     return " ".join(value.strip().casefold().split())
 
@@ -711,7 +727,10 @@ async def shortcuts(ctx: commands.Context, action: Optional[str] = None, *values
         if not values:
             await ctx.send("منشن الرتبة. مثال: `!اختصارات ادارة @رتبة`")
             return
-        role = await discord.RoleConverter().convert(ctx, values[0])
+        role = await resolve_role(ctx, values[0])
+        if role is None:
+            await ctx.send("ما لقيت الرتبة. استخدم منشن الرتبة أو ID أو اسمها.")
+            return
         if role.is_default():
             await ctx.send("لا يمكن استخدام @everyone كرتبة إدارة.")
             return
