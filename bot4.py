@@ -1,67 +1,60 @@
 # ============================================================
 # Team Fime — bot4.py
-# Game Search System
+# Game Search Cog
+# Version: 8.0
 # ============================================================
+#
+# الملف يعمل كـ extension:  await bot.load_extension("bot4")
+# المتطلبات: discord.py 2.x و aiohttp
+# اختياري: RSCRIPTS_API_KEY في Environment لتفعيل RScripts API v1
 
-# Last Updated: 2026-10-06
-# Version: 7.1
-
-import discord
-from discord.ext import commands
-from discord import app_commands
-import requests
-import os
-import sys
-import shutil
 import asyncio
-import json
 import difflib
-import re
-from datetime import datetime, timezone
-from dateutil.relativedelta import relativedelta
-from dotenv import load_dotenv
-import validators
-import urllib.parse
-import time
-import aiohttp
-from functools import lru_cache
-import ipaddress
 import hashlib
+import io
+import json
+import math
+import os
+import re
+import time
+import urllib.parse
+from datetime import datetime, timezone
+from functools import lru_cache
+from typing import Any, Dict, List, Optional, Tuple
 
-load_dotenv()
-TOKEN = os.getenv("BOT_TOKEN")
-FALLBACK_IMAGE = None  # لا تستخدم GIF كصورة احتياطية
+import aiohttp
+import discord
+from discord import app_commands
+from discord.ext import commands
 
-intents = discord.Intents.default()
-intents.message_content = True
 
 # ============================================================
-# AUTO SEARCH SETTINGS — HIGH RECALL / FAST MULTI-SOURCE
+# SETTINGS
 # ============================================================
 
 SEARCH_ROOMS_FILE = "bot4_search_rooms.json"
-AUTO_SEARCH_COOLDOWN = 2
-AUTO_SEARCH_CACHE_TTL = 180
+SEARCH_HELP_ROOMS_FILE = "bot4_search_help_rooms.json"
 
-# عدد النتائج التي يمكن تصفحها. لا يعني أن كل مصدر يعيد هذا العدد.
+RSCRIPTS_API_KEY = os.getenv("RSCRIPTS_API_KEY", "").strip()
+USER_AGENT = "Team-Fime-Search/8.0"
+
+AUTO_SEARCH_COOLDOWN = 2            # ثواني بين بحثين لنفس العضو
+AUTO_SEARCH_CACHE_TTL = 180         # ثواني
 AUTO_SEARCH_MAX_RESULTS = 250
-AUTO_SEARCH_PAGES_PER_SOURCE = 6
 AUTO_SEARCH_PAGE_SIZE = 20
+AUTO_SEARCH_MAX_PAGES = 6
+AUTO_SEARCH_MAX_QUERIES = 6         # أقصى عدد صيغ بحث لكل استعلام
+AUTO_SEARCH_TARGET = 60             # نوقف التوسع إذا وصلنا لهذا العدد من النتائج المتطابقة
+AUTO_SEARCH_DEADLINE = 9.0          # أقصى وقت لبحث كامل (ثواني)
+HTTP_TIMEOUT_TOTAL = 6.0
+HTTP_CONCURRENCY = 8
+RELEVANCE_MIN = 0.55
+COPY_TEXT_LIMIT = 1900              # أكبر من هذا يروح كملف .lua
+DISCORD_TEXT_LIMIT = 1900
 
-# بحث متوازٍ: نرفع المهلة بما يكفي للـ pagination بدون جعل البوت يختنق.
-AUTO_SEARCH_TOTAL_TIMEOUT = 9.0
-AUTO_SEARCH_CONNECT_TIMEOUT = 2.0
-AUTO_SEARCH_READ_TIMEOUT = 7.0
+ENABLED_SOURCES = ("scriptblox", "robloxscripts", "rscripts", "haxhell", "roscripts", "rbxscripts")
 
-# البحث المباشر: العضو يكتب الاسم فقط، بدون خطوة اختيار أولية.
-AUTO_SEARCH_DIRECT = True
-
-_direct_search_tasks = set()
-_search_cooldowns = {}
-_auto_search_cache = {}
-_auto_search_inflight = {}
-
-SEARCH_SOURCE_NAMES = {
+SOURCE_NAMES = {
     "scriptblox": "ScriptBlox",
     "robloxscripts": "RobloxScripts",
     "rscripts": "RScripts",
@@ -70,284 +63,219 @@ SEARCH_SOURCE_NAMES = {
     "rbxscripts": "RBXScripts",
 }
 
-# RScripts API v1 يحتاج API key. إذا لم يوجد، يتم تجاهله فقط.
-RSCRIPTS_API_KEY = os.getenv("RSCRIPTS_API_KEY", "").strip()
-SEARCH_MAX_QUERIES_PER_SOURCE = 8
+SOURCE_COLORS = {
+    "scriptblox": 0x2ECC71,
+    "rscripts": 0x9B59B6,
+    "robloxscripts": 0xE67E22,
+}
 
-# عدد الصفحات العامة التي نسحبها بالتوازي من كل مصدر.
-SEARCH_PAGES = tuple(range(1, AUTO_SEARCH_PAGES_PER_SOURCE + 1))
+# مصادر HTML احتياطية: تُستخدم مع الاستعلام الأول فقط، ونتائجها تُفلتر بالعنوان.
+HTML_SOURCES = {
+    "haxhell": "https://haxhell.com/?q={query}",
+    "roscripts": "https://roscripts.net/?q={query}",
+    "rbxscripts": "https://rbxscripts.net/?q={query}",
+}
 
+ACCESS_OPTIONS = (
+    ("all", "الكل", "🌐"),
+    ("no_key", "بدون مفتاح", "🔓"),
+    ("with_key", "بمفتاح", "🔑"),
+)
 
+SOURCE_CHOICES = [
+    app_commands.Choice(name="الكل", value="all"),
+    app_commands.Choice(name="ScriptBlox", value="scriptblox"),
+    app_commands.Choice(name="RScripts", value="rscripts"),
+    app_commands.Choice(name="RobloxScripts", value="robloxscripts"),
+]
 
+MODE_CHOICES = [
+    app_commands.Choice(name="الكل", value="any"),
+    app_commands.Choice(name="مجاني", value="free"),
+    app_commands.Choice(name="مدفوع", value="paid"),
+]
 
-def _auto_cache_key(query, key_mode):
-    return f"{compact_game_name(query)}|{key_mode}"
+SORT_CHOICES = [
+    app_commands.Choice(name="الأكثر تطابقًا", value="relevance"),
+    app_commands.Choice(name="المشاهدات", value="views"),
+    app_commands.Choice(name="الإعجابات", value="likes"),
+    app_commands.Choice(name="الأحدث تحديثًا", value="date"),
+]
 
+ORDER_CHOICES = [
+    app_commands.Choice(name="تنازلي", value="desc"),
+    app_commands.Choice(name="تصاعدي", value="asc"),
+]
 
-def _copy_cached_scripts(scripts):
-    # نعيد list جديدة حتى لا تتغير نسخة الكاش بسبب إضافة metadata.
-    return [dict(item) for item in (scripts or []) if isinstance(item, dict)]
+FETCH_SORT_CHOICES = [
+    app_commands.Choice(name="المشاهدات", value="views"),
+    app_commands.Choice(name="الإعجابات", value="likeCount"),
+    app_commands.Choice(name="تاريخ الإنشاء", value="createdAt"),
+    app_commands.Choice(name="تاريخ التحديث", value="updatedAt"),
+    app_commands.Choice(name="عدد عدم الإعجاب", value="dislikeCount"),
+]
 
-
-async def get_auto_cache(query, key_mode):
-    cache_key = _auto_cache_key(query, key_mode)
-    item = _auto_search_cache.get(cache_key)
-
-    if not item:
-        return None
-
-    if time.monotonic() - item["timestamp"] > AUTO_SEARCH_CACHE_TTL:
-        _auto_search_cache.pop(cache_key, None)
-        return None
-
-    return _copy_cached_scripts(item["scripts"])
-
-
-async def set_auto_cache(query, key_mode, scripts):
-    cache_key = _auto_cache_key(query, key_mode)
-    _auto_search_cache[cache_key] = {
-        "timestamp": time.monotonic(),
-        "scripts": _copy_cached_scripts(scripts),
-    }
-
-    if len(_auto_search_cache) > 200:
-        now = time.monotonic()
-        expired = [
-            key for key, item in _auto_search_cache.items()
-            if now - item.get("timestamp", 0) > AUTO_SEARCH_CACHE_TTL
-        ]
-        for key in expired:
-            _auto_search_cache.pop(key, None)
+NO_MENTIONS = discord.AllowedMentions.none()
 
 
 # ============================================================
-# SEARCH ROOMS
+# PERSISTENCE
 # ============================================================
 
-def load_search_rooms():
-
+def _load_json_dict(path: str) -> Dict[str, Any]:
     try:
-
-        if not os.path.exists(
-            SEARCH_ROOMS_FILE
-        ):
-
-            return {}
-
-        with open(
-            SEARCH_ROOMS_FILE,
-            "r",
-            encoding="utf-8"
-        ) as f:
-
-            data = json.load(
-                f
-            )
-
-        return (
-            data
-            if isinstance(
-                data,
-                dict
-            )
-            else {}
-        )
-
-    except Exception:
-
-        return {}
-
-
-def save_search_rooms(
-    data
-):
-
-    try:
-
-        with open(
-            SEARCH_ROOMS_FILE,
-            "w",
-            encoding="utf-8"
-        ) as f:
-
-            json.dump(
-                data,
-                f,
-                ensure_ascii=False,
-                indent=4
-            )
-
-    except Exception as e:
-
-        print(
-            f"❌ Failed to save search rooms: {e}"
-        )
-
-
-search_rooms = load_search_rooms()
-
-SEARCH_HELP_ROOMS_FILE = "bot4_search_help_rooms.json"
-
-
-def load_search_help_rooms():
-    try:
-        path = SEARCH_HELP_ROOMS_FILE
         if not os.path.exists(path):
             return {}
         with open(path, "r", encoding="utf-8") as file:
             data = json.load(file)
         return data if isinstance(data, dict) else {}
-    except Exception as e:
-        print(f"❌ Failed to load search help rooms: {e}")
+    except Exception as error:
+        print(f"⚠️ تعذر قراءة {path}: {error}")
         return {}
 
 
-def save_search_help_rooms(data):
+def _save_json_dict(path: str, data: Dict[str, Any]) -> bool:
+    temp_path = f"{path}.tmp"
     try:
-        with open(SEARCH_HELP_ROOMS_FILE, "w", encoding="utf-8") as file:
+        with open(temp_path, "w", encoding="utf-8") as file:
             json.dump(data, file, ensure_ascii=False, indent=2)
+        os.replace(temp_path, path)
         return True
-    except Exception as e:
-        print(f"❌ Failed to save search help rooms: {e}")
+    except Exception as error:
+        print(f"❌ تعذر حفظ {path}: {error}")
         return False
 
 
-search_help_rooms = load_search_help_rooms()
+search_rooms: Dict[str, Any] = _load_json_dict(SEARCH_ROOMS_FILE)
+search_help_rooms: Dict[str, Any] = _load_json_dict(SEARCH_HELP_ROOMS_FILE)
 
 
-def get_configured_help_channel_ids(guild_id):
+def save_search_rooms() -> bool:
+    return _save_json_dict(SEARCH_ROOMS_FILE, search_rooms)
+
+
+def get_help_channel_ids(guild_id: int) -> List[str]:
     value = search_help_rooms.get(str(guild_id), [])
     if isinstance(value, str):
         value = [value]
     if not isinstance(value, list):
         return []
-    return [str(item) for item in value if str(item).isdigit()]
+    ids: List[str] = []
+    for item in value:
+        item = str(item)
+        if item.isdigit() and item not in ids:
+            ids.append(item)
+    return ids[:25]
 
 
-class SearchHelpRoomSelect(discord.ui.Select):
-    def __init__(self, guild, channel_ids):
-        options = []
-        for channel_id in channel_ids[:25]:
-            channel = guild.get_channel(int(channel_id))
-            if channel and isinstance(channel, discord.TextChannel):
-                options.append(
-                    discord.SelectOption(
-                        label=channel.name[:100],
-                        value=str(channel.id),
-                        emoji="📌",
-                    )
-                )
-
-        super().__init__(
-            placeholder="اختر الروم الذي تبي تتوجه له...",
-            min_values=1,
-            max_values=1,
-            options=options,
-        )
-
-    async def callback(self, interaction: discord.Interaction):
-        try:
-            channel = interaction.guild.get_channel(int(self.values[0]))
-        except Exception:
-            channel = None
-
-        if not channel:
-            await interaction.response.send_message(
-                "❌ الروم المحفوظ لم يعد موجودًا.", ephemeral=True
-            )
-            return
-
-        await interaction.response.send_message(
-            f"📍 توجه إلى {channel.mention}",
-            ephemeral=True,
-        )
-
-
-class SearchHelpRoomsView(discord.ui.View):
-    def __init__(self, guild, channel_ids):
-        super().__init__(timeout=120)
-        valid_ids = []
-        for channel_id in channel_ids[:25]:
-            channel = guild.get_channel(int(channel_id))
-            if channel and isinstance(channel, discord.TextChannel):
-                valid_ids.append(str(channel.id))
-        if valid_ids:
-            self.add_item(SearchHelpRoomSelect(guild, valid_ids))
-
-
-class SearchHelpButtonView(discord.ui.View):
-    def __init__(self, guild, requester_id):
-        super().__init__(timeout=120)
-        self.guild_id = guild.id
-        self.requester_id = requester_id
-
-        button = discord.ui.Button(
-            label="توجه إلى الرومات",
-            emoji="📚",
-            style=discord.ButtonStyle.primary,
-        )
-        button.callback = self.open_rooms
-        self.add_item(button)
-
-    async def open_rooms(self, interaction: discord.Interaction):
-        # أي عضو في روم البحث يقدر يستخدم الزر.
-        ids = get_configured_help_channel_ids(self.guild_id)
-        if not ids:
-            await interaction.response.send_message(
-                "ℹ️ المالك ما حدد رومات للتوجه لها حتى الآن.",
-                ephemeral=True,
-            )
-            return
-
-        view = SearchHelpRoomsView(interaction.guild, ids)
-        if not view.children:
-            await interaction.response.send_message(
-                "⚠️ الرومات المحددة لم تعد موجودة.", ephemeral=True
-            )
-            return
-
-        await interaction.response.send_message(
-            "📚 **اختر الروم المناسب:**",
-            view=view,
-            ephemeral=True,
-        )
-
-
+def set_help_channel_ids(guild_id: int, ids: List[str]) -> bool:
+    search_help_rooms[str(guild_id)] = [str(item) for item in ids][:25]
+    return _save_json_dict(SEARCH_HELP_ROOMS_FILE, search_help_rooms)
 
 
 # ============================================================
-# GAME RESOLUTION
-# ============================================================
-# لا توجد قائمة مابات ثابتة هنا.
-# البحث يعتمد على الاسم الذي كتبه العضو + التحويل العربي/الإنجليزي،
-# ثم يقرر API وترتيب النتائج بناءً على اسم اللعبة الحقيقي.
-GAME_ALIASES = {}
-
-
-# ============================================================
-# SMART GAME NAME NORMALIZATION
+# GENERIC HELPERS
 # ============================================================
 
-def normalize_game_name(
-    text
-):
+def clean_text(value: Any, default: str = "") -> str:
+    if value is None:
+        return default
+    text = str(value).strip()
+    return text or default
 
+
+def truncate(text: Any, limit: int) -> str:
+    text = clean_text(text)
+    return text if len(text) <= limit else text[: max(limit - 3, 0)] + "..."
+
+
+def to_int(value: Any) -> int:
+    try:
+        return int(float(value))
+    except (TypeError, ValueError):
+        return 0
+
+
+def as_flag(value: bool) -> str:
+    return "true" if value else "false"
+
+
+def rows_from(data: Any, path: Tuple[str, ...]) -> List[Dict[str, Any]]:
+    node = data
+    for key in path:
+        if not isinstance(node, dict):
+            return []
+        node = node.get(key)
+    if not isinstance(node, list):
+        return []
+    return [item for item in node if isinstance(item, dict)]
+
+
+def parse_iso(value: Any) -> Optional[datetime]:
+    text = clean_text(value)
+    if not text:
+        return None
+    try:
+        parsed = datetime.fromisoformat(text.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    return parsed if parsed.tzinfo else parsed.replace(tzinfo=timezone.utc)
+
+
+def format_relative_ar(value: Any) -> str:
+    parsed = parse_iso(value)
+    if parsed is None:
+        return "غير معروف"
+    seconds = int((datetime.now(timezone.utc) - parsed).total_seconds())
+    if seconds < 60:
+        return "الآن"
+    minutes = seconds // 60
+    if minutes < 60:
+        return f"قبل {minutes} دقيقة"
+    hours = minutes // 60
+    if hours < 24:
+        return f"قبل {hours} ساعة"
+    days = hours // 24
+    if days < 30:
+        return f"قبل {days} يوم"
+    months = days // 30
+    if months < 12:
+        return f"قبل {months} شهر"
+    return f"قبل {months // 12} سنة"
+
+
+def timestamp_of(row: Dict[str, Any]) -> float:
+    for field in ("updatedAt", "lastUpdated", "createdAt"):
+        parsed = parse_iso(row.get(field))
+        if parsed is not None:
+            return parsed.timestamp()
+    return 0.0
+
+
+def empty_text(query: str, had_error: bool) -> str:
+    if had_error:
+        return f"⚠️ بعض مصادر البحث ما ردت، وما لقيت نتيجة مؤكدة لـ **{truncate(query, 60)}**. جرّب بعد شوي."
+    return f"❌ ما لقيت نتائج مطابقة لـ **{truncate(query, 60)}**."
+
+
+# ============================================================
+# ARABIC / ENGLISH NAME NORMALIZATION
+# ============================================================
+
+_ARABIC_CHAR_RE = re.compile(r"[\u0600-\u06FF]")
+
+
+def has_arabic(text: Any) -> bool:
+    return bool(_ARABIC_CHAR_RE.search(str(text or "")))
+
+
+def normalize_game_name(text: Any) -> str:
     if not text:
         return ""
-
-    text = str(
-        text
-    ).lower().strip()
-
-    text = re.sub(
-        r"[\u064B-\u065F\u0670]",
-        "",
-        text
-    )
-
-    text = (
-        text
-        .replace("أ", "ا")
+    value = str(text).lower().strip()
+    value = re.sub(r"[\u064B-\u065F\u0670]", "", value)
+    value = (
+        value.replace("أ", "ا")
         .replace("إ", "ا")
         .replace("آ", "ا")
         .replace("ٱ", "ا")
@@ -357,97 +285,29 @@ def normalize_game_name(
         .replace("ئ", "ي")
         .replace("ـ", "")
     )
+    value = re.sub(r"[^a-z0-9\u0600-\u06FF]+", " ", value)
+    value = re.sub(r"\s+", " ", value).strip()
 
-    text = re.sub(
-        r"[^a-z0-9\u0600-\u06FF]+",
-        " ",
-        text
-    )
-
-    text = re.sub(
-        r"\s+",
-        " ",
-        text
-    ).strip()
-
-    stripped_words = []
-
-    for word in text.split():
-
-        if (
-            len(word) > 4
-            and word.startswith("ال")
-        ):
-
-            stripped_words.append(
-                word[2:]
-            )
-
-        else:
-
-            stripped_words.append(
-                word
-            )
-
-    return " ".join(
-        stripped_words
-    )
+    words = []
+    for word in value.split():
+        words.append(word[2:] if len(word) > 4 and word.startswith("ال") else word)
+    return " ".join(words)
 
 
-def compact_game_name(
-    text
-):
-
-    normalized = normalize_game_name(
-        text
-    )
-
-    normalized = re.sub(
-        r"(.)\1{1,}",
-        r"\1",
-        normalized
-    )
-
-    return normalized.replace(
-        " ",
-        ""
-    )
+def compact_game_name(text: Any) -> str:
+    normalized = normalize_game_name(text)
+    normalized = re.sub(r"(.)\1{1,}", r"\1", normalized)
+    return normalized.replace(" ", "")
 
 
-# لا توجد aliases ثابتة: هذا متعمد حتى لا يتحول بحث مثل
-# "Timebomb" أو "Steal an Egg" إلى لعبة أخرى مسجلة داخل البوت.
-NORMALIZED_GAME_ALIASES = {}
-
-
-def get_close_game_suggestions(query, limit=3):
-    # الاقتراحات الثابتة كانت أحد مصادر الخلط، لذلك لا نقترح ألعابًا
-    # من قائمة داخلية لمجرد تشابه الاسم.
-    return []
-
-
-def resolve_game_query(query):
-    # لا نعيد كتابة اسم اللعبة إلى اسم مسجل.
-    # نترك API يستلم استعلام العضو كما هو.
-    return str(query or "").strip()
+def _word_set(words) -> frozenset:
+    return frozenset(normalize_game_name(word) for word in words)
 
 
 # ============================================================
-# SMART ARABIC / ENGLISH QUERY SYSTEM
+# ARABIC → LATIN TRANSLITERATION
 # ============================================================
 
-
-# يقبل العربي والإنجليزي: العربي يتحول لصيغ إنجليزية للبحث
-# + مطابقة صوتية لترتيب النتائج (بدون مكتبات إضافية وبدون رام).
-# ============================================================
-
-_ARABIC_CHAR_RE = re.compile(r"[\u0600-\u06FF]")
-
-
-def has_arabic(text):
-    return bool(_ARABIC_CHAR_RE.search(str(text or "")))
-
-
-# كلمات شائعة في أسماء الماب. الكلمات الفارغة = كلمات زائدة تُحذف من البحث.
 _AR_WORD_SOURCE = {
     "ماب": "", "روبلوكس": "", "سكربت": "", "سكريبت": "", "اسكربت": "",
     "سكربتات": "", "لعبة": "", "هاك": "",
@@ -472,13 +332,13 @@ _AR_WORD_SOURCE = {
     "ريفت": "rift", "ريسيل": "rival", "رايفلز": "rivals", "ريفالز": "rivals",
 }
 
-_AR_WORD_MAP = {}
+_AR_WORD_MAP: Dict[str, str] = {}
 for _word, _english in _AR_WORD_SOURCE.items():
     _normalized_word = normalize_game_name(_word)
     if _normalized_word:
         _AR_WORD_MAP[_normalized_word] = _english
 
-# نسختان صوتيتان لأن الحروف العربية تحتمل أكثر من نطق (ق = g أو q، ج = j أو g ...).
+# نسختان صوتيتان لأن الحروف العربية تُنطق بأكثر من طريقة (ق = g أو q، ج = j أو g ...).
 _AR_LETTERS = (
     {
         "ا": "a", "ب": "b", "ت": "t", "ث": "th", "ج": "j", "ح": "h", "خ": "kh",
@@ -497,11 +357,10 @@ _AR_LETTERS = (
 )
 
 
-def _translit_word(word, variant):
+def _translit_word(word: str, variant: int) -> str:
     table = _AR_LETTERS[variant]
     last = len(word) - 1
     out = []
-
     for index, char in enumerate(word):
         if not _ARABIC_CHAR_RE.match(char):
             out.append(char)
@@ -513,28 +372,20 @@ def _translit_word(word, variant):
             continue
         else:
             out.append(table.get(char, ""))
-
     text = re.sub(r"(.)\1{2,}", r"\1\1", "".join(out))
-
     if variant == 0:
         text = re.sub(r"ks$", "x", text)
-
     return text
 
 
-def arabic_to_latin_queries(text, limit=2):
-    """يحول نص عربي (أو مختلط) إلى صيغ إنجليزية محتملة للبحث."""
-
+def arabic_to_latin_queries(text: Any, limit: int = 2) -> List[str]:
     normalized = normalize_game_name(text)
-
     if not normalized or not has_arabic(normalized):
         return []
 
-    results = []
-
+    results: List[str] = []
     for variant in range(2):
         words = []
-
         for token in normalized.split():
             if token in _AR_WORD_MAP:
                 mapped = _AR_WORD_MAP[token]
@@ -542,207 +393,106 @@ def arabic_to_latin_queries(text, limit=2):
                 mapped = _translit_word(token, variant)
             else:
                 mapped = token
-
             if mapped:
                 words.append(mapped)
-
         candidate = " ".join(words).strip()
-
         if candidate and candidate not in results:
             results.append(candidate)
-
     return results[:limit]
 
 
-def latin_skeleton(text):
-    """هيكل صوتي (حروف ساكنة فقط) لمقارنة النطق العربي بالاسم الإنجليزي."""
-
+def latin_skeleton(text: Any) -> str:
     value = re.sub(r"[^a-z0-9]", "", str(text or "").lower())
-
     for old, new in (
         ("x", "ks"), ("ph", "f"), ("ck", "k"), ("sh", "s"),
         ("th", "t"), ("kh", "k"), ("ch", "s"),
     ):
         value = value.replace(old, new)
-
-    value = value.translate(
-        str.maketrans({"q": "k", "c": "k", "v": "f", "p": "b", "z": "s", "j": "g"})
-    )
+    value = value.translate(str.maketrans({"q": "k", "c": "k", "v": "f", "p": "b", "z": "s", "j": "g"}))
     value = re.sub(r"[aeiouyw]", "", value)
-
     return re.sub(r"(.)\1+", r"\1", value)
 
 
-def phonetic_similarity(query, text):
+def phonetic_similarity(query: str, text: str) -> float:
     skeleton_text = latin_skeleton(text)
-
     if len(skeleton_text) < 2:
         return 0.0
 
     sources = arabic_to_latin_queries(query) if has_arabic(query) else [query]
     best = 0.0
-
     for source in sources:
         skeleton_query = latin_skeleton(source)
-
         if len(skeleton_query) < 2:
             continue
-
         if len(skeleton_query) >= 3 and skeleton_query in skeleton_text:
             ratio = 0.9
         elif len(skeleton_text) >= 3 and skeleton_text in skeleton_query:
             ratio = 0.8
         else:
-            ratio = difflib.SequenceMatcher(
-                None, skeleton_query, skeleton_text
-            ).ratio()
-
+            ratio = difflib.SequenceMatcher(None, skeleton_query, skeleton_text).ratio()
         best = max(best, ratio)
-
     return best
 
 
+_NOISE_WORDS = {
+    "ماب", "الماب", "سكربت", "سكريبت", "سكربتات", "اسكربت", "لعبه", "لعبة",
+    "بوت", "ابحث", "بحث", "عن", "ابي", "ابغى", "ابغا", "اريد", "ابيكم", "ابيها",
+    "هات", "جيب", "اعطني", "عطني", "تكفى", "تكفون", "لو", "ممكن", "احتاج", "احتاجه",
+    "please", "pls", "script", "scripts", "map", "game", "find", "search", "get", "give", "me",
+    "for", "the", "a", "an", "roblox", "روبلوكس",
+}
+
+
 @lru_cache(maxsize=512)
-def search_query_candidates(query):
+def search_query_candidates(query: str) -> Tuple[str, ...]:
     """يبني صيغ بحث متعددة من كلام العضو، حتى لو أضاف كلامًا لا علاقة له باسم الماب."""
-    query = str(query or "").strip()
+    query = clean_text(query)
     if not query:
         return ()
 
-    output, seen = [], set()
+    output: List[str] = []
+    seen = set()
 
-    def add(value):
-        value = str(value or "").strip()
+    def add(value: str) -> None:
+        value = clean_text(value)
         key = normalize_game_name(value)
         if not value or not key or key in seen:
             return
         seen.add(key)
         output.append(value)
 
-    # الأصل أولًا للحفاظ على دقة الاسم إذا كان العضو كتبه وحده.
+    # الأصل أولًا: إذا كتب العضو اسم الماب وحده، تبقى الدقة كما هي.
     add(query)
 
-    normalized = normalize_game_name(query)
-    tokens = normalized.split()
-    noise = {
-        "ماب", "الماب", "سكربت", "سكريبت", "سكربتات", "اسكربت", "لعبه", "لعبة",
-        "بوت", "ابحث", "بحث", "عن", "ابي", "ابغى", "ابغا", "اريد", "ابيكم", "ابيها",
-        "هات", "جيب", "اعطني", "عطني", "تكفى", "تكفون", "لو", "ممكن", "احتاج", "احتاجه",
-        "please", "pls", "script", "scripts", "map", "game", "find", "search", "get", "give", "me",
-        "for", "the", "a", "an", "roblox", "روبلوكس",
-    }
-    useful = [t for t in tokens if t not in noise and len(t) >= 2]
+    tokens = normalize_game_name(query).split()
+    useful = [token for token in tokens if token not in _NOISE_WORDS and len(token) >= 2]
 
     if useful:
         add(" ".join(useful))
-
-        # نبحث أيضًا بأزواج وثلاثيات الكلمات، لأن اسم اللعبة قد يكون وسط جملة طويلة.
-        for n in (3, 2):
-            for i in range(max(0, len(useful) - n + 1)):
-                add(" ".join(useful[i:i+n]))
-
-        # كلمة مميزة وحدها كحل أخير للأسماء المكتوبة بخلط عربي/إنجليزي.
+        for size in (3, 2):
+            for start in range(max(0, len(useful) - size + 1)):
+                add(" ".join(useful[start:start + size]))
         for token in useful:
             if len(token) >= 4:
                 add(token)
 
     if has_arabic(query):
-        # الترجمة الصوتية لا تستبدل الأصل، بل تضيفه كصيغة بحث ثانية.
         for item in arabic_to_latin_queries(query, limit=4):
             add(item)
         if useful:
-            useful_text = " ".join(useful)
-            for item in arabic_to_latin_queries(useful_text, limit=4):
+            for item in arabic_to_latin_queries(" ".join(useful), limit=4):
                 add(item)
 
     return tuple(output[:10])
 
 
-def prepare_search_query(query):
-    """يبقي الإنجليزي كما كتبه العضو، ويحوّل العربي فقط عند الحاجة."""
-    query = str(query or "").strip()
-    if not query or not has_arabic(query):
-        return query
+# ============================================================
+# RELEVANCE / RANKING
+# ============================================================
 
-    candidates = search_query_candidates(query)
-    return candidates[0] if candidates else query
-
-
-def get_game_search_queries(
-    query
-):
-
-    return list(
-        search_query_candidates(
-            query
-        )
-    )[:4]
-
-
-def _script_key(script):
-    """يعطي كل نتيجة بحث مفتاحًا ثابتًا لإزالة التكرار بدون الحاجة لأي API key."""
-    if not isinstance(script, dict):
-        return hashlib.sha1(str(script).encode("utf-8", "ignore")).hexdigest()
-
-    # نفضّل المعرفات التي ترسلها المصادر نفسها.
-    for field in (
-        "_id", "id", "scriptId", "script_id", "uuid", "_fime_id",
-        "url", "scriptUrl", "webUrl", "pageUrl", "rawScriptUrl", "rawUrl",
-    ):
-        value = script.get(field)
-        if isinstance(value, (str, int, float)) and str(value).strip():
-            return str(value).strip()
-
-    # إذا لم يوجد ID، نكوّن مفتاحًا من المصدر + اسم الماب + العنوان + الكود.
-    parts = [
-        str(script.get("_fime_api") or ""),
-        str(script.get("gameName") or script.get("game") or ""),
-        str(script.get("title") or script.get("name") or ""),
-        str(script.get("script") or script.get("rawScript") or ""),
-    ]
-    raw = "|".join(parts).strip()
-    return hashlib.sha1(raw.encode("utf-8", "ignore")).hexdigest()
-
-
-def _game_name_from_script(script):
-    """يستخرج اسم اللعبة بأمان من اختلاف بنية نتائج المصادر المختلفة."""
-    if not isinstance(script, dict):
-        return ""
-
-    # الاسم الموحد الذي تضيفه طبقات API الجديدة.
-    for field in (
-        "gameName", "game_name", "gameTitle", "game_title",
-        "placeName", "place_name", "experienceName", "experience_name",
-    ):
-        value = script.get(field)
-        if isinstance(value, str) and value.strip():
-            return value.strip()
-
-    # بعض المصادر ترسل game ككائن، وبعضها كنص أو ID فقط.
-    game = script.get("game")
-    if isinstance(game, dict):
-        for field in ("name", "title", "displayName", "gameName", "experienceName"):
-            value = game.get(field)
-            if isinstance(value, str) and value.strip():
-                return value.strip()
-    elif isinstance(game, str) and game.strip():
-        return game.strip()
-
-    # صيغ إضافية قد تظهر في المصادر الخارجية.
-    nested = script.get("experience") or script.get("place")
-    if isinstance(nested, dict):
-        for field in ("name", "title", "displayName"):
-            value = nested.get(field)
-            if isinstance(value, str) and value.strip():
-                return value.strip()
-
-    return ""
-
-
-def _game_relevance_score(game_name, query):
-    """درجة تطابق اسم اللعبة مع الاستعلام، مع دعم العربي والإنجليزي."""
-    game = str(game_name or "").strip()
-    q = str(query or "").strip()
+def name_relevance(name: Any, query: Any) -> float:
+    game = clean_text(name)
+    q = clean_text(query)
     if not game or not q:
         return 0.0
 
@@ -756,4351 +506,1610 @@ def _game_relevance_score(game_name, query):
 
     if game_norm == q_norm or game_compact == q_compact:
         return 1.0
-    if q_norm in game_norm or q_compact in game_compact:
+    if q_norm in game_norm or (len(q_compact) >= 3 and q_compact in game_compact):
         return 0.90
-    if game_norm in q_norm:
+    if game_norm in q_norm and len(game_compact) >= 3:
         return 0.86
 
-    best = difflib.SequenceMatcher(None, q_norm, game_norm).ratio()
-
-    # الاستعلام العربي قد يكون مجرد نطق عربي للاسم الإنجليزي.
-    best = max(best, phonetic_similarity(q_norm, game_norm))
+    best = max(
+        difflib.SequenceMatcher(None, q_norm, game_norm).ratio(),
+        phonetic_similarity(q_norm, game_norm),
+    )
     for candidate in search_query_candidates(q):
         cand_norm = normalize_game_name(candidate)
         if not cand_norm:
             continue
         cand_compact = compact_game_name(cand_norm)
         if cand_norm == game_norm or cand_compact == game_compact:
-            best = max(best, 1.0)
-        elif cand_norm in game_norm or cand_compact in game_compact:
+            return 1.0
+        if cand_norm in game_norm or (len(cand_compact) >= 3 and cand_compact in game_compact):
             best = max(best, 0.90)
         else:
-            best = max(best, difflib.SequenceMatcher(None, cand_norm, game_norm).ratio())
-            best = max(best, phonetic_similarity(cand_norm, game_norm))
-
+            best = max(
+                best,
+                difflib.SequenceMatcher(None, cand_norm, game_norm).ratio(),
+                phonetic_similarity(cand_norm, game_norm),
+            )
     return min(1.0, best)
 
 
-def _script_needs_key(script):
-    """يحدد وجود نظام مفتاح من عدة أسماء حقول مستخدمة لدى المصادر."""
-    if not isinstance(script, dict):
-        return False
+def row_relevance(row: Dict[str, Any], query: str) -> float:
+    game_score = name_relevance(row.get("gameName"), query) if row.get("gameName") else 0.0
+    title_score = name_relevance(row.get("title"), query) * 0.85
+    return max(game_score, title_score)
 
-    truthy_fields = (
-        "keySystem", "key_system", "requiresKey", "requires_key",
-        "keyRequired", "key_required", "hasKeySystem", "has_key_system",
-        "isKey", "key",
-    )
-    for field in truthy_fields:
-        value = script.get(field)
+
+def rank_score(row: Dict[str, Any], query: str) -> float:
+    relevance = row_relevance(row, query)
+    title_score = name_relevance(row.get("title"), query)
+    views = min(1.0, math.log10(max(to_int(row.get("views")), 0) + 1) / 6)
+    likes = min(1.0, math.log10(max(to_int(row.get("likes")), 0) + 1) / 5)
+    source_bonus = {"scriptblox": 0.04, "robloxscripts": 0.035, "rscripts": 0.03}.get(row.get("_fime_api", ""), 0.0)
+    return relevance * 0.72 + title_score * 0.16 + views * 0.07 + likes * 0.05 + source_bonus
+
+
+# ============================================================
+# SCRIPT ROW HELPERS
+# ============================================================
+
+_KEY_TRUE_VALUES = {"true", "yes", "1", "required", "key", "withkey", "with_key", "keysystem"}
+_KEY_TEXT_RE = re.compile(r"\b(key system|key required|requires key|keysystem)\b")
+_NO_KEY_TEXT_RE = re.compile(r"\b(no key|no keys|without key|no key system)\b")
+_KEY_FIELDS = (
+    "keySystem", "key_system", "requiresKey", "requires_key", "keyRequired",
+    "key_required", "hasKeySystem", "has_key_system", "isKey", "key",
+)
+
+
+def script_needs_key(row: Dict[str, Any]) -> bool:
+    if clean_text(row.get("keyLink")):
+        return True
+
+    for field in _KEY_FIELDS:
+        value = row.get(field)
         if isinstance(value, bool):
             if value:
                 return True
         elif isinstance(value, (int, float)) and value == 1:
             return True
-        elif isinstance(value, str):
-            lowered = value.strip().lower()
-            if lowered in {"true", "yes", "1", "required", "key", "withkey", "with_key", "keysystem"}:
-                return True
-
-    # بعض النتائج تضع بيانات المفتاح داخل كائن.
-    for field in ("key", "keySystem", "key_system", "access"):
-        value = script.get(field)
-        if isinstance(value, dict) and value:
+        elif isinstance(value, str) and value.strip().lower() in _KEY_TRUE_VALUES:
+            return True
+        elif isinstance(value, dict):
             for nested_field in ("required", "enabled", "active", "hasKey", "has_key"):
                 nested = value.get(nested_field)
-                if nested is True or nested == 1 or (isinstance(nested, str) and nested.strip().lower() in {"true", "yes", "1"}):
+                if nested is True or nested == 1:
+                    return True
+                if isinstance(nested, str) and nested.strip().lower() in _KEY_TRUE_VALUES:
                     return True
 
-    # إذا كان المصدر يصف نظام المفتاح نصيًا، نلتقطه بحذر.
     for field in ("description", "desc", "notes", "status"):
-        value = script.get(field)
-        if isinstance(value, str) and value.strip():
-            text = normalize_game_name(value)
-            if re.search(r"\b(key system|key required|requires key|keys?ystem)\b", text):
-                return True
-            if any(token in text for token in ("مفتاح", "كي سيستم", "keysystem", "key required", "requires key")):
-                return True
-
+        value = row.get(field)
+        if not isinstance(value, str) or not value.strip():
+            continue
+        text = normalize_game_name(value)
+        if _NO_KEY_TEXT_RE.search(text) or "بدون مفتاح" in text:
+            continue
+        if _KEY_TEXT_RE.search(text) or "مفتاح" in text or "كي سيستم" in text:
+            return True
     return False
 
 
-def _score_auto_result(script, query):
-    """ترتيب النتائج: اسم الماب أولًا ثم تطابق العنوان وبعض مؤشرات الجودة."""
-    if not isinstance(script, dict):
-        return 0.0
-
-    game_score = _game_relevance_score(_game_name_from_script(script), query)
-
-    title = str(script.get("title") or script.get("name") or "")
-    title_score = _game_relevance_score(title, query) if title else 0.0
-
-    views = script.get("views", script.get("viewCount", 0)) or 0
-    likes = script.get("likes", script.get("likeCount", 0)) or 0
-    try:
-        views_score = min(1.0, max(0.0, float(views)) / 100000.0)
-    except (TypeError, ValueError):
-        views_score = 0.0
-    try:
-        likes_score = min(1.0, max(0.0, float(likes)) / 10000.0)
-    except (TypeError, ValueError):
-        likes_score = 0.0
-
-    source_bonus = {
-        "scriptblox": 0.05,
-        "robloxscripts": 0.045,
-        "rscripts": 0.04,
-        "haxhell": 0.01,
-        "roscripts": 0.01,
-        "rbxscripts": 0.01,
-    }.get(str(script.get("_fime_api") or ""), 0.0)
-
-    return (game_score * 0.72) + (title_score * 0.18) + (views_score * 0.06) + (likes_score * 0.03) + source_bonus
+def _is_verified(row: Dict[str, Any]) -> bool:
+    user = row.get("user") if isinstance(row.get("user"), dict) else {}
+    return bool(row.get("verified") or user.get("verified"))
 
 
-def _filter_relevant_results(results, query, key_mode=None):
-    """فلترة آمنة للنتائج مع عدم إسقاط النتائج التي لا تملك اسم لعبة صريحًا."""
-    output = []
-    for item in results or []:
-        if not isinstance(item, dict):
-            continue
-
-        game_name = _game_name_from_script(item)
-        # النتائج التي لا تملك اسم لعبة صريحًا تُترك لأنها قد تكون fallback من موقع خارجي.
-        if game_name:
-            score = _game_relevance_score(game_name, query)
-            if score < 0.42:
-                continue
-
-        if key_mode == "no_key" and _script_needs_key(item):
-            continue
-        if key_mode == "with_key" and not _script_needs_key(item):
-            continue
-
-        output.append(item)
-
-    return output
-
-
-# ============================================================
-# AUTO SEARCH API WORKER — HIGH RECALL MULTI-SOURCE
-# ============================================================
-
-async def _http_json(session, url, *, params=None, headers=None):
-    try:
-        async with session.get(url, params=params, headers=headers, allow_redirects=True) as response:
-            if response.status != 200:
-                return None, response.status
-            return await response.json(content_type=None), 200
-    except (asyncio.TimeoutError, aiohttp.ClientError):
-        return None, -1
-    except Exception as exc:
-        print(f"⚠️ Search source error: {exc}")
-        return None, -2
-
-
-async def _scriptblox_page(session, query, page):
-    params = {
-        "q": query,
-        "page": page,
-        "max": min(AUTO_SEARCH_PAGE_SIZE, 20),
-        "mode": "free",
-        "sortBy": "accuracy",
-        "order": "desc",
-        "strict": "false",
-    }
-    data, status = await _http_json(
-        session,
-        "https://scriptblox.com/api/script/search",
-        params=params,
-        headers={"User-Agent": "Team-Fime-Search/7.1", "Accept": "application/json"},
-    )
-    if not isinstance(data, dict):
-        return [], status == -1
-    result = data.get("result") or {}
-    rows = result.get("scripts") or []
-    out = []
-    for row in rows if isinstance(rows, list) else []:
-        if isinstance(row, dict):
-            item = dict(row)
-            item["_fime_api"] = "scriptblox"
-            item["_fime_page"] = page
-            out.append(item)
-    return out, False
-
-
-async def _robloxscripts_page(session, query, page):
-    params = {
-        "q": query,
-        "page": page,
-        "limit": min(AUTO_SEARCH_PAGE_SIZE, 50),
-        "sort": "most-liked",
-    }
-    data, status = await _http_json(
-        session,
-        "https://robloxscripts.com/api/v1/scripts",
-        params=params,
-        headers={"User-Agent": "Team-Fime-Search/7.1", "Accept": "application/json"},
-    )
-    if not isinstance(data, dict):
-        return [], status == -1
-    rows = data.get("data") or []
-    out = []
-    for row in rows if isinstance(rows, list) else []:
-        if isinstance(row, dict):
-            item = dict(row)
-            item["_fime_api"] = "robloxscripts"
-            item["_fime_page"] = page
-            # توحيد الحقول الجديدة.
-            item.setdefault("title", item.get("name") or "بدون عنوان")
-            item.setdefault("views", item.get("viewCount", 0) or 0)
-            item.setdefault("image", item.get("imageUrl") or item.get("thumbnailUrl"))
-            if isinstance(item.get("game"), dict):
-                g = item["game"]
-                item.setdefault("gameName", g.get("name") or g.get("title") or g.get("displayName"))
-                item.setdefault("_fime_game_image", g.get("thumbnailUrl") or g.get("imageUrl") or g.get("logoUrl"))
-            item.setdefault("rawScript", item.get("rawScriptUrl"))
-            out.append(item)
-    return out, False
-
-
-async def _rscripts_page(session, query, page):
-    if not RSCRIPTS_API_KEY:
-        return [], False
-    params = {
-        "q": query,
-        "index": "scripts",
-        "page": page,
-        "limit": min(AUTO_SEARCH_PAGE_SIZE, 20),
-        "htmlDescription": "false",
-        "includeScript": "false",
-    }
-    data, status = await _http_json(
-        session,
-        "https://api.rscripts.net/v1/search",
-        params=params,
-        headers={
-            "User-Agent": "Team-Fime-Search/7.1",
-            "Accept": "application/json",
-            "Authorization": f"Bearer {RSCRIPTS_API_KEY}",
-        },
-    )
-    if not isinstance(data, dict):
-        return [], status == -1
-    raw = ((data.get("data") or {}).get("scripts") or [])
-    out = []
-    for row in raw if isinstance(raw, list) else []:
-        if isinstance(row, dict):
-            item = dict(row)
-            item["_fime_api"] = "rscripts"
-            item["_fime_page"] = page
-            game = item.get("game")
-            if isinstance(game, dict):
-                item.setdefault("gameName", game.get("title") or game.get("name"))
-                item.setdefault("_fime_game_image", game.get("thumbnailUrl") or game.get("logoUrl"))
-            creator = item.get("creator") or {}
-            if isinstance(creator, dict):
-                item.setdefault("_fime_creator_image", creator.get("avatarUrl"))
-                item.setdefault("user", creator)
-            out.append(item)
-    return out, False
-
-
-async def _generic_site_search_async(session, query, source, base_url):
-    """HTML fallback. لا يدعي أنه API: يلتقط الروابط والصور المتاحة فقط."""
-    q = urllib.parse.quote_plus(str(query))
-    url = base_url.format(query=q)
-    headers = {"User-Agent": "Team-Fime-Search/7.1", "Accept": "text/html,application/xhtml+xml"}
-    try:
-        async with session.get(url, headers=headers, allow_redirects=True) as response:
-            if response.status != 200:
-                return [], True
-            html = await response.text(errors="ignore")
-        if not html:
-            return [], False
-        image_matches = re.findall(
-            r'<meta[^>]+(?:property|name)=["\'](?:og:image|twitter:image)["\'][^>]+content=["\']([^"\']+)',
-            html, re.I
-        )
-        image = image_matches[0] if image_matches else None
-        link_re = re.compile(r'<a[^>]+href=["\']([^"\']+)["\'][^>]*>(.*?)</a>', re.I | re.S)
-        results, seen = [], set()
-        for href, raw_text in link_re.findall(html):
-            text_value = re.sub(r'<[^>]+>', ' ', raw_text)
-            text_value = re.sub(r'\s+', ' ', text_value).strip()
-            if len(text_value) < 3:
-                continue
-            absolute = urllib.parse.urljoin(url, href)
-            if not absolute.startswith(("http://", "https://")):
-                continue
-            key = absolute.split("#", 1)[0]
-            if key in seen:
-                continue
-            seen.add(key)
-            results.append({
-                "title": text_value[:180],
-                "gameName": query,
-                "url": absolute,
-                "image": image,
-                "_fime_api": source,
-                "_fime_fallback": True,
-            })
-            if len(results) >= 40:
-                break
-        return results, False
-    except (asyncio.TimeoutError, aiohttp.ClientError):
-        return [], True
-    except Exception:
-        return [], True
-
-
-async def _search_one_source(session, source, query):
-    if source == "scriptblox":
-        tasks = [_scriptblox_page(session, query, page) for page in SEARCH_PAGES]
-    elif source == "robloxscripts":
-        tasks = [_robloxscripts_page(session, query, page) for page in SEARCH_PAGES]
-    elif source == "rscripts":
-        tasks = [_rscripts_page(session, query, page) for page in SEARCH_PAGES]
-    elif source == "haxhell":
-        return await _generic_site_search_async(session, query, "haxhell", "https://haxhell.com/?q={query}")
-    elif source == "roscripts":
-        return await _generic_site_search_async(session, query, "roscripts", "https://roscripts.net/?q={query}")
-    elif source == "rbxscripts":
-        return await _generic_site_search_async(session, query, "rbxscripts", "https://rbxscripts.net/?q={query}")
-    else:
-        return [], False
-
-    results = await asyncio.gather(*tasks, return_exceptions=True)
-    collected, failed = [], False
-    for result in results:
-        if isinstance(result, Exception):
-            failed = True
-            continue
-        rows, network_error = result
-        failed = failed or network_error
-        collected.extend(rows)
-    return collected, failed
-
-
-async def fetch_auto_search_mode(search_query, key_mode="all"):
-    """بحث شامل نسبيًا: عدة صيغ × عدة مصادر × صفحات متوازية × إزالة تكرار."""
-    cache_key = _auto_cache_key(search_query, key_mode)
-    cache = await get_auto_cache(search_query, key_mode)
-    if cache is not None:
-        return cache, False, True
-
-    existing = _auto_search_inflight.get(cache_key)
-    if existing:
-        try:
-            rows, err = await existing
-            return _copy_cached_scripts(rows), err, True
-        except Exception:
-            pass
-
-    async def worker():
-        queries = list(get_game_search_queries(search_query))[:SEARCH_MAX_QUERIES_PER_SOURCE]
-        if not queries:
-            queries = [str(search_query).strip()]
-
-        timeout = aiohttp.ClientTimeout(
-            total=AUTO_SEARCH_TOTAL_TIMEOUT,
-            connect=AUTO_SEARCH_CONNECT_TIMEOUT,
-            sock_read=AUTO_SEARCH_READ_TIMEOUT,
-        )
-        sources = ["scriptblox", "robloxscripts", "haxhell", "roscripts", "rbxscripts"]
-        if RSCRIPTS_API_KEY:
-            sources.insert(2, "rscripts")
-
-        collected, seen, had_error = [], set(), False
-        async with aiohttp.ClientSession(timeout=timeout) as session:
-            jobs = [
-                _search_one_source(session, source, candidate)
-                for candidate in queries
-                for source in sources
-            ]
-            results = await asyncio.gather(*jobs, return_exceptions=True)
-            for result in results:
-                if isinstance(result, Exception):
-                    had_error = True
-                    continue
-                rows, error = result
-                had_error = had_error or error
-                for row in rows:
-                    if not isinstance(row, dict):
-                        continue
-                    key = f"{row.get('_fime_api','x')}:{_script_key(row)}"
-                    if key in seen:
-                        continue
-                    if _game_name_from_script(row):
-                        relevance = _game_relevance_score(_game_name_from_script(row), search_query)
-                        if relevance < 0.58:
-                            continue
-                    seen.add(key)
-                    collected.append(row)
-
-        # ترتيب عالي الاستدعاء مع الحفاظ على أفضل التطابقات في الأعلى.
-        collected.sort(key=lambda item: _score_auto_result(item, search_query), reverse=True)
-        collected = collected[:AUTO_SEARCH_MAX_RESULTS]
-        await set_auto_cache(search_query, key_mode, collected)
-        return collected, had_error
-
-    task = asyncio.create_task(worker())
-    _auto_search_inflight[cache_key] = task
-    try:
-        rows, err = await task
-        return rows, err, False
-    finally:
-        if _auto_search_inflight.get(cache_key) is task:
-            _auto_search_inflight.pop(cache_key, None)
-
-
-async def process_auto_search_request(message, requester_id, query, key_mode="all"):
-    started = time.perf_counter()
-    try:
-        rows, had_error, _ = await fetch_auto_search_mode(query, key_mode)
-        await _attach_roblox_thumbnail_if_missing(rows[:40])
-        rows = _filter_relevant_results(rows, query, None)
-        rows.sort(key=lambda item: _score_auto_result(item, query), reverse=True)
-        rows = rows[:AUTO_SEARCH_MAX_RESULTS]
-        elapsed = time.perf_counter() - started
-
-        if not rows:
-            text_value = (
-                f"❌ ما لقيت نتائج مطابقة لـ **{query}**."
-                if not had_error else
-                f"⚠️ مصادر البحث ما ردت بالكامل، وما وصلت نتيجة مؤكدة لـ **{query}**."
-            )
-            await message.channel.send(text_value, allowed_mentions=discord.AllowedMentions.none())
-            return
-
-        view = AutoSearchResultBrowseView(requester_id, rows, query, ["all"])
-        embed = view.build_embed()
-        await message.channel.send(
-            content=(
-                f"✅ **{len(rows)} نتيجة** لـ **{query}** • "
-                f"⚡ {elapsed:.1f}s\n"
-                "يمكنك تبديل النتائج من الأسهم، ونسخ الكود من زر **نسخ**."
-            ),
-            embed=embed,
-            view=view,
-            allowed_mentions=discord.AllowedMentions.none(),
-        )
-    except Exception as exc:
-        print(f"❌ Auto search background error: {exc}")
-        await message.channel.send("❌ صار خطأ أثناء تجهيز البحث.", allowed_mentions=discord.AllowedMentions.none())
-
-
-# ============================================================
-# AUTO SEARCH RESULT BROWSER
-# ============================================================
-
-
-# ============================================================
-# AUTO SEARCH RESULT BROWSER
-# ============================================================
-
-class AutoSearchResultBrowseView(discord.ui.View):
-    """واجهة نظيفة: تبديل النتائج + نسخ فقط، مع قائمة فلترة صغيرة."""
-
-    def __init__(self, requester_id, scripts, query, selected_modes=None):
-        super().__init__(timeout=600)
-        self.requester_id = requester_id
-        self.all_scripts = list(scripts or [])
-        self.scripts = list(self.all_scripts)
-        self.query = query
-        self.index = 0
-        self.filter_mode = "all"
-        self.refresh_items()
-
-    async def interaction_check(self, interaction):
+def _is_paid(row: Dict[str, Any]) -> bool:
+    if clean_text(row.get("scriptType")).lower() == "paid":
         return True
+    return bool(row.get("paid"))
 
-    def _filtered(self):
-        if self.filter_mode == "no_key":
-            return [s for s in self.all_scripts if not _script_needs_key(s)]
-        if self.filter_mode == "with_key":
-            return [s for s in self.all_scripts if _script_needs_key(s)]
-        return list(self.all_scripts)
 
-    def refresh_items(self):
-        self.scripts = self._filtered()
-        if not self.scripts:
-            self.index = 0
-        else:
-            self.index = min(self.index, len(self.scripts) - 1)
-        self.clear_items()
+def _is_patched(row: Dict[str, Any]) -> bool:
+    return bool(row.get("isPatched"))
 
-        selector = discord.ui.Select(
-            placeholder="فلترة الوصول: الكل / بدون مفتاح / بمفتاح",
-            options=[
-                discord.SelectOption(label="الكل", value="all", emoji="🌐", default=self.filter_mode == "all"),
-                discord.SelectOption(label="بدون مفتاح", value="no_key", emoji="🔓", default=self.filter_mode == "no_key"),
-                discord.SelectOption(label="بمفتاح", value="with_key", emoji="🔑", default=self.filter_mode == "with_key"),
-            ],
-            row=0,
-        )
-        selector.callback = self.filter_callback
-        self.add_item(selector)
 
-        previous = discord.ui.Button(label="◀️", style=discord.ButtonStyle.secondary, disabled=self.index <= 0, row=1)
-        previous.callback = self.previous_callback
-        self.add_item(previous)
+def _is_universal(row: Dict[str, Any]) -> bool:
+    return bool(row.get("isUniversal"))
 
-        position = discord.ui.Button(
-            label=f"{self.index + 1}/{len(self.scripts)}" if self.scripts else "0/0",
-            style=discord.ButtonStyle.secondary,
-            disabled=True,
-            row=1,
-        )
-        self.add_item(position)
 
-        nxt = discord.ui.Button(
-            label="▶️", style=discord.ButtonStyle.secondary,
-            disabled=not self.scripts or self.index >= len(self.scripts) - 1,
-            row=1,
-        )
-        nxt.callback = self.next_callback
-        self.add_item(nxt)
+def _is_mobile(row: Dict[str, Any]) -> bool:
+    return bool(row.get("mobileReady"))
 
-        copy_button = discord.ui.Button(label="نسخ", emoji="📋", style=discord.ButtonStyle.success, row=1, disabled=not bool(self.scripts))
-        copy_button.callback = self.copy_callback
-        self.add_item(copy_button)
 
-    def build_embed(self):
-        if not self.scripts:
-            return discord.Embed(title="لا توجد نتائج بهذا الفلتر", description="جرّب فلترًا آخر.", color=0x206694)
-        script = self.scripts[self.index]
-        return create_embed(script, self.index + 1, len(self.scripts), script.get("_fime_api", "scriptblox"))
+def row_key(row: Dict[str, Any]) -> str:
+    if row.get("_page_url"):
+        return row["_page_url"]
+    if row.get("_id"):
+        return f"{row.get('_fime_api')}:{row['_id']}"
+    raw = f"{row.get('title')}|{row.get('gameName')}|{clean_text(row.get('_code'))[:200]}"
+    return hashlib.sha1(raw.encode("utf-8", "ignore")).hexdigest()
 
-    async def filter_callback(self, interaction):
-        self.filter_mode = interaction.data["values"][0]
-        self.index = 0
-        self.refresh_items()
-        await interaction.response.edit_message(embed=self.build_embed(), view=self)
 
-    async def previous_callback(self, interaction):
-        if self.index <= 0:
-            return await interaction.response.defer()
-        self.index -= 1
-        self.refresh_items()
-        await interaction.response.edit_message(embed=self.build_embed(), view=self)
-
-    async def next_callback(self, interaction):
-        if self.index >= len(self.scripts) - 1:
-            return await interaction.response.defer()
-        self.index += 1
-        self.refresh_items()
-        await interaction.response.edit_message(embed=self.build_embed(), view=self)
-
-    async def copy_callback(self, interaction):
-        if not self.scripts:
-            return await interaction.response.send_message("❌ لا توجد نتيجة حاليًا.", ephemeral=True)
-        script = self.scripts[self.index]
-        source = script.get("_fime_api")
-        content = str(script.get("script") or script.get("rawScript") or "").strip()
-        if source == "rscripts" and content.startswith("http"):
-            content = f'loadstring(game:HttpGet("{content}"))()'
-        if not content:
-            raw_url = _script_raw_url(script)
-            if raw_url:
-                content = f'loadstring(game:HttpGet("{raw_url}"))()'
-        if not content:
-            return await interaction.response.send_message("❌ الكود غير متوفر من المصدر.", ephemeral=True)
-        if len(content) <= 1900:
-            await interaction.response.send_message(f"```lua\n{content}\n```", ephemeral=True)
-        else:
-            import io
-            await interaction.response.send_message(
-                "📜 الكود طويل، أرفقته كملف.",
-                file=discord.File(io.BytesIO(content.encode("utf-8")), filename="script.lua"),
-                ephemeral=True,
-            )
-
-    async def on_timeout(self):
-        self.clear_items()
-
-
-# ============================================================
-# AUTOMATIC GAME SEARCH
-# ============================================================
-
-
-# ============================================================
-# AUTOMATIC GAME SEARCH
-# ============================================================
-
-class _MessageResponder:
-    """يخلي نتائج البحث تتحدث داخل رسالة عادية بنفس طريقة interaction."""
-
-    def __init__(self, message, guild):
-        self.message = message
-        self.guild = guild
-
-    async def edit_original_response(self, **kwargs):
-        await self.message.edit(**kwargs)
-
-    async def delete_original_response(self):
-        try:
-            await self.message.delete()
-        except (discord.NotFound, discord.Forbidden, discord.HTTPException):
-            pass
-
-
-async def automatic_game_search(message, query):
-    """يبدأ البحث فورًا. لا توجد خطوة اختيار قبل ظهور النتائج."""
-    status = await message.channel.send(
-        f"🔎 **جاري البحث عن:** `{query}`\n"
-        "⚡ أفحص المصادر المتاحة وأجمع النتائج المتشابهة ثم أرتبها."
-    )
-    try:
-        await process_auto_search_request(message, message.author.id, query, "all")
-    finally:
-        try:
-            await status.delete()
-        except Exception:
-            pass
-
-
-
-
-# ============================================================
-# BOT
-# ============================================================
-
-class MyBot(
-    commands.Bot
-):
-
-    def __init__(
-        self,
-        *args,
-        **kwargs
-    ):
-
-        super().__init__(
-            *args,
-            **kwargs
-        )
-
-        self.active_searches = {}
-        self.active_search_tasks = set()
-
-    async def setup_hook(
-        self
-    ):
-
-        pass
-
-
-bot = MyBot(
-    command_prefix='!',
-    intents=intents
-)
-
-
-@bot.event
-async def on_ready():
-
-    activity = discord.Game(
-        name="Script Searcher | v3.0"
-    )
-
-    await bot.change_presence(
-        activity=activity
-    )
-
-    print(
-        f"Bot is ready 🤖 | "
-        f"Serving in {len(bot.guilds)} servers"
-    )
-
-    print(
-        "Commands: /search, /fetch, "
-        "/trending, /script, /executors, "
-        "/rscripts_*"
-    )
-
-
-# ============================================================
-# AUTO SEARCH MESSAGE LISTENER
-# ============================================================
-
-async def automatic_search_listener(
-    message
-):
-
-    if message.author.bot:
-
-        return
-
-    if not message.guild:
-
-        return
-
-    guild_id = str(
-        message.guild.id
-    )
-
-    configured_channel = (
-        search_rooms.get(
-            guild_id
-        )
-    )
-
-    if not configured_channel:
-
-        return
-
-    if (
-        str(message.channel.id)
-        != str(configured_channel)
-    ):
-
-        return
-
-    query = message.content.strip()
-
-    if not query:
-
-        return
-
-    if len(query) > 120:
-
-        return
-
-    if (
-        query.startswith("!")
-        or query.startswith("/")
-    ):
-
-        return
-
-    cooldown_key = (
-        f"{message.guild.id}:"
-        f"{message.author.id}"
-    )
-
-    now = datetime.now(
-        timezone.utc
-    ).timestamp()
-
-    last_search = (
-        _search_cooldowns.get(
-            cooldown_key,
-            0
-        )
-    )
-
-    if (
-        now - last_search
-        < AUTO_SEARCH_COOLDOWN
-    ):
-
-        return
-
-    _search_cooldowns[
-        cooldown_key
-    ] = now
-
-    try:
-
-        await automatic_game_search(
-            message,
-            query
-        )
-
-    except Exception as e:
-
-        print(
-            "❌ Automatic search error: "
-            f"{e}"
-        )
-
-        await message.channel.send(
-            "❌ صار خطأ أثناء البحث، "
-            "حاول مرة ثانية."
-        )
-
-
-# ============================================================
-# GAME SEARCH FUNCTIONS
-# ============================================================
-
-def fetch_scripts(
-    api,
-    query,
-    mode,
-    page,
-    **filters
-):
-
-    original_query = query
-    query = prepare_search_query(query)
-
-    try:
-
-        if api == "scriptblox":
-
-            params = {
-                "q": query,
-                "mode": mode,
-                "page": page
-            }
-
-            if filters.get(
-                "verified"
-            ) is not None:
-
-                params["verified"] = (
-                    1
-                    if filters["verified"]
-                    else 0
-                )
-
-            if filters.get(
-                "patched"
-            ) is not None:
-
-                params["patched"] = (
-                    1
-                    if filters["patched"]
-                    else 0
-                )
-
-            if filters.get(
-                "key"
-            ) is not None:
-
-                params["key"] = (
-                    1
-                    if filters["key"] == 1
-                    or filters["key"] is True
-                    else 0
-                )
-
-            if filters.get(
-                "universal"
-            ) is not None:
-
-                params["universal"] = (
-                    1
-                    if filters["universal"]
-                    else 0
-                )
-
-            if filters.get(
-                "sortBy"
-            ):
-
-                params["sortBy"] = (
-                    filters["sortBy"]
-                )
-
-            if filters.get(
-                "order"
-            ):
-
-                params["order"] = (
-                    filters["order"]
-                )
-
-            if filters.get(
-                "strict"
-            ) is not None:
-
-                params["strict"] = (
-                    "true"
-                    if filters["strict"]
-                    else "false"
-                )
-
-            if filters.get(
-                "owner"
-            ):
-
-                params["owner"] = (
-                    filters["owner"]
-                )
-
-            if filters.get(
-                "placeId"
-            ):
-
-                params["placeId"] = (
-                    filters["placeId"]
-                )
-
-            query_string = (
-                urllib.parse.urlencode(
-                    params
-                )
-            )
-
-            url = (
-                "https://scriptblox.com/"
-                "api/script/search?"
-                f"{query_string}"
-            )
-
-            r = requests.get(
-                url,
-                timeout=AUTO_SEARCH_TOTAL_TIMEOUT
-            )
-
-            r.raise_for_status()
-
-            data = r.json()
-
-            if (
-                "result" in data
-                and "scripts" in data["result"]
-            ):
-
-                scripts = (
-                    data["result"]["scripts"]
-                )
-
-                total_pages = (
-                    data["result"].get(
-                        "totalPages",
-                        None
-                    )
-                )
-
-                return (
-                    scripts,
-                    total_pages,
-                    None
-                )
-
-            return (
-                None,
-                None,
-                f"Couldn't find any scripts "
-                f"matching '{original_query}'"
-            )
-
-        elif api == "rscripts":
-
-            not_paid = (
-                False
-                if mode.lower() == "paid"
-                else True
-            )
-
-            params = {
-                "q": str(query),
-                "page": int(page),
-                "notPaid": "true" if not_paid else "false"
-            }
-
-            if filters.get(
-                "noKeySystem"
-            ) is not None:
-
-                params["noKeySystem"] = "true" if bool(filters["noKeySystem"]) else "false"
-
-            if filters.get(
-                "mobileOnly"
-            ) is not None:
-
-                params["mobileOnly"] = "true" if bool(filters["mobileOnly"]) else "false"
-
-            if filters.get(
-                "verifiedOnly"
-            ) is not None:
-
-                params["verifiedOnly"] = "true" if bool(filters["verifiedOnly"]) else "false"
-
-            if filters.get(
-                "unpatched"
-            ) is not None:
-
-                params["unpatched"] = "true" if bool(filters["unpatched"]) else "false"
-
-            if filters.get(
-                "orderBy"
-            ):
-
-                params["orderBy"] = (
-                    filters["orderBy"]
-                )
-
-            if filters.get(
-                "sort"
-            ):
-
-                params["sort"] = (
-                    filters["sort"]
-                )
-
-            query_string = (
-                urllib.parse.urlencode(
-                    params
-                )
-            )
-
-            url = (
-                "https://rscripts.net/"
-                "api/v2/scripts?"
-                f"{query_string}"
-            )
-
-            r = requests.get(
-                url,
-                timeout=AUTO_SEARCH_TOTAL_TIMEOUT
-            )
-
-            r.raise_for_status()
-
-            data = r.json()
-
-            if "scripts" in data:
-
-                scripts = data["scripts"]
-
-                return (
-                    scripts,
-                    None,
-                    None
-                )
-
-            return (
-                None,
-                None,
-                f"Couldn't find any scripts "
-                f"matching '{original_query}'"
-            )
-
-    except requests.RequestException as e:
-
-        return (
-            None,
-            None,
-            f"Something went wrong: {e}"
-        )
-
-    except KeyError as ke:
-
-        return (
-            None,
-            None,
-            f"Unexpected response format: {ke}"
-        )
-
-
-# ============================================================
-# باقي نظام البحث الأساسي كما هو
-# ============================================================
-
-def fetch_scripts_from_api(
-    api,
-    endpoint,
-    page=1,
-    **params
-):
-
-    try:
-
-        if api == "scriptblox":
-
-            if page and page > 1:
-
-                params["page"] = page
-
-            query_string = (
-                urllib.parse.urlencode(
-                    params
-                )
-                if params
-                else ""
-            )
-
-            url = (
-                "https://scriptblox.com/"
-                f"api/script/{endpoint}"
-            )
-
-            if query_string:
-
-                url += (
-                    f"?{query_string}"
-                )
-
-        elif api == "rscripts":
-
-            if page and page > 1:
-
-                params["page"] = page
-
-            query_string = (
-                urllib.parse.urlencode(
-                    params
-                )
-                if params
-                else ""
-            )
-
-            url = (
-                "https://rscripts.net/"
-                f"api/v2/{endpoint}"
-            )
-
-            if query_string:
-
-                url += (
-                    f"?{query_string}"
-                )
-
-        r = requests.get(
-            url
-        )
-
-        r.raise_for_status()
-
-        data = r.json()
-
-        return (
-            data,
-            None
-        )
-
-    except requests.RequestException as e:
-
-        return (
-            None,
-            f"Something went wrong: {e}"
-        )
-
-    except Exception as e:
-
-        return (
-            None,
-            f"Unexpected response format: {e}"
-        )
-
-
-def fetch_trending(
-    api
-):
-
-    try:
-
-        if api == "scriptblox":
-
-            url = (
-                "https://scriptblox.com/"
-                "api/script/trending"
-            )
-
-            r = requests.get(
-                url
-            )
-
-            r.raise_for_status()
-
-            data = r.json()
-
-            if (
-                "result" in data
-                and "scripts" in data["result"]
-            ):
-
-                trending_scripts = (
-                    data["result"]["scripts"]
-                )
-
-                full_scripts = []
-
-                for script_meta in trending_scripts:
-
-                    slug = script_meta.get(
-                        "slug"
-                    )
-
-                    if slug:
-
-                        try:
-
-                            script_url = (
-                                "https://scriptblox.com/"
-                                f"api/script/{slug}"
-                            )
-
-                            script_r = requests.get(
-                                script_url
-                            )
-
-                            script_r.raise_for_status()
-
-                            script_data = (
-                                script_r.json()
-                            )
-
-                            if "script" in script_data:
-
-                                full_scripts.append(
-                                    script_data["script"]
-                                )
-
-                        except:
-
-                            continue
-
-                return (
-                    full_scripts,
-                    None
-                )
-
-            return (
-                None,
-                "Nothing trending right now"
-            )
-
-        elif api == "rscripts":
-
-            url = (
-                "https://rscripts.net/"
-                "api/v2/trending"
-            )
-
-            r = requests.get(
-                url
-            )
-
-            r.raise_for_status()
-
-            data = r.json()
-
-            if "success" in data:
-
-                scripts = []
-
-                for item in data["success"]:
-
-                    script_data = item.get(
-                        "script",
-                        {}
-                    )
-
-                    if script_data:
-
-                        script_data["views"] = (
-                            item.get(
-                                "views",
-                                0
-                            )
-                        )
-
-                        user_data = item.get(
-                            "user",
-                            {}
-                        )
-
-                        if user_data:
-
-                            script_data["user"] = (
-                                user_data
-                            )
-
-                        scripts.append(
-                            script_data
-                        )
-
-                return (
-                    scripts,
-                    None
-                )
-
-            return (
-                None,
-                "Nothing is trending right now"
-            )
-
-    except requests.RequestException as e:
-
-        return (
-            None,
-            f"bad: something went wrong: {e}"
-        )
-
-    except Exception as e:
-
-        return (
-            None,
-            f"bad response = format broke "
-            f"or something: {e}"
-        )
-
-
-def fetch_script_by_id(
-    api,
-    script_id
-):
-
-    try:
-
-        if api == "scriptblox":
-
-            url = (
-                "https://scriptblox.com/"
-                f"api/script/{script_id}"
-            )
-
-            r = requests.get(
-                url
-            )
-
-            r.raise_for_status()
-
-            data = r.json()
-
-            if "script" in data:
-
-                return (
-                    data["script"],
-                    None
-                )
-
-            return (
-                None,
-                f"Couldn't find script "
-                f"'{script_id}'"
-            )
-
-        elif api == "rscripts":
-
-            url = (
-                "https://rscripts.net/"
-                f"api/v2/script?id={script_id}"
-            )
-
-            r = requests.get(
-                url
-            )
-
-            r.raise_for_status()
-
-            data = r.json()
-
-            if (
-                "script" in data
-                and len(data["script"]) > 0
-            ):
-
-                return (
-                    data["script"][0],
-                    None
-                )
-
-            return (
-                None,
-                f"Couldn't find script "
-                f"'{script_id}'"
-            )
-
-    except requests.RequestException as e:
-
-        return (
-            None,
-            f"Something went wrong: {e}"
-        )
-
-    except Exception as e:
-
-        return (
-            None,
-            f"Unexpected response format: {e}"
-        )
-
-
-def fetch_executors():
-
-    try:
-
-        url = (
-            "https://scriptblox.com/"
-            "api/executor/list"
-        )
-
-        r = requests.get(
-            url
-        )
-
-        r.raise_for_status()
-
-        data = r.json()
-
-        return (
-            data,
-            None
-        )
-
-    except requests.RequestException as e:
-
-        return (
-            None,
-            f"bad = went wrong: {e}"
-        )
-
-    except Exception as e:
-
-        return (
-            None,
-            f"something went wrong: "
-            f"response format: {e}"
-        )
-
-
-def format_datetime(
-    dt_str
-):
-
-    try:
-
-        dt = datetime.strptime(
-            dt_str,
-            "%Y-%m-%dT%H:%M:%S.%fZ"
-        ).replace(
-            tzinfo=timezone.utc
-        )
-
-    except ValueError:
-
-        try:
-
-            dt = datetime.strptime(
-                dt_str,
-                "%Y-%m-%dT%H:%M:%SZ"
-            ).replace(
-                tzinfo=timezone.utc
-            )
-
-        except ValueError:
-
-            return "Unknown"
-
-    now = datetime.now(
-        timezone.utc
-    )
-
-    delta = relativedelta(
-        now,
-        dt
-    )
-
-    if delta.years > 0:
-
-        ago = (
-            f"{delta.years} years ago"
-        )
-
-    elif delta.months > 0:
-
-        ago = (
-            f"{delta.months} months ago"
-        )
-
-    elif delta.days > 0:
-
-        ago = (
-            f"{delta.days} days ago"
-        )
-
-    elif delta.hours > 0:
-
-        ago = (
-            f"{delta.hours} hours ago"
-        )
-
-    elif delta.minutes > 0:
-
-        ago = (
-            f"{delta.minutes} minutes ago"
-        )
-
-    else:
-
-        ago = "just now"
-
-    formatted = dt.strftime(
-        "%m/%d/%Y | %I:%M:%S %p"
-    )
-
-    return (
-        f"{ago} | {formatted}"
-    )
-
-
-def format_timestamps(
-    script
-):
-
-    created = format_datetime(
-        script.get(
-            "createdAt",
-            ""
-        )
-    )
-
-    updated = format_datetime(
-        script.get(
-            "updatedAt",
-            ""
-        )
-    )
-
-    return (
-        f"**Created At:** {created}\n"
-        f"**Updated At:** {updated}"
-    )
-
-
-def get_static_image_url(*candidates):
-    """يرجع أول صورة ثابتة صالحة، ويمنع GIF/Tenor/Giphy كصور نتائج."""
+def get_static_image_url(*candidates) -> Optional[str]:
+    """يرجع أول صورة صالحة (http/https)، ويستبعد GIF و Tenor و Giphy."""
     for candidate in candidates:
-        if not candidate or not isinstance(candidate, str):
+        if not isinstance(candidate, str):
             continue
         url = candidate.strip()
-        if not validators.url(url):
+        parts = urllib.parse.urlsplit(url)
+        if parts.scheme not in ("http", "https") or not parts.netloc:
             continue
-        lowered = url.lower()
-        parsed = urllib.parse.urlparse(lowered)
-        path = parsed.path or ""
-        host = parsed.netloc or ""
-        if path.endswith((".gif", ".gifv")):
-            continue
-        if "tenor.com" in host or "giphy.com" in host:
+        path = parts.path.lower()
+        host = parts.netloc.lower()
+        if path.endswith((".gif", ".gifv")) or "tenor.com" in host or "giphy.com" in host:
             continue
         return url
     return None
 
 
-async def _attach_roblox_thumbnail_if_missing(scripts):
-    """يحاول إضافة صورة اللعبة من Roblox فقط عند غياب الصورة الأصلية."""
-    candidates = [
-        script for script in (scripts or [])
-        if isinstance(script, dict) and not get_static_image_url(
-            script.get("image"),
-            (script.get("game") or {}).get("imageUrl") if isinstance(script.get("game"), dict) else None,
-            (script.get("game") or {}).get("image") if isinstance(script.get("game"), dict) else None,
-            (script.get("game") or {}).get("thumbnail") if isinstance(script.get("game"), dict) else None,
-        )
-    ]
+def _normalize_row(row: Dict[str, Any], source: str) -> Dict[str, Any]:
+    """يوحّد شكل النتيجة من أي مصدر. الحقول الأصلية تبقى كما هي."""
+    item = dict(row)
+    game = item.get("game") if isinstance(item.get("game"), dict) else {}
 
-    # لا نفتح متصفحًا؛ طلب HTTP خفيف فقط، وبحد أقصى 8 ألعاب مختلفة.
-    place_ids = []
-    seen_ids = set()
+    slug = clean_text(item.get("slug"))
+    script_id = clean_text(item.get("_id") or item.get("id") or item.get("scriptId"))
+    title = clean_text(item.get("title") or item.get("name")) or "بدون عنوان"
 
-    for script in candidates:
-        game = script.get("game", {})
-        if not isinstance(game, dict):
+    code = item.get("script")
+    code = code.strip() if isinstance(code, str) else ""
+
+    raw_candidate = item.get("rawScript") or item.get("rawScriptUrl") or item.get("rawUrl") or ""
+    raw_candidate = raw_candidate.strip() if isinstance(raw_candidate, str) else ""
+    if not code and raw_candidate and not raw_candidate.startswith(("http://", "https://")):
+        code, raw_candidate = raw_candidate, ""
+    if raw_candidate and not raw_candidate.startswith(("http://", "https://")):
+        raw_candidate = ""
+
+    if source == "scriptblox":
+        page_url = f"https://scriptblox.com/script/{urllib.parse.quote(slug)}" if slug else ""
+        raw_url = f"https://rawscripts.net/raw/{urllib.parse.quote(slug)}" if slug else raw_candidate
+    elif source == "rscripts":
+        page_url = f"https://rscripts.net/script/{urllib.parse.quote(slug)}" if slug else ""
+        raw_url = raw_candidate
+    else:
+        page_url = ""
+        for key in ("url", "scriptUrl", "pageUrl", "webUrl", "link"):
+            value = clean_text(item.get(key))
+            if value.startswith(("http://", "https://")):
+                page_url = value
+                break
+        raw_url = raw_candidate
+
+    item.update({
+        "title": truncate(title, 240),
+        "gameName": _game_name_of(item),
+        "views": to_int(item.get("views", item.get("viewCount"))),
+        "likes": to_int(item.get("likes", item.get("likeCount"))),
+        "_fime_api": source,
+        "_id": script_id,
+        "_slug": slug,
+        "_code": code,
+        "_raw_url": raw_url,
+        "_page_url": page_url,
+        "_place_id": to_int(game.get("gameId") or game.get("placeId") or item.get("placeId")),
+        "_image": get_static_image_url(
+            item.get("image"),
+            item.get("imageUrl"),
+            item.get("thumbnailUrl"),
+            game.get("imageUrl"),
+            game.get("thumbnailUrl"),
+            game.get("image"),
+        ),
+    })
+    return item
+
+
+def _game_name_of(row: Dict[str, Any]) -> str:
+    for field in ("gameName", "game_name", "gameTitle", "placeName", "experienceName"):
+        value = row.get(field)
+        if isinstance(value, str) and value.strip():
+            return value.strip()
+
+    game = row.get("game")
+    if isinstance(game, dict):
+        for field in ("name", "title", "displayName", "gameName"):
+            value = game.get(field)
+            if isinstance(value, str) and value.strip():
+                return value.strip()
+    elif isinstance(game, str) and game.strip():
+        return game.strip()
+
+    nested = row.get("experience") or row.get("place")
+    if isinstance(nested, dict):
+        for field in ("name", "title", "displayName"):
+            value = nested.get(field)
+            if isinstance(value, str) and value.strip():
+                return value.strip()
+    return ""
+
+
+# ============================================================
+# FILTERS / SORTING
+# ============================================================
+
+def apply_filters(rows: List[Dict[str, Any]], filters: Dict[str, Any], query: str = "") -> List[Dict[str, Any]]:
+    mode = filters.get("mode", "any")
+    checks = (
+        ("verified", _is_verified),
+        ("patched", _is_patched),
+        ("universal", _is_universal),
+        ("mobile_only", _is_mobile),
+    )
+
+    output = []
+    for row in rows:
+        if mode == "free" and _is_paid(row):
+            continue
+        if mode == "paid" and not _is_paid(row):
             continue
 
-        raw_id = (
-            game.get("gameId")
-            or game.get("placeId")
-            or script.get("placeId")
-        )
-        try:
-            place_id = int(str(raw_id))
-        except (TypeError, ValueError):
+        skip = False
+        for key, check in checks:
+            wanted = filters.get(key)
+            if wanted is not None and bool(check(row)) != bool(wanted):
+                skip = True
+                break
+        if skip:
             continue
 
-        if place_id and place_id not in seen_ids:
-            seen_ids.add(place_id)
-            place_ids.append((place_id, script))
+        wanted_key = filters.get("key_system")
+        if wanted_key is not None and script_needs_key(row) != bool(wanted_key):
+            continue
 
-        if len(place_ids) >= 8:
+        output.append(row)
+
+    sort_by = filters.get("sort_by", "relevance")
+    reverse = filters.get("sort_order", "desc") != "asc"
+    if sort_by == "views":
+        output.sort(key=lambda r: to_int(r.get("views")), reverse=reverse)
+    elif sort_by == "likes":
+        output.sort(key=lambda r: to_int(r.get("likes")), reverse=reverse)
+    elif sort_by == "date":
+        output.sort(key=timestamp_of, reverse=reverse)
+    elif query:
+        output.sort(key=lambda r: rank_score(r, query), reverse=True)
+    return output
+
+
+# ============================================================
+# HTTP CLIENT
+# ============================================================
+
+class HttpClient:
+    """عميل HTTP مشترك: جلسة واحدة، حد للتزامن، ومهلة لكل طلب."""
+
+    def __init__(self):
+        self._session: Optional[aiohttp.ClientSession] = None
+        self._sem: Optional[asyncio.Semaphore] = None
+
+    def _ensure(self) -> aiohttp.ClientSession:
+        if self._session is None or self._session.closed:
+            self._session = aiohttp.ClientSession(
+                headers={"User-Agent": USER_AGENT},
+                timeout=aiohttp.ClientTimeout(total=HTTP_TIMEOUT_TOTAL, connect=2.5),
+            )
+        if self._sem is None:
+            self._sem = asyncio.Semaphore(HTTP_CONCURRENCY)
+        return self._session
+
+    async def get_json(self, url: str, *, params: Optional[Dict[str, Any]] = None,
+                       headers: Optional[Dict[str, str]] = None) -> Tuple[Any, bool]:
+        """يرجع (البيانات, هل_فيه_خطأ_شبكة_أو_خادم)."""
+        session = self._ensure()
+        async with self._sem:
+            try:
+                async with session.get(url, params=params, headers=headers) as response:
+                    if response.status == 429 or response.status >= 500:
+                        return None, True
+                    if response.status != 200:
+                        return None, False
+                    return await response.json(content_type=None), False
+            except (asyncio.TimeoutError, aiohttp.ClientError):
+                return None, True
+            except Exception as error:
+                print(f"⚠️ HTTP JSON error ({url}): {error}")
+                return None, True
+
+    async def get_text(self, url: str) -> Tuple[str, bool]:
+        session = self._ensure()
+        async with self._sem:
+            try:
+                async with session.get(url, headers={"Accept": "text/html"}) as response:
+                    if response.status != 200:
+                        return "", response.status >= 500
+                    return await response.text(errors="ignore"), False
+            except (asyncio.TimeoutError, aiohttp.ClientError):
+                return "", True
+            except Exception as error:
+                print(f"⚠️ HTTP text error ({url}): {error}")
+                return "", True
+
+    async def close(self) -> None:
+        if self._session is not None and not self._session.closed:
+            await self._session.close()
+
+
+# ============================================================
+# SOURCE ADAPTERS
+# ============================================================
+
+async def _src_scriptblox(http: HttpClient, query: str, page: int):
+    data, error = await http.get_json(
+        "https://scriptblox.com/api/script/search",
+        params={
+            "q": query,
+            "page": page,
+            "max": AUTO_SEARCH_PAGE_SIZE,
+            "sortBy": "accuracy",
+            "order": "desc",
+            "strict": "false",
+        },
+    )
+    rows = [_normalize_row(item, "scriptblox") for item in rows_from(data, ("result", "scripts"))]
+    return rows, error
+
+
+async def _src_robloxscripts(http: HttpClient, query: str, page: int):
+    data, error = await http.get_json(
+        "https://robloxscripts.com/api/v1/scripts",
+        params={"q": query, "page": page, "limit": 50, "sort": "most-liked"},
+    )
+    rows = [_normalize_row(item, "robloxscripts") for item in rows_from(data, ("data",))]
+    return rows, error
+
+
+async def _src_rscripts(http: HttpClient, query: str, page: int):
+    if RSCRIPTS_API_KEY:
+        data, error = await http.get_json(
+            "https://api.rscripts.net/v1/search",
+            params={
+                "q": query,
+                "index": "scripts",
+                "page": page,
+                "limit": AUTO_SEARCH_PAGE_SIZE,
+                "htmlDescription": "false",
+                "includeScript": "false",
+            },
+            headers={"Authorization": f"Bearer {RSCRIPTS_API_KEY}"},
+        )
+        items = rows_from(data, ("data", "scripts"))
+    else:
+        # بدون مفتاح نستخدم الـ API العام، وإلا ما يرجع شيء.
+        data, error = await http.get_json(
+            "https://rscripts.net/api/v2/scripts",
+            params={"q": query, "page": page},
+        )
+        items = rows_from(data, ("scripts",))
+    return [_normalize_row(item, "rscripts") for item in items], error
+
+
+async def _src_html(http: HttpClient, source: str, query: str):
+    """مصدر HTML احتياطي: يلتقط روابط نفس الموقع فقط."""
+    url = HTML_SOURCES[source].format(query=urllib.parse.quote_plus(query))
+    html, error = await http.get_text(url)
+    if not html:
+        return [], error
+
+    link_re = re.compile(r'<a[^>]+href=["\']([^"\']+)["\'][^>]*>(.*?)</a>', re.I | re.S)
+    base_host = urllib.parse.urlsplit(url).netloc.lower()
+    rows, seen = [], set()
+    for href, raw_text in link_re.findall(html):
+        title = re.sub(r"\s+", " ", re.sub(r"<[^>]+>", " ", raw_text)).strip()
+        if len(title) < 4:
+            continue
+        absolute = urllib.parse.urljoin(url, href.strip())
+        parts = urllib.parse.urlsplit(absolute)
+        if parts.scheme not in ("http", "https") or parts.netloc.lower() != base_host:
+            continue
+        key = absolute.split("#", 1)[0]
+        if key in seen:
+            continue
+        seen.add(key)
+        rows.append(_normalize_row({"title": truncate(title, 180), "url": key}, source))
+        if len(rows) >= 40:
             break
+    return rows, False
 
-    if not place_ids:
+
+PAGED_SOURCES = {
+    "scriptblox": (_src_scriptblox, AUTO_SEARCH_PAGE_SIZE),
+    "robloxscripts": (_src_robloxscripts, 50),
+    "rscripts": (_src_rscripts, AUTO_SEARCH_PAGE_SIZE),
+}
+
+
+async def _fetch_pages(http: HttpClient, fetch, query: str, page_size: int, deadline: float):
+    """يسحب الصفحات بدفعات من صفحتين. يتوقف إذا الصفحة ما اكتملت أو انتهى الوقت."""
+    loop = asyncio.get_running_loop()
+    collected: List[Dict[str, Any]] = []
+    had_error = False
+    page = 1
+    while page <= AUTO_SEARCH_MAX_PAGES and loop.time() < deadline:
+        batch = list(range(page, min(page + 2, AUTO_SEARCH_MAX_PAGES + 1)))
+        results = await asyncio.gather(*(fetch(http, query, p) for p in batch), return_exceptions=True)
+
+        full = True
+        for result in results:
+            if isinstance(result, BaseException):
+                had_error = True
+                full = False
+                continue
+            rows, error = result
+            had_error = had_error or error
+            collected.extend(rows)
+            if len(rows) < page_size:
+                full = False
+        if not full:
+            break
+        page = batch[-1] + 1
+    return collected, had_error
+
+
+# ============================================================
+# COPY / DELIVERY
+# ============================================================
+
+async def resolve_copy_text(http: HttpClient, row: Dict[str, Any]) -> str:
+    """يرجع نص الكود الجاهز للنسخ (بدون أي تنسيق)."""
+    code = clean_text(row.get("_code"))
+
+    if not code and row.get("_fime_api") == "scriptblox" and row.get("_slug"):
+        data, _ = await http.get_json(
+            f"https://scriptblox.com/api/script/{urllib.parse.quote(row['_slug'])}"
+        )
+        script = data.get("script") if isinstance(data, dict) else None
+        if isinstance(script, dict):
+            code = clean_text(script.get("script"))
+            if code:
+                row["_code"] = code
+
+    if code:
+        return code
+
+    raw_url = clean_text(row.get("_raw_url"))
+    if raw_url:
+        return f'loadstring(game:HttpGet("{raw_url}"))()'
+    return ""
+
+
+async def send_copy_text(followup, text: str, title: str) -> None:
+    """يرسل النص خامًا بدون ``` . إذا كان طويلًا يرسله كملف .lua."""
+    if len(text) <= COPY_TEXT_LIMIT:
+        await followup.send(text, ephemeral=True, allowed_mentions=NO_MENTIONS)
         return
 
-    ids = ",".join(str(pid) for pid, _ in place_ids)
-    url = (
-        "https://thumbnails.roblox.com/v1/games/icons"
-        f"?placeIds={ids}&returnPolicy=PlaceHolder"
-        "&size=512x512&format=Png&isCircular=false"
+    safe_name = re.sub(r"[^\w\-]+", "_", clean_text(title)).strip("_")[:40] or "script"
+    file = discord.File(io.BytesIO(text.encode("utf-8")), filename=f"{safe_name}.lua")
+    await followup.send(
+        "📜 الكود طويل، أرفقته كملف.",
+        file=file,
+        ephemeral=True,
+        allowed_mentions=NO_MENTIONS,
     )
 
-    timeout = aiohttp.ClientTimeout(total=3, connect=1.5, sock_read=2.5)
 
-    try:
-        async with aiohttp.ClientSession(timeout=timeout) as session:
-            async with session.get(
-                url,
-                headers={"User-Agent": "Team-Fime-Search/5.0", "Accept": "application/json"},
-            ) as response:
-                if response.status != 200:
-                    return
-                data = await response.json(content_type=None)
+# ============================================================
+# EMBEDS
+# ============================================================
 
-        image_by_id = {}
-        for item in data.get("data", []) if isinstance(data, dict) else []:
-            try:
-                pid = int(item.get("targetId"))
-            except (TypeError, ValueError):
-                continue
-            image = item.get("imageUrl")
-            if image:
-                image_by_id[pid] = image
-
-        for pid, script in place_ids:
-            image = image_by_id.get(pid)
-            if image:
-                script["_fime_game_image"] = image
-
-    except Exception as exc:
-        print(f"⚠️ Roblox thumbnail lookup skipped: {exc}")
-
-
-def create_embed(
-    script,
-    page,
-    total_items,
-    api
-):
-
+def build_script_embed(row: Dict[str, Any], index: int, total: int) -> discord.Embed:
+    source = row.get("_fime_api", "")
     embed = discord.Embed(
-        color=0x206694
+        title=truncate(f"📜 {row.get('title') or 'بدون عنوان'}", 250),
+        color=SOURCE_COLORS.get(source, 0x206694),
     )
 
-    if api == "scriptblox":
-
-        embed.title = (
-            f"📜 "
-            f"{script.get('title', 'No Title')}"
-        )
-
-        game = script.get(
-            "game",
-            {}
-        )
-
-        game_name = game.get(
-            "name",
-            "لعبة غير معروفة"
-        )
-
-        game_id = game.get(
-            "gameId",
-            ""
-        )
-
-        if game_id:
-
-            game_link = (
-                f"https://www.roblox.com/"
-                f"games/{game_id}"
-            )
-
-        else:
-
-            game_link = (
-                "https://www.roblox.com"
-            )
-
-        owner = script.get("user") or script.get("owner") or {}
-        if not isinstance(owner, dict):
-            owner = {}
-        script_image = get_static_image_url(
-            script.get("image"),
-            game.get("imageUrl"),
-            game.get("image"),
-            game.get("thumbnail"),
-            owner.get("image"),
-            owner.get("avatar"),
-            owner.get("avatarUrl"),
-            script.get("_fime_game_image"),
-        )
-
-        views = script.get(
-            "views",
-            0
-        )
-
-        script_type = (
-            "مجاني"
-            if script.get(
-                "scriptType",
-                "free"
-            ).lower() == "free"
-            else "مدفوع"
-        )
-
-        verified_status = (
-            "✅ Verified"
-            if script.get(
-                "verified",
-                False
-            )
-            else "❌ Not Verified"
-        )
-
-        key_status = (
-            f"[Key Link]"
-            f"({script.get('keyLink', '')})"
-            if script.get(
-                "key",
-                False
-            )
-            else "✅ No Key"
-        )
-
-        patched_status = (
-            "❌ Patched"
-            if script.get(
-                "isPatched",
-                False
-            )
-            else "✅ Not Patched"
-        )
-
-        universal_status = (
-            "🌐 Universal"
-            if script.get(
-                "isUniversal",
-                False
-            )
-            else "Not Universal"
-        )
-
-        truncated_script = script.get(
-            "script",
-            "لا يوجد كود"
-        )
-
-        if len(
-            truncated_script
-        ) > 400:
-
-            truncated_script = (
-                truncated_script[:397]
-                + "..."
-            )
-
-        embed.add_field(
-            name="🎮 الماب",
-            value=(
-                f"[{game_name}]"
-                f"({game_link})"
-            ),
-            inline=True
-        )
-
-        embed.add_field(
-            name="التحقق",
-            value=verified_status,
-            inline=True
-        )
-
-        embed.add_field(
-            name="النوع",
-            value=script_type,
-            inline=True
-        )
-
-        embed.add_field(
-            name="عالمي",
-            value=universal_status,
-            inline=True
-        )
-
-        embed.add_field(
-            name="المشاهدات",
-            value=f"👁️ {views}",
-            inline=True
-        )
-
-        embed.add_field(
-            name="🔐 المفتاح",
-            value=key_status,
-            inline=True
-        )
-
-        embed.add_field(
-            name="الحالة",
-            value=patched_status,
-            inline=True
-        )
-
-        source_type = script.get(
-            "_fime_key_source"
-        )
-
-        if not source_type:
-            source_type = (
-                "بمفتاح"
-                if script.get("key", False)
-                else "بدون مفتاح"
-            )
-
-        if source_type:
-
-            embed.add_field(
-                name="🔐 البحث",
-                value=source_type,
-                inline=True
-            )
-
-        embed.add_field(
-            name="🔗 الروابط",
-            value=(
-                f"[الكود الخام]"
-                f"(https://rawscripts.net/raw/"
-                f"{script.get('slug','')}) - "
-                f"[صفحة السكربت]"
-                f"(https://scriptblox.com/script/"
-                f"{script.get('slug','')})"
-            ),
-            inline=False
-        )
-
-        embed.add_field(
-            name="📜 السكربت",
-            value=(
-                f"```\n"
-                f"{truncated_script}"
-                f"\n```"
-            ),
-            inline=False
-        )
-
-        embed.add_field(
-            name="🕒 الوقت",
-            value=format_timestamps(
-                script
-            ),
-            inline=False
-        )
-
-        if script_image:
-            embed.set_image(url=script_image)
-
-    elif api == "rscripts":
-
-        embed.title = (
-            f"[RS] "
-            f"{script.get('title', 'No Title')}"
-        )
-
-        views = script.get(
-            "views",
-            0
-        )
-
-        likes = script.get(
-            "likes",
-            0
-        )
-
-        dislikes = script.get(
-            "dislikes",
-            0
-        )
-
-        date_str = (
-            script.get("lastUpdated")
-            or script.get(
-                "createdAt",
-                ""
-            )
-        )
-
-        date = format_datetime(
-            date_str
-        )
-
-        mobile_ready = (
-            "📱 Mobile Ready"
-            if script.get(
-                "mobileReady",
-                False
-            )
-            else "🚫 Not Mobile Ready"
-        )
-
-        user = script.get(
-            "user",
-            {}
-        )
-
-        verified_status = (
-            "✅ Verified"
-            if user.get(
-                "verified",
-                False
-            )
-            else "❌ Not Verified"
-        )
-
-        paid_status = (
-            "💲 Paid"
-            if script.get(
-                "paid",
-                False
-            )
-            else "🆓 Free"
-        )
-
-        raw_script = script.get(
-            "rawScript",
-            ""
-        )
-
-        script_text = (
-            f"```\n"
-            f"loadstring(game:HttpGet(\""
-            f"{raw_script}\"))()"
-            f"\n```"
-            if raw_script
-            else "⚠️ No script content."
-        )
-
-        user_name = user.get(
-            "username",
-            "Unknown"
-        )
-
-        user_avatar_url = get_static_image_url(
-            user.get("image"),
-            user.get("avatar"),
-            user.get("avatarUrl"),
-        )
-
-        embed.add_field(
-            name="المشاهدات",
-            value=f"👁️ {views}",
-            inline=True
-        )
-
-        embed.add_field(
-            name="Likes",
-            value=f"👍 {likes}",
-            inline=True
-        )
-
-        embed.add_field(
-            name="Dislikes",
-            value=f"👎 {dislikes}",
-            inline=True
-        )
-
-        embed.add_field(
-            name="Mobile",
-            value=mobile_ready,
-            inline=True
-        )
-
-        embed.add_field(
-            name="التحقق",
-            value=verified_status,
-            inline=True
-        )
-
-        embed.add_field(
-            name="Cost",
-            value=paid_status,
-            inline=True
-        )
-
-        embed.add_field(
-            name="📜 السكربت",
-            value=script_text,
-            inline=False
-        )
-
-        embed.add_field(
-            name="🔗 الروابط",
-            value=(
-                f"[صفحة السكربت]"
-                f"(https://rscripts.net/script/"
-                f"{script.get('slug','')})"
-            ),
-            inline=False
-        )
-
-        embed.add_field(
-            name="Date",
-            value=date,
-            inline=True
-        )
-
-        if user_avatar_url:
-            embed.set_author(
-                name=user_name,
-                icon_url=user_avatar_url
-            )
-        else:
-            embed.set_author(name=user_name)
-
-        image_url = get_static_image_url(
-            script.get("image"),
-            script.get("_fime_game_image"),
-            user_avatar_url,
-        )
-
-        if image_url:
-            embed.set_image(url=image_url)
-
-    elif api not in ("scriptblox", "rscripts"):
-
-        title = str(script.get("title") or script.get("name") or "نتيجة بدون عنوان")
-        game_name = str(script.get("gameName") or _game_name_from_script(script) or "لعبة غير معروفة")
-        views = script.get("views", script.get("viewCount", 0)) or 0
-        likes = script.get("likes", script.get("likeCount", 0)) or 0
-        image_url = get_static_image_url(
-            script.get("image"),
-            script.get("imageUrl"),
-            script.get("thumbnailUrl"),
-            script.get("_fime_game_image"),
-        )
-        post_url = _script_view_url(script)
-        raw_url = _script_raw_url(script)
-
-        embed.title = f"📜 {title[:240]}"
-        embed.add_field(name="🎮 الماب", value=game_name[:1024], inline=False)
-        embed.add_field(name="👁️ المشاهدات", value=str(views), inline=True)
-        embed.add_field(name="👍 الإعجابات", value=str(likes), inline=True)
-        embed.add_field(name="🌐 المصدر", value=SEARCH_SOURCE_NAMES.get(api, "مصدر خارجي"), inline=True)
-        if post_url:
-            embed.add_field(name="🔗 الصفحة", value=f"[فتح النتيجة]({post_url})", inline=False)
-        if raw_url:
-            embed.add_field(name="📄 الكود الخام", value=f"[فتح الكود]({raw_url})", inline=False)
-        if image_url:
-            embed.set_image(url=image_url)
-
-    embed.set_footer(
-        text=(
-            f"Team Fime • {SEARCH_SOURCE_NAMES.get(api, 'مصدر البحث')} • "
-            f"النتيجة {page}/{total_items}"
-        )
+    page_url = row.get("_page_url")
+    if page_url:
+        embed.url = page_url
+
+    game = clean_text(row.get("gameName"), "لعبة غير معروفة")
+    place_id = to_int(row.get("_place_id"))
+    game_value = (
+        f"[{truncate(game, 80)}](https://www.roblox.com/games/{place_id})"
+        if place_id
+        else truncate(game, 80)
     )
+    embed.add_field(name="🎮 الماب", value=game_value, inline=False)
 
+    if source == "scriptblox":
+        embed.add_field(name="✅ التحقق", value="Verified" if _is_verified(row) else "غير موثق", inline=True)
+        embed.add_field(name="💲 النوع", value="مدفوع" if _is_paid(row) else "مجاني", inline=True)
+        embed.add_field(name="🌐 يونيفيرسال", value="نعم" if _is_universal(row) else "لا", inline=True)
+        embed.add_field(name="🩹 الحالة", value="❌ متضرر" if _is_patched(row) else "✅ يعمل", inline=True)
+    elif source == "rscripts":
+        embed.add_field(name="📱 الجوال", value="✅ يدعم" if _is_mobile(row) else "❌ لا يدعم", inline=True)
+        embed.add_field(name="✅ التحقق", value="Verified" if _is_verified(row) else "غير موثق", inline=True)
+        embed.add_field(name="💲 النوع", value="مدفوع" if _is_paid(row) else "مجاني", inline=True)
+
+    embed.add_field(name="👁️ المشاهدات", value=f"{to_int(row.get('views')):,}", inline=True)
+    embed.add_field(name="👍 الإعجابات", value=f"{to_int(row.get('likes')):,}", inline=True)
+
+    key_text = "🔑 يحتاج مفتاح" if script_needs_key(row) else "🔓 بدون مفتاح"
+    key_link = clean_text(row.get("keyLink"))
+    if key_link.startswith(("http://", "https://")) and script_needs_key(row):
+        key_text = f"[🔑 يحتاج مفتاح]({key_link})"
+    embed.add_field(name="🔐 الوصول", value=key_text, inline=True)
+
+    links = []
+    if page_url:
+        links.append(f"[فتح الصفحة]({page_url})")
+    if row.get("_raw_url"):
+        links.append(f"[الكود الخام]({row['_raw_url']})")
+    embed.add_field(name="🔗 الروابط", value=" • ".join(links) or "—", inline=False)
+
+    updated = row.get("updatedAt") or row.get("lastUpdated") or row.get("createdAt")
+    if updated:
+        embed.add_field(name="🕒 آخر تحديث", value=format_relative_ar(updated), inline=True)
+
+    code = clean_text(row.get("_code"))
+    if code:
+        embed.add_field(name="📜 معاينة الكود", value=f"```\n{truncate(code, 380)}\n```", inline=False)
+
+    user = row.get("user") if isinstance(row.get("user"), dict) else {}
+    creator = clean_text(user.get("username"))
+    if creator:
+        embed.set_author(name=truncate(f"بواسطة {creator}", 250))
+
+    if row.get("_image"):
+        embed.set_image(url=row["_image"])
+
+    embed.set_footer(text=f"{SOURCE_NAMES.get(source, 'مصدر خارجي')} • {index}/{total} • Team Fime")
     return embed
 
 
-def _script_source_label(script):
-    return SEARCH_SOURCE_NAMES.get(
-        str(script.get("_fime_api") or ""),
-        "مصدر خارجي",
-    )
-
-
-def _script_view_url(script):
-    source = str(script.get("_fime_api") or "")
-    slug = str(
-        script.get("slug")
-        or script.get("_id")
-        or script.get("id")
-        or ""
-    ).strip()
-
-    if source == "scriptblox" and slug:
-        return f"https://scriptblox.com/script/{urllib.parse.quote(slug)}"
-    if source == "rscripts" and slug:
-        return f"https://rscripts.net/script/{urllib.parse.quote(slug)}"
-
-    for key in ("url", "scriptUrl", "webUrl", "pageUrl", "link"):
-        value = str(script.get(key) or "").strip()
-        if value.startswith(("http://", "https://")):
-            return value
-    return ""
-
-
-def _script_raw_url(script):
-    source = str(script.get("_fime_api") or "")
-    slug = str(
-        script.get("slug")
-        or script.get("_id")
-        or script.get("id")
-        or ""
-    ).strip()
-
-    if source == "scriptblox" and slug:
-        return f"https://rawscripts.net/raw/{urllib.parse.quote(slug)}"
-
-    for key in ("rawScriptUrl", "rawUrl", "raw_url"):
-        value = str(script.get(key) or "").strip()
-        if value.startswith(("http://", "https://")):
-            return value
-    return ""
-
-
-async def display_scripts_dynamic(
-    interaction,
-    message,
-    query,
-    mode,
-    api,
-    **filters
-):
-
-    current_page = 1
-
-    while True:
-
-        scripts, total_pages, error = (
-            fetch_scripts(
-                api,
-                query,
-                mode,
-                current_page,
-                **filters
-            )
-        )
-
-        if error:
-
-            await interaction.followup.send(
-                error
-            )
-
-            break
-
-        if not scripts:
-
-            await interaction.followup.send(
-                "No scripts found."
-            )
-
-            break
-
-        script = scripts[0]
-
-        display_total = (
-            total_pages
-            if total_pages is not None
-            else "Unknown"
-        )
-
-        embed = create_embed(
-            script,
-            current_page,
-            display_total,
-            api
-        )
-
-        view = discord.ui.View(
-            timeout=60
-        )
-
-        if total_pages is None:
-
-            if current_page > 1:
-
-                view.add_item(
-                    discord.ui.Button(
-                        label="◀️",
-                        style=discord.ButtonStyle.primary,
-                        custom_id="previous",
-                        row=0
-                    )
-                )
-
-            view.add_item(
-                discord.ui.Button(
-                    label=(
-                        f"Page "
-                        f"{current_page}/?"
-                    ),
-                    style=discord.ButtonStyle.secondary,
-                    disabled=True,
-                    row=0
-                )
-            )
-
-            view.add_item(
-                discord.ui.Button(
-                    label="▶️",
-                    style=discord.ButtonStyle.primary,
-                    custom_id="next",
-                    row=0
-                )
-            )
-
-        else:
-
-            if current_page > 1:
-
-                view.add_item(
-                    discord.ui.Button(
-                        label="⏪",
-                        style=discord.ButtonStyle.primary,
-                        custom_id="first",
-                        row=0
-                    )
-                )
-
-                view.add_item(
-                    discord.ui.Button(
-                        label="◀️",
-                        style=discord.ButtonStyle.primary,
-                        custom_id="previous",
-                        row=0
-                    )
-                )
-
-            view.add_item(
-                discord.ui.Button(
-                    label=(
-                        f"Page "
-                        f"{current_page}/"
-                        f"{display_total}"
-                    ),
-                    style=discord.ButtonStyle.secondary,
-                    disabled=True,
-                    row=0
-                )
-            )
-
-            if current_page < total_pages:
-
-                view.add_item(
-                    discord.ui.Button(
-                        label="▶️",
-                        style=discord.ButtonStyle.primary,
-                        custom_id="next",
-                        row=0
-                    )
-                )
-
-                view.add_item(
-                    discord.ui.Button(
-                        label="⏩",
-                        style=discord.ButtonStyle.primary,
-                        custom_id="last",
-                        row=0
-                    )
-                )
-
-        if api == "scriptblox":
-
-            post_url = (
-                f"https://scriptblox.com/script/"
-                f"{script.get('slug','')}"
-            )
-
-            raw_url = (
-                f"https://rawscripts.net/raw/"
-                f"{script.get('slug','')}"
-            )
-
-            download_url = (
-                f"https://scriptblox.com/download/"
-                f"{script.get('_id','')}"
-            )
-
-        else:
-
-            post_url = (
-                f"https://rscripts.net/script/"
-                f"{script.get('slug','')}"
-            )
-
-            raw_url = script.get(
-                "rawScript",
-                ""
-            )
-
-            download_url = raw_url
-
-        view.add_item(
-            discord.ui.Button(
-                label="فتح الصفحة",
-                url=post_url,
-                style=discord.ButtonStyle.link,
-                row=1
-            )
-        )
-
-        view.add_item(
-            discord.ui.Button(
-                label="الكود الخام",
-                url=raw_url,
-                style=discord.ButtonStyle.link,
-                row=1
-            )
-        )
-
-        view.add_item(
-            discord.ui.Button(
-                label="تحميل",
-                url=download_url,
-                style=discord.ButtonStyle.link,
-                row=1
-            )
-        )
-
-        copy_button = discord.ui.Button(
-            label="نسخ",
-            style=discord.ButtonStyle.primary,
-            row=1
-        )
-
-        async def copy_callback(
-            btn_interaction
-        ):
-
-            if api == "scriptblox":
-
-                content = script.get(
-                    "script",
-                    ""
-                )
-
-            else:
-
-                raw_url_local = script.get(
-                    "rawScript",
-                    ""
-                )
-
-                content = (
-                    f'loadstring(game:HttpGet('
-                    f'"{raw_url_local}"))()'
-                )
-
-            await btn_interaction.response.send_message(
-                f"```\n"
-                f"{content}"
-                f"\n```",
-                ephemeral=True
-            )
-
-        copy_button.callback = (
-            copy_callback
-        )
-
-        view.add_item(
-            copy_button
-        )
-
-        await message.edit(
-            embed=embed,
-            view=view
-        )
-
-        def check(
-            i: discord.Interaction
-        ):
-
-            return (
-                i.user == interaction.user
-                and i.message.id == message.id
-            )
-
-        try:
-
-            i: discord.Interaction = (
-                await bot.wait_for(
-                    "interaction",
-                    check=check,
-                    timeout=30.0
-                )
-            )
-
-            cid = i.data.get(
-                "custom_id"
-            )
-
-            if (
-                cid == "previous"
-                and current_page > 1
-            ):
-
-                current_page -= 1
-
-            elif (
-                cid == "next"
-                and (
-                    total_pages is None
-                    or current_page < total_pages
-                )
-            ):
-
-                current_page += 1
-
-            elif (
-                cid == "last"
-                and total_pages is not None
-            ):
-
-                current_page = total_pages
-
-            elif cid == "first":
-
-                current_page = 1
-
-            await i.response.defer()
-
-        except asyncio.TimeoutError:
-
-            await message.edit(
-                content="Interaction timed out.",
-                view=None
-            )
-
-            break
-
-
-async def display_scripts_local(
-    interaction,
-    message,
-    scripts,
-    api
-):
-
-    if not scripts:
-
-        await interaction.followup.send(
-            "No scripts found."
-        )
-
-        return
-
-    scripts_per_page = 5
-    page = 0
-
-    total_pages = (
-        (len(scripts) - 1)
-        // scripts_per_page
-        + 1
-    )
-
-    def create_multi_script_embed(
-        page_num
-    ):
-
-        embed = discord.Embed(
-            title=(
-                f"🔎 Team Fime Multi-Search • {SEARCH_SOURCE_NAMES.get(api, 'Scripts')}"
-            ),
-            description=(
-                f"Showing {len(scripts)} "
-                f"script"
-                f"{'s' if len(scripts) != 1 else ''}"
-            ),
-            color=0x206694
-        )
-
-        start = (
-            page_num
-            * scripts_per_page
-        )
-
-        end = min(
-            start + scripts_per_page,
-            len(scripts)
-        )
-
-        for idx, script in enumerate(
-            scripts[start:end],
-            start=start + 1
-        ):
-
-            if api == "scriptblox":
-
-                title = script.get(
-                    "title",
-                    "بدون عنوان"
-                )
-
-                game = script.get(
-                    "game",
-                    {}
-                ).get(
-                    "name",
-                    "لعبة غير معروفة"
-                )
-
-                verified = (
-                    "✅"
-                    if script.get(
-                        "verified",
-                        False
-                    )
-                    else "❌"
-                )
-
-                patched = (
-                    "❌"
-                    if script.get(
-                        "isPatched",
-                        False
-                    )
-                    else "✅"
-                )
-
-                views = script.get(
-                    "views",
-                    0
-                )
-
-                slug = script.get(
-                    "slug",
-                    ""
-                )
-
-                value = (
-                    f"**Game:** {game}\n"
-                    f"**Verified:** "
-                    f"{verified} | "
-                    f"**Patched:** "
-                    f"{patched}\n"
-                    f"**Views:** 👁️ {views}\n"
-                    f"[View]"
-                    f"(https://scriptblox.com/"
-                    f"script/{slug}) | "
-                    f"[Raw]"
-                    f"(https://rawscripts.net/"
-                    f"raw/{slug})"
-                )
-
-                embed.add_field(
-                    name=f"{idx}. {title}",
-                    value=value,
-                    inline=False
-                )
-
-            else:
-
-                title = script.get(
-                    "title",
-                    "بدون عنوان"
-                )
-
-                views = script.get(
-                    "views",
-                    0
-                )
-
-                likes = script.get(
-                    "likes",
-                    0
-                )
-
-                verified = (
-                    "✅"
-                    if script.get(
-                        "user",
-                        {}
-                    ).get(
-                        "verified",
-                        False
-                    )
-                    else "❌"
-                )
-
-                slug = script.get(
-                    "slug",
-                    ""
-                )
-
-                value = (
-                    f"**Views:** 👁️ {views} | "
-                    f"**Likes:** 👍 {likes}\n"
-                    f"**Verified:** "
-                    f"{verified}\n"
-                    f"[View]"
-                    f"(https://rscripts.net/"
-                    f"script/{slug})"
-                )
-
-                embed.add_field(
-                    name=f"{idx}. {title}",
-                    value=value,
-                    inline=False
-                )
-
-        embed.set_footer(
-            text=(
-                f"Made by AdvanceFalling Team | "
-                f"Page {page_num + 1}/"
-                f"{total_pages}"
-            )
-        )
-
-        return embed
-
-    while True:
-
-        embed = create_multi_script_embed(
-            page
-        )
-
-        view = discord.ui.View(
-            timeout=60
-        )
-
-        if total_pages > 1:
-
-            if page > 0:
-
-                view.add_item(
-                    discord.ui.Button(
-                        label="⏪",
-                        style=discord.ButtonStyle.primary,
-                        custom_id="first",
-                        row=0
-                    )
-                )
-
-                view.add_item(
-                    discord.ui.Button(
-                        label="◀️",
-                        style=discord.ButtonStyle.primary,
-                        custom_id="previous",
-                        row=0
-                    )
-                )
-
-            view.add_item(
-                discord.ui.Button(
-                    label=(
-                        f"Page "
-                        f"{page + 1}/"
-                        f"{total_pages}"
-                    ),
-                    style=discord.ButtonStyle.secondary,
-                    disabled=True,
-                    row=0
-                )
-            )
-
-            if page < total_pages - 1:
-
-                view.add_item(
-                    discord.ui.Button(
-                        label="▶️",
-                        style=discord.ButtonStyle.primary,
-                        custom_id="next",
-                        row=0
-                    )
-                )
-
-                view.add_item(
-                    discord.ui.Button(
-                        label="⏩",
-                        style=discord.ButtonStyle.primary,
-                        custom_id="last",
-                        row=0
-                    )
-                )
-
-        await message.edit(
-            embed=embed,
-            view=view
-        )
-
-        def check(i):
-
-            return (
-                i.user == interaction.user
-                and i.message.id == message.id
-            )
-
-        try:
-
-            i = await bot.wait_for(
-                "interaction",
-                check=check,
-                timeout=30.0
-            )
-
-            cid = i.data.get(
-                "custom_id"
-            )
-
-            if (
-                cid == "previous"
-                and page > 0
-            ):
-
-                page -= 1
-
-            elif (
-                cid == "next"
-                and page < total_pages - 1
-            ):
-
-                page += 1
-
-            elif cid == "last":
-
-                page = (
-                    total_pages - 1
-                )
-
-            elif cid == "first":
-
-                page = 0
-
-            await i.response.defer()
-
-        except asyncio.TimeoutError:
-
-            await message.edit(
-                content="Interaction timed out.",
-                view=None
-            )
-
-            break
-
-
-async def send_help(
-    destination
-):
-
-    embed = discord.Embed(
-        title="🔍 Script Searcher Bot",
-        description=(
-            "Search and browse scripts from "
-            "ScriptBlox and RScripts"
-        ),
-        color=0x3498db
-    )
-
-    search_commands = (
-        "**`/search <query>`** - "
-        "Search scripts across both APIs\n"
-        "├ `mode` - Free or paid scripts\n"
-        "├ `verified` - Only verified scripts\n"
-        "├ `patched` - Filter by patch status\n"
-        "├ `key_system` - Filter key requirements\n"
-        "├ `universal` - Universal scripts only\n"
-        "├ `mobile_only` - Mobile compatible\n"
-        "├ `sort_by` - Sort by views, likes, date\n"
-        "└ `sort_order` - Ascending or descending\n\n"
-        "**`/fetch`** - "
-        "Browse ScriptBlox scripts\n"
-        "├ All search filters plus:\n"
-        "├ `owner` - Filter by creator\n"
-        "├ `place_id` - Specific game ID\n"
-        "└ `max_results` - Limit results (1-20)\n"
-    )
-
-    embed.add_field(
-        name="Search & Browse",
-        value=search_commands,
-        inline=False
-    )
-
-    rscripts_commands = (
-        "**`/rscripts_fetch`** - "
-        "Browse RScripts library\n"
-        "├ `verified_only` - Verified scripts\n"
-        "├ `no_key_system` - "
-        "No keys required\n"
-        "├ `mobile_only` - "
-        "Mobile ready\n"
-        "├ `unpatched` - "
-        "Unpatched scripts\n"
-        "└ `order_by` - Sort options\n\n"
-        "**`/rscripts_by_user <username>`** - "
-        "Creator's scripts\n"
-    )
-
-    embed.add_field(
-        name="RScripts Commands",
-        value=rscripts_commands,
-        inline=False
-    )
-
-    other_commands = (
-        "**`/trending`** - Hot scripts right now\n"
-        "**`/script <id>`** - Get specific script\n"
-        "**`/executors`** - List all executors\n"
-        "**`!search <query>`** - Legacy search\n"
-    )
-
-    embed.add_field(
-        name="Other Commands",
-        value=other_commands,
-        inline=False
-    )
-
-    examples = (
-        "• `/search arsenal verified:True`\n"
-        "• `/rscripts_fetch no_key_system:True`\n"
-        "• `/rscripts_by_user pcallskeleton`\n"
-        "• `/trending api:scriptblox`\n"
-    )
-
-    embed.add_field(
-        name="💡 Examples",
-        value=examples,
-        inline=False
-    )
-
-    embed.set_thumbnail(
-        url=(
-            "https://media1.tenor.com/m/"
-            "j9Jhn5M1Xw0AAAAd/neuro-sama-ai.gif"
-        )
-    )
-
-    embed.set_footer(
-        text=(
-            "Made by AdvanceFalling Team | v3.0"
-        )
-    )
-
-    if isinstance(
-        destination,
-        discord.Interaction
-    ):
-
-        await destination.response.send_message(
-            embed=embed,
-            ephemeral=True
-        )
-
-    else:
-
-        await destination.send(
-            embed=embed
-        )
-
-
-@bot.command(
-    name='bothelp'
-)
-async def prefix_help(
-    ctx
-):
-
-    await send_help(
-        ctx
-    )
-
-
-@bot.tree.command(
-    name="bothelp",
-    description="Display help information"
-)
-async def slash_help(
-    interaction: discord.Interaction
-):
-
-    await send_help(
-        interaction
-    )
-
-
-@bot.command(
-    name='search'
-)
-async def prefix_search(
-    ctx,
-    query: str = None,
-    mode: str = 'free'
-):
-
-    if query:
-
-        await send_api_selection(
-            ctx,
-            query,
-            mode
-        )
-
-    else:
-
-        await send_help(
-            ctx
-        )
-
-
 # ============================================================
-# ARABIC SEARCH ROOM COMMANDS
+# VIEWS
 # ============================================================
 
-@bot.command(
-    name="تحديد_روم"
-)
-@commands.has_permissions(
-    manage_guild=True
-)
-async def set_search_room_arabic(
-    ctx
-):
+class _BaseView(discord.ui.View):
+    """أساس مشترك: إضافة أزرار، وتحقق أن صاحب الأمر فقط يتصفح، وإزالة الواجهة عند الانتهاء."""
 
-    search_rooms[
-        str(ctx.guild.id)
-    ] = str(
-        ctx.channel.id
-    )
+    def __init__(self, requester_id: int, timeout: float):
+        super().__init__(timeout=timeout)
+        self.requester_id = requester_id
+        self.message = None
 
-    save_search_rooms(
-        search_rooms
-    )
-
-    await ctx.send(
-        "✅ تم تحديد هذا الروم كروم البحث التلقائي.\n"
-        "من الآن أي عضو يكتب اسم ماب هنا، "
-        "البوت يبحث عنه تلقائيًا."
-    )
-
-
-@bot.command(
-    name="روم_البحث"
-)
-async def show_search_room_arabic(
-    ctx
-):
-
-    channel_id = search_rooms.get(
-        str(ctx.guild.id)
-    )
-
-    if not channel_id:
-
-        await ctx.send(
-            "❌ ما تم تحديد روم للبحث التلقائي "
-            "في هذا السيرفر."
+    def _add_button(self, label, callback, *, row: int, disabled: bool = False,
+                    style=None, emoji=None) -> None:
+        button = discord.ui.Button(
+            label=label,
+            emoji=emoji,
+            style=style or discord.ButtonStyle.secondary,
+            row=row,
+            disabled=disabled,
         )
+        button.callback = callback
+        self.add_item(button)
 
-        return
-
-    channel = ctx.guild.get_channel(
-        int(channel_id)
-    )
-
-    if not channel:
-
-        await ctx.send(
-            "⚠️ روم البحث المحفوظ لم يعد موجودًا."
-        )
-
-        return
-
-    await ctx.send(
-        f"🔎 روم البحث التلقائي الحالي: "
-        f"{channel.mention}"
-    )
-
-
-@bot.command(
-    name="الغاء_روم_البحث"
-)
-@commands.has_permissions(
-    manage_guild=True
-)
-async def remove_search_room_arabic(
-    ctx
-):
-
-    guild_id = str(
-        ctx.guild.id
-    )
-
-    if guild_id in search_rooms:
-
-        del search_rooms[
-            guild_id
-        ]
-
-        save_search_rooms(
-            search_rooms
-        )
-
-        await ctx.send(
-            "✅ تم إلغاء روم البحث التلقائي."
-        )
-
-    else:
-
-        await ctx.send(
-            "ℹ️ ما فيه روم بحث محدد أصلًا."
-        )
-
-
-# ============================================================
-# SLASH SEARCH ROOM COMMAND
-# ============================================================
-
-@bot.tree.command(
-    name="setscriptroom",
-    description="تحديد روم البحث التلقائي"
-)
-@app_commands.describe(
-    channel="الروم الذي سيتم فيه البحث التلقائي"
-)
-@app_commands.checks.has_permissions(
-    manage_guild=True
-)
-async def slash_set_search_room(
-    interaction: discord.Interaction,
-    channel: discord.TextChannel
-):
-
-    guild_id = str(
-        interaction.guild.id
-    )
-
-    search_rooms[
-        guild_id
-    ] = str(
-        channel.id
-    )
-
-    save_search_rooms(
-        search_rooms
-    )
-
-    await interaction.response.send_message(
-        f"✅ تم تحديد {channel.mention} كروم البحث التلقائي.\n"
-        "🔎 العضو يكتب اسم الماب (عربي أو إنجليزي) والبوت يبحث له تلقائيًا فورًا."
-    )
-
-
-@bot.tree.command(
-    name="searchroom",
-    description="عرض روم البحث التلقائي"
-)
-async def slash_show_search_room(
-    interaction: discord.Interaction
-):
-
-    channel_id = search_rooms.get(
-        str(interaction.guild.id)
-    )
-
-    if not channel_id:
-
+    async def _check_owner(self, interaction: discord.Interaction) -> bool:
+        if interaction.user.id == self.requester_id:
+            return True
         await interaction.response.send_message(
-            "❌ ما تم تحديد روم للبحث التلقائي."
+            "🔒 هذي النتائج لصاحب البحث فقط. ابحث بنفسك عشان تتصفح.",
+            ephemeral=True,
         )
+        return False
 
-        return
-
-    channel = interaction.guild.get_channel(
-        int(channel_id)
-    )
-
-    if not channel:
-
-        await interaction.response.send_message(
-            "⚠️ روم البحث المحفوظ لم يعد موجودًا."
-        )
-
-        return
-
-    await interaction.response.send_message(
-        f"🔎 روم البحث التلقائي الحالي: "
-        f"{channel.mention}"
-    )
+    async def on_timeout(self):
+        self.clear_items()
+        if self.message is not None:
+            try:
+                await self.message.edit(view=None)
+            except Exception:
+                pass
 
 
-# ============================================================
-# SEARCH RESULT HELP ROOMS — OWNER CONFIG
-# ============================================================
+class ScriptBrowserView(_BaseView):
+    """تصفح النتائج: نتيجة في كل صفحة، فلتر الوصول، زر نسخ، وروابط."""
 
-@bot.tree.command(
-    name="addsearchhelproom",
-    description="إضافة روم يظهر للعضو إذا لم يجد نتيجة"
-)
-@app_commands.describe(channel="الروم الذي تريد إضافته للقائمة")
-@app_commands.checks.has_permissions(manage_guild=True)
-async def slash_add_search_help_room(
-    interaction: discord.Interaction,
-    channel: discord.TextChannel,
-):
-    guild_key = str(interaction.guild.id)
-    rooms = get_configured_help_channel_ids(interaction.guild.id)
-    if str(channel.id) not in rooms:
-        rooms.append(str(channel.id))
-    search_help_rooms[guild_key] = rooms[:25]
-    save_search_help_rooms(search_help_rooms)
-    await interaction.response.send_message(
-        f"✅ تمت إضافة {channel.mention} لقائمة رومات المساعدة.",
-        ephemeral=True,
-    )
-
-
-@bot.tree.command(
-    name="removesearchhelproom",
-    description="إزالة روم من قائمة رومات المساعدة"
-)
-@app_commands.describe(channel="الروم الذي تريد إزالته")
-@app_commands.checks.has_permissions(manage_guild=True)
-async def slash_remove_search_help_room(
-    interaction: discord.Interaction,
-    channel: discord.TextChannel,
-):
-    guild_key = str(interaction.guild.id)
-    rooms = [
-        item for item in get_configured_help_channel_ids(interaction.guild.id)
-        if str(item) != str(channel.id)
-    ]
-    search_help_rooms[guild_key] = rooms
-    save_search_help_rooms(search_help_rooms)
-    await interaction.response.send_message(
-        f"🗑️ تمت إزالة {channel.mention} من القائمة.",
-        ephemeral=True,
-    )
-
-
-@bot.tree.command(
-    name="searchhelprooms",
-    description="عرض رومات المساعدة المحددة عند عدم وجود نتيجة"
-)
-async def slash_show_search_help_rooms(interaction: discord.Interaction):
-    rooms = []
-    for channel_id in get_configured_help_channel_ids(interaction.guild.id):
-        channel = interaction.guild.get_channel(int(channel_id))
-        if channel:
-            rooms.append(channel.mention)
-    await interaction.response.send_message(
-        "📚 **رومات المساعدة:**\n" + (", ".join(rooms) if rooms else "لا توجد رومات محددة."),
-        ephemeral=True,
-    )
-
-
-@bot.command(name="اضافة_روم_مساعدة")
-@commands.has_permissions(manage_guild=True)
-async def add_search_help_room_prefix(ctx, channel: discord.TextChannel = None):
-    channel = channel or ctx.channel
-    guild_key = str(ctx.guild.id)
-    rooms = get_configured_help_channel_ids(ctx.guild.id)
-    if str(channel.id) not in rooms:
-        rooms.append(str(channel.id))
-    search_help_rooms[guild_key] = rooms[:25]
-    save_search_help_rooms(search_help_rooms)
-    await ctx.send(f"✅ تمت إضافة {channel.mention} لقائمة رومات المساعدة.")
-
-
-@bot.command(name="حذف_روم_مساعدة")
-@commands.has_permissions(manage_guild=True)
-async def remove_search_help_room_prefix(ctx, channel: discord.TextChannel = None):
-    channel = channel or ctx.channel
-    guild_key = str(ctx.guild.id)
-    search_help_rooms[guild_key] = [
-        item for item in get_configured_help_channel_ids(ctx.guild.id)
-        if str(item) != str(channel.id)
-    ]
-    save_search_help_rooms(search_help_rooms)
-    await ctx.send(f"🗑️ تمت إزالة {channel.mention} من القائمة.")
-
-
-# ============================================================
-# API SELECT
-# ============================================================
-
-class APISelect(
-    discord.ui.Select
-):
-
-    def __init__(
-        self,
-        query,
-        mode,
-        filters=None
-    ):
-
+    def __init__(self, http: HttpClient, requester_id: int, rows: List[Dict[str, Any]],
+                 query: str, elapsed: Optional[float] = None):
+        super().__init__(requester_id, timeout=300)
+        self.http = http
         self.query = query
-        self.mode = mode
-        self.filters = filters or {}
+        self.rows = list(rows)
+        self.elapsed = elapsed
+        self.access = "all"
+        self.index = 0
+        self._rebuild()
 
-        options = [
+    # ---- state ----
 
-            discord.SelectOption(
-                label="مصدر ScriptBlox",
-                value="scriptblox",
-                description=(
-                    "Search scripts from "
-                    "ScriptBlox API"
-                )
-            ),
+    def visible_rows(self) -> List[Dict[str, Any]]:
+        if self.access == "no_key":
+            return [row for row in self.rows if not script_needs_key(row)]
+        if self.access == "with_key":
+            return [row for row in self.rows if script_needs_key(row)]
+        return self.rows
 
-            discord.SelectOption(
-                label="مصدر RScripts",
-                value="rscripts",
-                description=(
-                    "Search scripts from "
-                    "RScripts API"
-                )
-            ),
-        ]
+    def current(self) -> Optional[Dict[str, Any]]:
+        visible = self.visible_rows()
+        if not visible:
+            return None
+        return visible[min(max(self.index, 0), len(visible) - 1)]
 
-        super().__init__(
-            placeholder=(
-                "Choose the API to search scripts..."
-            ),
+    def header(self) -> str:
+        visible = self.visible_rows()
+        text = f"✅ **{len(self.rows)} نتيجة** لـ **{truncate(self.query, 60)}**"
+        if len(visible) != len(self.rows):
+            text += f" • المعروض: {len(visible)}"
+        if self.elapsed is not None:
+            text += f" • ⚡ {self.elapsed:.1f}s"
+        return text + "\nتصفح بالأسهم، وانسخ الكود من زر **نسخ**."
+
+    def build_embed(self) -> discord.Embed:
+        row = self.current()
+        if row is None:
+            return discord.Embed(
+                title="لا توجد نتائج بهذا الفلتر",
+                description="جرّب فلترًا آخر.",
+                color=0x206694,
+            )
+        return build_script_embed(row, self.index + 1, len(self.visible_rows()))
+
+    def _rebuild(self) -> None:
+        visible = self.visible_rows()
+        if visible:
+            self.index = min(max(self.index, 0), len(visible) - 1)
+        else:
+            self.index = 0
+        row = self.current()
+
+        self.clear_items()
+
+        select = discord.ui.Select(
+            placeholder="فلترة حسب الوصول",
             min_values=1,
             max_values=1,
-            options=options
+            options=[
+                discord.SelectOption(label=label, value=value, emoji=emoji, default=(value == self.access))
+                for value, label, emoji in ACCESS_OPTIONS
+            ],
+            row=0,
+        )
+        select.callback = self._on_access
+        self.add_item(select)
+
+        self._add_button("◀️", self._prev, row=1, disabled=(not visible or self.index <= 0))
+        self.add_item(discord.ui.Button(
+            label=f"{self.index + 1}/{len(visible)}" if visible else "0/0",
+            style=discord.ButtonStyle.secondary,
+            disabled=True,
+            row=1,
+        ))
+        self._add_button("▶️", self._next, row=1, disabled=(not visible or self.index >= len(visible) - 1))
+        self._add_button(
+            "نسخ", self._copy, row=1, disabled=(row is None),
+            style=discord.ButtonStyle.success, emoji="📋",
         )
 
-    async def callback(
-        self,
-        interaction: discord.Interaction
-    ):
+        if row:
+            if row.get("_page_url"):
+                self.add_item(discord.ui.Button(
+                    label="فتح الصفحة", url=row["_page_url"],
+                    style=discord.ButtonStyle.link, row=2,
+                ))
+            if row.get("_raw_url"):
+                self.add_item(discord.ui.Button(
+                    label="الكود الخام", url=row["_raw_url"],
+                    style=discord.ButtonStyle.link, row=2,
+                ))
 
-        await interaction.response.defer(
-            ephemeral=True
-        )
+    # ---- callbacks ----
 
-        if self.values[0] == "scriptblox":
+    async def _on_access(self, interaction: discord.Interaction):
+        if not await self._check_owner(interaction):
+            return
+        values = interaction.data.get("values") or ["all"]
+        self.access = values[0]
+        self.index = 0
+        self._rebuild()
+        await interaction.response.edit_message(content=self.header(), embed=self.build_embed(), view=self)
 
-            await interaction.followup.send(
-                "Searching ScriptBlox API..."
-            )
+    async def _move(self, interaction: discord.Interaction, delta: int):
+        if not await self._check_owner(interaction):
+            return
+        self.index += delta
+        self._rebuild()
+        await interaction.response.edit_message(content=self.header(), embed=self.build_embed(), view=self)
 
-            temp_msg = (
-                await interaction.followup.send(
-                    "Fetching data...",
-                    ephemeral=True
-                )
-            )
+    async def _prev(self, interaction: discord.Interaction):
+        await self._move(interaction, -1)
 
-            await display_scripts_dynamic(
-                interaction,
-                temp_msg,
-                self.query,
-                self.mode,
-                api="scriptblox",
-                **self.filters
-            )
+    async def _next(self, interaction: discord.Interaction):
+        await self._move(interaction, 1)
 
-        elif self.values[0] == "rscripts":
-
-            await interaction.followup.send(
-                "Searching RScripts API..."
-            )
-
-            temp_msg = (
-                await interaction.followup.send(
-                    "Fetching data...",
-                    ephemeral=True
-                )
-            )
-
-            scripts, _, error = fetch_scripts(
-                "rscripts",
-                self.query,
-                self.mode,
-                1,
-                **self.filters
-            )
-
-            if error:
-
-                await interaction.followup.send(
-                    error
-                )
-
-                return
-
-            await display_scripts_local(
-                interaction,
-                temp_msg,
-                scripts,
-                api="rscripts"
-            )
+    async def _copy(self, interaction: discord.Interaction):
+        # النسخ متاح لأي عضو، والرسالة مخفية له فقط.
+        row = self.current()
+        if row is None:
+            await interaction.response.send_message("❌ ما فيه نتيجة حاليًا.", ephemeral=True)
+            return
+        await interaction.response.defer(ephemeral=True, thinking=True)
+        text = await resolve_copy_text(self.http, row)
+        if not text:
+            await interaction.followup.send("❌ ما قدرت أجيب الكود من المصدر.", ephemeral=True)
+            return
+        await send_copy_text(interaction.followup, text, row.get("title", "script"))
 
 
-class APISearchView(
-    discord.ui.View
-):
+class PagerView(_BaseView):
+    """تصفح صفحات Embed (مثل قائمة الإكسبلويترات)."""
 
-    def __init__(
-        self,
-        query,
-        mode,
-        filters=None
-    ):
+    def __init__(self, requester_id: int, total_pages: int, render):
+        super().__init__(requester_id, timeout=180)
+        self.total_pages = max(1, total_pages)
+        self.render = render
+        self.index = 0
+        self._rebuild()
 
+    def _rebuild(self) -> None:
+        last = self.total_pages - 1
+        self.clear_items()
+        self._add_button("⏪", self._first, row=0, disabled=(self.index == 0))
+        self._add_button("◀️", self._prev, row=0, disabled=(self.index == 0))
+        self.add_item(discord.ui.Button(
+            label=f"{self.index + 1}/{self.total_pages}",
+            style=discord.ButtonStyle.secondary,
+            disabled=True,
+            row=0,
+        ))
+        self._add_button("▶️", self._next, row=0, disabled=(self.index >= last))
+        self._add_button("⏩", self._last, row=0, disabled=(self.index >= last))
+
+    async def _move(self, interaction: discord.Interaction, index: int):
+        if not await self._check_owner(interaction):
+            return
+        self.index = min(max(index, 0), self.total_pages - 1)
+        self._rebuild()
+        await interaction.response.edit_message(embed=self.render(self.index), view=self)
+
+    async def _first(self, interaction: discord.Interaction):
+        await self._move(interaction, 0)
+
+    async def _prev(self, interaction: discord.Interaction):
+        await self._move(interaction, self.index - 1)
+
+    async def _next(self, interaction: discord.Interaction):
+        await self._move(interaction, self.index + 1)
+
+    async def _last(self, interaction: discord.Interaction):
+        await self._move(interaction, self.total_pages - 1)
+
+
+class SearchHelpRoomSelect(discord.ui.Select):
+    def __init__(self, options: List[discord.SelectOption]):
         super().__init__(
-            timeout=60
+            placeholder="اختر الروم اللي تبي تتوجه له...",
+            min_values=1,
+            max_values=1,
+            options=options,
         )
 
-        self.add_item(
-            APISelect(
-                query,
-                mode,
-                filters
-            )
+    async def callback(self, interaction: discord.Interaction):
+        channel = None
+        if interaction.guild is not None:
+            channel = interaction.guild.get_channel(int(self.values[0]))
+        if channel is None:
+            await interaction.response.send_message("❌ الروم المحفوظ لم يعد موجودًا.", ephemeral=True)
+            return
+        await interaction.response.send_message(f"📍 توجه إلى {channel.mention}", ephemeral=True)
+
+
+class SearchHelpRoomsView(discord.ui.View):
+    def __init__(self, guild, channel_ids: List[str]):
+        super().__init__(timeout=120)
+        options = []
+        for channel_id in channel_ids[:25]:
+            channel = guild.get_channel(int(channel_id)) if guild is not None else None
+            if isinstance(channel, discord.TextChannel):
+                options.append(discord.SelectOption(
+                    label=truncate(channel.name, 100),
+                    value=str(channel.id),
+                    emoji="📌",
+                ))
+        if options:
+            self.add_item(SearchHelpRoomSelect(options))
+
+
+class SearchHelpButtonView(discord.ui.View):
+    """يظهر تحت رسالة "ما لقيت نتائج" إذا المالك حدد رومات مساعدة."""
+
+    def __init__(self, guild, requester_id: int):
+        super().__init__(timeout=120)
+        self.guild_id = guild.id
+        self.requester_id = requester_id
+        button = discord.ui.Button(
+            label="توجه إلى الرومات",
+            emoji="📚",
+            style=discord.ButtonStyle.primary,
         )
+        button.callback = self._open_rooms
+        self.add_item(button)
+
+    async def _open_rooms(self, interaction: discord.Interaction):
+        ids = get_help_channel_ids(self.guild_id)
+        if not ids:
+            await interaction.response.send_message("ℹ️ المالك ما حدد رومات للتوجه لها حتى الآن.", ephemeral=True)
+            return
+        view = SearchHelpRoomsView(interaction.guild, ids)
+        if not view.children:
+            await interaction.response.send_message("⚠️ الرومات المحددة لم تعد موجودة.", ephemeral=True)
+            return
+        await interaction.response.send_message("📚 **اختر الروم المناسب:**", view=view, ephemeral=True)
 
 
-async def send_api_selection(
-    destination,
-    query,
-    mode
-):
-
-    if isinstance(
-        destination,
-        discord.Interaction
-    ):
-
-        await destination.response.send_message(
-            "Select the API to search scripts from:",
-            view=APISearchView(
-                query,
-                mode
-            )
-        )
-
-    else:
-
-        await destination.send(
-            "Select the API to search scripts from:",
-            view=APISearchView(
-                query,
-                mode
-            )
-        )
+def no_results_view(guild, requester_id: int) -> Optional[discord.ui.View]:
+    if guild is None or not get_help_channel_ids(guild.id):
+        return None
+    return SearchHelpButtonView(guild, requester_id)
 
 
-@bot.tree.command(
-    name="search",
-    description="Search for scripts with advanced filters"
-)
-@app_commands.describe(
-    query="The search query",
-    mode="Search mode (free or paid)",
-    verified="Filter by verified status",
-    patched="Filter by patched status (ScriptBlox only)",
-    key_system="Filter by key system requirement",
-    universal="Filter by universal scripts (ScriptBlox only)",
-    mobile_only="Mobile ready scripts only (RScripts only)",
-    sort_by="Sort by field (views, likes, date, etc.)",
-    sort_order="Sort order (asc or desc)"
-)
-async def slash_search(
-    interaction: discord.Interaction,
-    query: str,
-    mode: str = 'free',
-    verified: bool = None,
-    patched: bool = None,
-    key_system: bool = None,
-    universal: bool = None,
-    mobile_only: bool = None,
-    sort_by: str = None,
-    sort_order: str = None
-):
-
-    filters = {}
-
-    if verified is not None:
-
-        filters["verified"] = verified
-        filters["verifiedOnly"] = verified
-
-    if patched is not None:
-
-        filters["patched"] = patched
-
-    if key_system is not None:
-
-        filters["key"] = key_system
-        filters["noKeySystem"] = (
-            not key_system
-        )
-
-    if universal is not None:
-
-        filters["universal"] = universal
-
-    if mobile_only is not None:
-
-        filters["mobileOnly"] = mobile_only
-
-    if sort_by:
-
-        filters["sortBy"] = sort_by
-        filters["orderBy"] = sort_by
-
-    if sort_order:
-
-        filters["order"] = sort_order
-        filters["sort"] = sort_order
-
-    await interaction.response.send_message(
-        "Select the API to search scripts from:",
-        view=APISearchView(
-            query,
-            mode,
-            filters
-        )
+def build_help_embed() -> discord.Embed:
+    embed = discord.Embed(
+        title="🔍 Team Fime • بحث السكربتات",
+        description=(
+            "ابحث عن السكربتات من ScriptBlox و RScripts و RobloxScripts.\n"
+            "اكتب اسم الماب مباشرة في روم البحث التلقائي، أو استخدم الأوامر."
+        ),
+        color=0x3498DB,
     )
-
-
-@bot.tree.command(
-    name="fetch",
-    description="Fetch scripts from ScriptBlox with advanced filters"
-)
-@app_commands.describe(
-    mode="Script mode (free or paid)",
-    verified="Filter by verified status",
-    patched="Filter by patched status",
-    key_system="Filter by key system",
-    universal="Filter universal scripts",
-    sort_by="Sort by (views, likeCount, createdAt, updatedAt, dislikeCount)",
-    sort_order="Sort order (asc or desc)",
-    owner="Filter by owner username",
-    place_id="Filter by game place ID",
-    max_results="Maximum results per page (1-20)"
-)
-async def slash_fetch(
-    interaction: discord.Interaction,
-    mode: str = 'free',
-    verified: bool = None,
-    patched: bool = None,
-    key_system: bool = None,
-    universal: bool = None,
-    sort_by: str = None,
-    sort_order: str = None,
-    owner: str = None,
-    place_id: str = None,
-    max_results: int = 20
-):
-
-    await interaction.response.defer()
-
-    params = {
-        "mode": mode,
-        "max": max_results
-    }
-
-    if verified is not None:
-
-        params["verified"] = (
-            1
-            if verified
-            else 0
-        )
-
-    if patched is not None:
-
-        params["patched"] = (
-            1
-            if patched
-            else 0
-        )
-
-    if key_system is not None:
-
-        params["key"] = (
-            1
-            if key_system
-            else 0
-        )
-
-    if universal is not None:
-
-        params["universal"] = (
-            1
-            if universal
-            else 0
-        )
-
-    if sort_by:
-
-        params["sortBy"] = sort_by
-
-    if sort_order:
-
-        params["order"] = sort_order
-
-    if owner:
-
-        params["owner"] = owner
-
-    if place_id:
-
-        params["placeId"] = place_id
-
-    data, error = fetch_scripts_from_api(
-        "scriptblox",
-        "fetch",
-        **params
+    embed.add_field(
+        name="🔎 البحث",
+        value=(
+            "`/search query` بحث في كل المصادر مع فلاتر\n"
+            "`!search <اسم>` بحث سريع في كل المصادر\n"
+            "اكتب اسم الماب في روم البحث التلقائي"
+        ),
+        inline=False,
     )
+    embed.add_field(
+        name="📚 التصفح",
+        value=(
+            "`/fetch` تصفح سكربتات ScriptBlox مع فلاتر\n"
+            "`/trending` الأكثر رواجًا الآن\n"
+            "`/script id` سكربت محدد بالمعرف أو الـ slug\n"
+            "`/rscripts_fetch` تصفح RScripts\n"
+            "`/rscripts_by_user username` سكربتات صانع معين\n"
+            "`/executors` قائمة الإكسبلويترات"
+        ),
+        inline=False,
+    )
+    embed.add_field(
+        name="🛠️ الإدارة (صلاحية إدارة السيرفر)",
+        value=(
+            "`/setscriptroom` تحديد روم البحث التلقائي\n"
+            "`/searchroom` عرض روم البحث الحالي\n"
+            "`/addsearchhelproom` / `/removesearchhelproom` رومات المساعدة\n"
+            "`/searchhelprooms` عرض رومات المساعدة\n"
+            "`!تحديد_روم` / `!الغاء_روم_البحث` / `!روم_البحث`"
+        ),
+        inline=False,
+    )
+    embed.set_footer(text="Team Fime • Game Search v8.0")
+    return embed
 
-    if error:
 
-        await interaction.followup.send(
-            f"❌ {error}"
-        )
+# ============================================================
+# COG
+# ============================================================
 
-        return
+class GameSearchCog(commands.Cog):
+    """بحث السكربتات: تلقائي داخل روم محددة، وأوامر سلاش وبريفكس."""
 
-    if (
-        "result" in data
-        and "scripts" in data["result"]
-    ):
+    def __init__(self, bot: commands.Bot):
+        self.bot = bot
+        self.http = HttpClient()
+        self._cache: Dict[str, Dict[str, Any]] = {}
+        self._inflight: Dict[str, asyncio.Task] = {}
+        self._cooldowns: Dict[str, float] = {}
 
-        scripts = (
-            data["result"]["scripts"]
-        )
+    def cog_unload(self):
+        for task in list(self._inflight.values()):
+            task.cancel()
+        try:
+            asyncio.get_running_loop().create_task(self.http.close())
+        except RuntimeError:
+            pass
 
-        if not scripts:
+    # -----------------------------------------------------
+    # cooldown + cache
+    # -----------------------------------------------------
 
-            await interaction.followup.send(
-                "No scripts found with "
-                "the specified filters."
-            )
+    def _on_cooldown(self, user_id: int, guild_id: int) -> bool:
+        key = f"{guild_id}:{user_id}"
+        now = time.monotonic()
+        last = self._cooldowns.get(key)
+        if last is not None and now - last < AUTO_SEARCH_COOLDOWN:
+            return True
+        self._cooldowns[key] = now
+        if len(self._cooldowns) > 5000:
+            cutoff = now - 60
+            for stale in [k for k, v in self._cooldowns.items() if v < cutoff]:
+                self._cooldowns.pop(stale, None)
+        return False
 
+    def _cache_get(self, key: str) -> Optional[List[Dict[str, Any]]]:
+        item = self._cache.get(key)
+        if not item:
+            return None
+        if time.monotonic() - item["ts"] > AUTO_SEARCH_CACHE_TTL:
+            self._cache.pop(key, None)
+            return None
+        return [dict(row) for row in item["rows"]]
+
+    def _cache_set(self, key: str, rows: List[Dict[str, Any]]) -> None:
+        self._cache[key] = {"ts": time.monotonic(), "rows": [dict(row) for row in rows]}
+        if len(self._cache) > 200:
+            now = time.monotonic()
+            for stale in [k for k, v in self._cache.items() if now - v["ts"] > AUTO_SEARCH_CACHE_TTL]:
+                self._cache.pop(stale, None)
+
+    # -----------------------------------------------------
+    # search engine
+    # -----------------------------------------------------
+
+    async def search(self, query: str, sources) -> Tuple[List[Dict[str, Any]], bool]:
+        """يرجع (النتائج الخام المرتبة, هل_فيه_خطأ). الفلاتر تُطبق بعدها."""
+        key = f"{compact_game_name(query)}|{','.join(sorted(sources))}"
+        cached = self._cache_get(key)
+        if cached is not None:
+            return cached, False
+
+        task = self._inflight.get(key)
+        if task is None:
+            task = asyncio.create_task(self._run_search(query, tuple(sources), key))
+            self._inflight[key] = task
+            task.add_done_callback(lambda _done, k=key: self._inflight.pop(k, None))
+
+        rows, had_error = await asyncio.shield(task)
+        return [dict(row) for row in rows], had_error
+
+    async def _run_search(self, query: str, sources: Tuple[str, ...], cache_key: str):
+        loop = asyncio.get_running_loop()
+        deadline = loop.time() + AUTO_SEARCH_DEADLINE
+        candidates = list(search_query_candidates(query))[:AUTO_SEARCH_MAX_QUERIES] or [query]
+
+        found: List[Dict[str, Any]] = []
+        seen = set()
+        had_error = False
+
+        try:
+            # ندرج صيغ البحث على دفعات من اثنتين. إذا وصلنا للهدف نوقف.
+            for start in range(0, len(candidates), 2):
+                if loop.time() >= deadline:
+                    break
+
+                jobs = []
+                for offset, candidate in enumerate(candidates[start:start + 2]):
+                    for source in sources:
+                        if source in HTML_SOURCES and start + offset != 0:
+                            continue
+                        jobs.append(self._search_source(source, candidate, deadline))
+
+                results = await asyncio.gather(*jobs, return_exceptions=True)
+                for result in results:
+                    if isinstance(result, BaseException):
+                        had_error = True
+                        continue
+                    rows, error = result
+                    had_error = had_error or error
+                    for row in rows:
+                        key = row_key(row)
+                        if key in seen:
+                            continue
+                        if row_relevance(row, query) < RELEVANCE_MIN:
+                            continue
+                        seen.add(key)
+                        found.append(row)
+
+                if len(found) >= AUTO_SEARCH_TARGET:
+                    break
+        except Exception as error:
+            print(f"❌ Search engine error: {error}")
+            had_error = True
+
+        found.sort(key=lambda row: rank_score(row, query), reverse=True)
+        found = found[:AUTO_SEARCH_MAX_RESULTS]
+
+        if found:
+            await self._enrich_thumbnails(found[:40])
+
+        if found or not had_error:
+            self._cache_set(cache_key, found)
+        return found, had_error
+
+    async def _search_source(self, source: str, candidate: str, deadline: float):
+        if source in PAGED_SOURCES:
+            fetch, page_size = PAGED_SOURCES[source]
+            return await _fetch_pages(self.http, fetch, candidate, page_size, deadline)
+        if source in HTML_SOURCES:
+            return await _src_html(self.http, source, candidate)
+        return [], False
+
+    async def _enrich_thumbnails(self, rows: List[Dict[str, Any]]) -> None:
+        """يجيب صور الألعاب من Roblox للنتائج اللي ما عندها صورة (طلب واحد لكل دفعة)."""
+        wanted: Dict[int, List[Dict[str, Any]]] = {}
+        for row in rows:
+            if row.get("_image") or not row.get("_place_id"):
+                continue
+            wanted.setdefault(row["_place_id"], []).append(row)
+        if not wanted:
             return
 
-        temp_msg = (
-            await interaction.followup.send(
-                "Fetching data..."
-            )
-        )
-
-        await display_scripts_local(
-            interaction,
-            temp_msg,
-            scripts,
-            api="scriptblox"
-        )
-
-    else:
-
-        await interaction.followup.send(
-            "No scripts found."
-        )
-
-
-@bot.tree.command(
-    name="trending",
-    description="View trending scripts"
-)
-@app_commands.describe(
-    api="Choose API (scriptblox or rscripts)"
-)
-async def slash_trending(
-    interaction: discord.Interaction,
-    api: str = "scriptblox"
-):
-
-    await interaction.response.defer()
-
-    if api.lower() not in [
-        "scriptblox",
-        "rscripts"
-    ]:
-
-        await interaction.followup.send(
-            "❌ Invalid API. "
-            "Choose 'scriptblox' or 'rscripts'."
-        )
-
-        return
-
-    scripts, error = fetch_trending(
-        api.lower()
-    )
-
-    if error:
-
-        await interaction.followup.send(
-            f"❌ {error}"
-        )
-
-        return
-
-    if not scripts:
-
-        await interaction.followup.send(
-            "No trending scripts found."
-        )
-
-        return
-
-    temp_msg = (
-        await interaction.followup.send(
-            "Fetching trending scripts..."
-        )
-    )
-
-    await display_scripts_local(
-        interaction,
-        temp_msg,
-        scripts,
-        api=api.lower()
-    )
-
-
-@bot.tree.command(
-    name="script",
-    description="Fetch a specific script by ID or slug"
-)
-@app_commands.describe(
-    script_id="The script ID or slug",
-    api="Choose API (scriptblox or rscripts)"
-)
-async def slash_script(
-    interaction: discord.Interaction,
-    script_id: str,
-    api: str = "scriptblox"
-):
-
-    await interaction.response.defer()
-
-    if api.lower() not in [
-        "scriptblox",
-        "rscripts"
-    ]:
-
-        await interaction.followup.send(
-            "❌ Invalid API. "
-            "Choose 'scriptblox' or 'rscripts'."
-        )
-
-        return
-
-    script, error = fetch_script_by_id(
-        api.lower(),
-        script_id
-    )
-
-    if error:
-
-        await interaction.followup.send(
-            f"❌ {error}"
-        )
-
-        return
-
-    if not script:
-
-        await interaction.followup.send(
-            "Script not found."
-        )
-
-        return
-
-    temp_msg = (
-        await interaction.followup.send(
-            "Fetching script..."
-        )
-    )
-
-    await display_scripts_local(
-        interaction,
-        temp_msg,
-        [script],
-        api=api.lower()
-    )
-
-
-@bot.tree.command(
-    name="executors",
-    description="View list of available executors"
-)
-async def slash_executors(
-    interaction: discord.Interaction
-):
-
-    await interaction.response.defer()
-
-    executors, error = fetch_executors()
-
-    if error:
-
-        await interaction.followup.send(
-            f"❌ {error}"
-        )
-
-        return
-
-    if (
-        not executors
-        or not isinstance(
-            executors,
-            list
-        )
-    ):
-
-        await interaction.followup.send(
-            "No executors found."
-        )
-
-        return
-
-    page = 0
-    per_page = 5
-
-    total_pages = (
-        (len(executors) - 1)
-        // per_page
-        + 1
-    )
-
-    def create_executor_embed(
-        page_num
-    ):
-
-        embed = discord.Embed(
-            title="🎮 Available Executors",
-            description=(
-                f"List of executors from "
-                f"ScriptBlox "
-                f"(Page "
-                f"{page_num + 1}/"
-                f"{total_pages})"
-            ),
-            color=0x206694
-        )
-
-        start = (
-            page_num
-            * per_page
-        )
-
-        end = min(
-            start + per_page,
-            len(executors)
-        )
-
-        for executor in executors[start:end]:
-
-            name = executor.get(
-                "name",
-                "Unknown"
-            )
-
-            platform = executor.get(
-                "platform",
-                "Unknown"
-            )
-
-            exe_type = executor.get(
-                "type",
-                "Unknown"
-            )
-
-            patched = (
-                "❌ Patched"
-                if executor.get(
-                    "patched",
-                    False
-                )
-                else "✅ Active"
-            )
-
-            version = executor.get(
-                "version",
-                "N/A"
-            )
-
-            value = (
-                f"**Platform:** {platform}\n"
-                f"**Type:** {exe_type}\n"
-                f"**Status:** {patched}\n"
-                f"**Version:** {version}"
-            )
-
-            if executor.get(
-                "website"
-            ):
-
-                value += (
-                    f"\n[Website]"
-                    f"({executor['website']})"
-                )
-
-            if executor.get(
-                "discord"
-            ):
-
-                value += (
-                    f" | [Discord]"
-                    f"({executor['discord']})"
-                )
-
-            embed.add_field(
-                name=name,
-                value=value,
-                inline=False
-            )
-
-        embed.set_footer(
-            text=(
-                "Made by AdvanceFalling Team | "
-                "Powered by ScriptBlox"
-            )
-        )
-
-        return embed
-
-    embed = create_executor_embed(
-        page
-    )
-
-    view = discord.ui.View(
-        timeout=60
-    )
-
-    if total_pages > 1:
-
-        if page > 0:
-
-            view.add_item(
-                discord.ui.Button(
-                    label="⏪",
-                    style=discord.ButtonStyle.primary,
-                    custom_id="first"
-                )
-            )
-
-            view.add_item(
-                discord.ui.Button(
-                    label="◀️",
-                    style=discord.ButtonStyle.primary,
-                    custom_id="previous"
-                )
-            )
-
-        view.add_item(
-            discord.ui.Button(
-                label=(
-                    f"Page "
-                    f"{page + 1}/"
-                    f"{total_pages}"
-                ),
-                style=discord.ButtonStyle.secondary,
-                disabled=True
-            )
-        )
-
-        if page < total_pages - 1:
-
-            view.add_item(
-                discord.ui.Button(
-                    label="▶️",
-                    style=discord.ButtonStyle.primary,
-                    custom_id="next"
-                )
-            )
-
-            view.add_item(
-                discord.ui.Button(
-                    label="⏩",
-                    style=discord.ButtonStyle.primary,
-                    custom_id="last"
-                )
-            )
-
-    message = (
-        await interaction.followup.send(
-            embed=embed,
-            view=view
-        )
-    )
-
-    while True:
-
-        def check(i):
-
-            return (
-                i.user == interaction.user
-                and i.message.id == message.id
-            )
-
+        place_ids = list(wanted)[:8]
         try:
-
-            i = await bot.wait_for(
-                "interaction",
-                check=check,
-                timeout=30.0
+            data, _ = await self.http.get_json(
+                "https://thumbnails.roblox.com/v1/places/gameicons",
+                params={
+                    "placeIds": ",".join(str(pid) for pid in place_ids),
+                    "returnPolicy": "PlaceHolder",
+                    "size": "512x512",
+                    "format": "Png",
+                    "isCircular": "false",
+                },
             )
+            for item in rows_from(data, ("data",)):
+                place_id = to_int(item.get("targetId"))
+                image = get_static_image_url(item.get("imageUrl"))
+                if place_id in wanted and image:
+                    for row in wanted[place_id]:
+                        row["_image"] = image
+        except Exception as error:
+            print(f"⚠️ Roblox thumbnail lookup skipped: {error}")
 
-            cid = i.data.get(
-                "custom_id"
+    # -----------------------------------------------------
+    # other fetchers
+    # -----------------------------------------------------
+
+    async def _fetch_trending(self, api: str) -> Tuple[List[Dict[str, Any]], bool]:
+        if api == "scriptblox":
+            data, error = await self.http.get_json("https://scriptblox.com/api/script/trending")
+            metas = rows_from(data, ("result", "scripts"))[:12]
+            slugs = [clean_text(meta.get("slug")) for meta in metas if clean_text(meta.get("slug"))]
+            payloads = await asyncio.gather(
+                *(self.http.get_json(f"https://scriptblox.com/api/script/{urllib.parse.quote(s)}") for s in slugs),
+                return_exceptions=True,
             )
-
-            if (
-                cid == "previous"
-                and page > 0
-            ):
-
-                page -= 1
-
-            elif (
-                cid == "next"
-                and page < total_pages - 1
-            ):
-
-                page += 1
-
-            elif cid == "last":
-
-                page = (
-                    total_pages - 1
-                )
-
-            elif cid == "first":
-
-                page = 0
-
-            embed = create_executor_embed(
-                page
-            )
-
-            view = discord.ui.View(
-                timeout=60
-            )
-
-            if total_pages > 1:
-
-                if page > 0:
-
-                    view.add_item(
-                        discord.ui.Button(
-                            label="⏪",
-                            style=discord.ButtonStyle.primary,
-                            custom_id="first"
-                        )
-                    )
-
-                    view.add_item(
-                        discord.ui.Button(
-                            label="◀️",
-                            style=discord.ButtonStyle.primary,
-                            custom_id="previous"
-                        )
-                    )
-
-                view.add_item(
-                    discord.ui.Button(
-                        label=(
-                            f"Page "
-                            f"{page + 1}/"
-                            f"{total_pages}"
-                        ),
-                        style=discord.ButtonStyle.secondary,
-                        disabled=True
-                    )
-                )
-
-                if page < total_pages - 1:
-
-                    view.add_item(
-                        discord.ui.Button(
-                            label="▶️",
-                            style=discord.ButtonStyle.primary,
-                            custom_id="next"
-                        )
-                    )
-
-                    view.add_item(
-                        discord.ui.Button(
-                            label="⏩",
-                            style=discord.ButtonStyle.primary,
-                            custom_id="last"
-                        )
-                    )
-
-            await i.response.edit_message(
-                embed=embed,
-                view=view
-            )
-
-        except asyncio.TimeoutError:
-
-            await message.edit(
-                content="Interaction timed out.",
-                view=None
-            )
-
-            break
-
-
-def fetch_rscripts_by_username(
-    username,
-    page=1
-):
-
-    try:
-
-        url = (
-            f"https://rscripts.net/"
-            f"api/v2/scripts"
-            f"?page={page}"
-            f"&orderBy=date"
-            f"&sort=desc"
-        )
-
-        headers = {
-            "Username": username
-        }
-
-        r = requests.get(
-            url,
-            headers=headers
-        )
-
-        r.raise_for_status()
-
-        data = r.json()
-
-        if "scripts" in data:
-
-            return (
-                data["scripts"],
-                None
-            )
-
-        return (
-            None,
-            f"No scripts found for "
-            f"'{username}'"
-        )
-
-    except requests.RequestException as e:
-
-        return (
-            None,
-            f"Something went wrong: {e}"
-        )
-
-    except Exception as e:
-
-        return (
-            None,
-            f"Unexpected response format: {e}"
-        )
-
-
-@bot.tree.command(
-    name="rscripts_fetch",
-    description="Browse RScripts with advanced filters"
-)
-@app_commands.describe(
-    verified_only="Show only verified scripts",
-    no_key_system="Show only scripts without key systems",
-    mobile_only="Show only mobile-ready scripts",
-    unpatched="Show only unpatched scripts",
-    order_by="Sort by field (createdAt, updatedAt, views, name)",
-    sort="Sort direction (asc or desc)",
-    max_results="Maximum results per page (1-20)"
-)
-async def slash_rscripts_fetch(
-    interaction: discord.Interaction,
-    verified_only: bool = None,
-    no_key_system: bool = None,
-    mobile_only: bool = None,
-    unpatched: bool = None,
-    order_by: str = None,
-    sort: str = None,
-    max_results: int = 20
-):
-
-    await interaction.response.defer()
-
-    params = {
-        "q": "",
-        "page": 1,
-        "notPaid": "true"
-    }
-
-    if verified_only is not None:
-
-        params["verifiedOnly"] = (
-            verified_only
-        )
-
-    if no_key_system is not None:
-
-        params["noKeySystem"] = (
-            no_key_system
-        )
-
-    if mobile_only is not None:
-
-        params["mobileOnly"] = (
-            mobile_only
-        )
-
-    if unpatched is not None:
-
-        params["unpatched"] = (
-            unpatched
-        )
-
-    if order_by:
-
-        params["orderBy"] = (
-            order_by
-        )
-
-    if sort:
-
-        params["sort"] = sort
-
-    query_string = (
-        urllib.parse.urlencode(
-            params
-        )
-    )
-
-    url = (
-        f"https://rscripts.net/"
-        f"api/v2/scripts?"
-        f"{query_string}"
-    )
-
-    try:
-
-        r = requests.get(
-            url
-        )
-
-        r.raise_for_status()
-
-        data = r.json()
-
-        if "scripts" in data:
-
-            scripts = (
-                data["scripts"][
-                    :max_results
-                ]
-            )
-
-            if not scripts:
-
-                await interaction.followup.send(
-                    "No scripts found with "
-                    "those filters"
-                )
-
-                return
-
-            temp_msg = (
-                await interaction.followup.send(
-                    "Loading scripts..."
-                )
-            )
-
-            await display_scripts_local(
-                interaction,
-                temp_msg,
-                scripts,
-                api="rscripts"
-            )
-
-        else:
-
-            await interaction.followup.send(
-                "No scripts found"
-            )
-
-    except Exception as e:
-
-        await interaction.followup.send(
-            f"❌ Something went wrong: {e}"
-        )
-
-
-@bot.tree.command(
-    name="rscripts_by_user",
-    description=(
-        "Find all scripts by a "
-        "specific RScripts creator"
-    )
-)
-@app_commands.describe(
-    username="The creator's username"
-)
-async def slash_rscripts_by_user(
-    interaction: discord.Interaction,
-    username: str
-):
-
-    await interaction.response.defer()
-
-    scripts, error = (
-        fetch_rscripts_by_username(
-            username
-        )
-    )
-
-    if error:
-
-        await interaction.followup.send(
-            f"❌ {error}"
-        )
-
-        return
-
-    if not scripts:
-
-        await interaction.followup.send(
-            f"No scripts found for "
-            f"'{username}'"
-        )
-
-        return
-
-    temp_msg = (
-        await interaction.followup.send(
-            f"Loading scripts by "
-            f"{username}..."
-        )
-    )
-
-    await display_scripts_local(
-        interaction,
-        temp_msg,
-        scripts,
-        api="rscripts"
-    )
-
-
-
-# ============================================================
-# EXTENSION SETUP
-# ============================================================
-
-_extension_bot = bot
-
-
-async def setup(
-    main_bot
-):
-
-    global bot
-
-    bot = main_bot
-
-    # --------------------------------------------------------
-    # نقل أوامر Prefix إلى البوت الرئيسي
-    # --------------------------------------------------------
-
-    extension_commands = list(
-        _extension_bot.commands
-    )
-
-    for command in extension_commands:
-
-        existing = main_bot.get_command(
-            command.name
-        )
-
-        if existing is not None:
-
-            print(
-                f"⚠️ Prefix command already exists: "
-                f"!{command.name} — skipped."
-            )
-
-            continue
-
-        try:
-
-            main_bot.add_command(
-                command
-            )
-
-            print(
-                f"✅ Registered prefix command: "
-                f"!{command.name}"
-            )
-
-        except commands.CommandRegistrationError as e:
-
-            print(
-                f"⚠️ Prefix command conflict "
-                f"!{command.name}: {e}"
-            )
-
-        except Exception as e:
-
-            print(
-                f"❌ Failed to register prefix command "
-                f"!{command.name}: {e}"
-            )
-
-    # --------------------------------------------------------
-    # نقل أوامر Slash
-    # --------------------------------------------------------
-
-    extension_slash_commands = list(
-        _extension_bot.tree.get_commands()
-    )
-
-    for command in extension_slash_commands:
-
-        try:
-
-            existing = main_bot.tree.get_command(
-                command.name
-            )
-
-            if existing is not None:
-
-                print(
-                    f"⚠️ Slash command already exists: "
-                    f"/{command.name} — skipped."
-                )
-
+            rows = []
+            for payload in payloads:
+                if isinstance(payload, BaseException):
+                    continue
+                body, _ = payload
+                script = body.get("script") if isinstance(body, dict) else None
+                if isinstance(script, dict):
+                    rows.append(_normalize_row(script, "scriptblox"))
+            return rows, bool(error and not rows)
+
+        data, error = await self.http.get_json("https://rscripts.net/api/v2/trending")
+        rows = []
+        for item in rows_from(data, ("success",)):
+            script = item.get("script") if isinstance(item.get("script"), dict) else None
+            if not script:
                 continue
+            merged = dict(script)
+            merged.setdefault("views", item.get("views", 0))
+            if isinstance(item.get("user"), dict):
+                merged.setdefault("user", item["user"])
+            rows.append(_normalize_row(merged, "rscripts"))
+        return rows, bool(error and not rows)
 
-            main_bot.tree.add_command(
-                command
+    async def _fetch_one(self, api: str, script_id: str) -> Optional[Dict[str, Any]]:
+        if api == "scriptblox":
+            data, _ = await self.http.get_json(
+                f"https://scriptblox.com/api/script/{urllib.parse.quote(script_id)}"
             )
+            script = data.get("script") if isinstance(data, dict) else None
+            return _normalize_row(script, "scriptblox") if isinstance(script, dict) else None
 
-            print(
-                f"✅ Registered slash command: "
-                f"/{command.name}"
+        data, _ = await self.http.get_json("https://rscripts.net/api/v2/script", params={"id": script_id})
+        items = rows_from(data, ("script",))
+        return _normalize_row(items[0], "rscripts") if items else None
+
+    async def _fetch_rscripts_user(self, username: str) -> List[Dict[str, Any]]:
+        """يسحب عدة صفحات ثم يفلتر بالمستخدم محليًا، لأن الفلتر على السيرفر غير مضمون."""
+        tasks = [
+            self.http.get_json(
+                "https://rscripts.net/api/v2/scripts",
+                params={"page": page, "orderBy": "date", "sort": "desc", "username": username},
+                headers={"Username": username},
             )
+            for page in range(1, 5)
+        ]
+        results = await asyncio.gather(*tasks, return_exceptions=True)
 
-        except Exception as e:
+        wanted = username.lower()
+        rows, seen = [], set()
+        for result in results:
+            if isinstance(result, BaseException):
+                continue
+            data, _ = result
+            for item in rows_from(data, ("scripts",)):
+                owner = item.get("user") if isinstance(item.get("user"), dict) else {}
+                if clean_text(owner.get("username")).lower() != wanted:
+                    continue
+                slug = clean_text(item.get("slug")) or clean_text(item.get("title"))
+                if slug in seen:
+                    continue
+                seen.add(slug)
+                rows.append(_normalize_row(item, "rscripts"))
+        return rows
 
-            print(
-                f"❌ Failed to register slash command "
-                f"/{command.name}: {e}"
+    # -----------------------------------------------------
+    # delivery helpers
+    # -----------------------------------------------------
+
+    async def _send_rows_via_interaction(self, interaction: discord.Interaction, rows, query: str,
+                                         had_error: bool = False) -> None:
+        if not rows:
+            kwargs: Dict[str, Any] = {
+                "content": empty_text(query, had_error),
+                "allowed_mentions": NO_MENTIONS,
+            }
+            view = no_results_view(interaction.guild, interaction.user.id)
+            if view is not None:
+                kwargs["view"] = view
+            await interaction.followup.send(**kwargs)
+            return
+
+        view = ScriptBrowserView(self.http, interaction.user.id, rows, query)
+        message = await interaction.followup.send(
+            content=view.header(),
+            embed=view.build_embed(),
+            view=view,
+            allowed_mentions=NO_MENTIONS,
+            wait=True,
+        )
+        view.message = message
+
+    async def _edit_or_send(self, status: discord.Message, content: str,
+                            embed: Optional[discord.Embed] = None,
+                            view: Optional[discord.ui.View] = None) -> discord.Message:
+        try:
+            return await status.edit(content=content, embed=embed, view=view)
+        except discord.HTTPException:
+            kwargs: Dict[str, Any] = {"content": content, "allowed_mentions": NO_MENTIONS}
+            if embed is not None:
+                kwargs["embed"] = embed
+            if view is not None:
+                kwargs["view"] = view
+            return await status.channel.send(**kwargs)
+
+    async def _run_message_search(self, message: discord.Message, query: str, sources, filters: Dict[str, Any]):
+        started = time.perf_counter()
+        status = await message.reply("🔎 جاري البحث...", mention_author=False)
+
+        rows, had_error = await self.search(query, sources)
+        rows = apply_filters(rows, filters, query)
+        elapsed = time.perf_counter() - started
+
+        if not rows:
+            sent = await self._edit_or_send(
+                status,
+                empty_text(query, had_error),
+                None,
+                no_results_view(message.guild, message.author.id),
             )
+            return
 
-    # --------------------------------------------------------
-    # Listener: on_ready
-    # --------------------------------------------------------
+        view = ScriptBrowserView(self.http, message.author.id, rows, query, elapsed)
+        sent = await self._edit_or_send(status, view.header(), view.build_embed(), view)
+        view.message = sent
 
-    main_bot.add_listener(
-        on_ready,
-        "on_ready"
-    )
+    # -----------------------------------------------------
+    # listener: بحث تلقائي داخل روم البحث
+    # -----------------------------------------------------
 
-    # --------------------------------------------------------
-    # Listener: automatic search
-    # --------------------------------------------------------
+    @commands.Cog.listener()
+    async def on_message(self, message: discord.Message):
+        if message.author.bot or not message.guild:
+            return
 
-    main_bot.add_listener(
-        automatic_search_listener,
-        "on_message"
-    )
+        room_id = search_rooms.get(str(message.guild.id))
+        if not room_id or str(message.channel.id) != str(room_id):
+            return
 
-    # --------------------------------------------------------
-    # تأكيد أوامر الغرف العربية
-    # --------------------------------------------------------
+        query = clean_text(message.content)
+        if not (2 <= len(query) <= 120):
+            return
+        if query.startswith(("!", "/", "http://", "https://")):
+            return
+        if self._on_cooldown(message.author.id, message.guild.id):
+            return
 
-    arabic_commands = [
-        "تحديد_روم",
-        "روم_البحث",
-        "الغاء_روم_البحث"
-    ]
+        try:
+            await self._run_message_search(message, query, ENABLED_SOURCES, {})
+        except Exception as error:
+            print(f"❌ Automatic search error: {error}")
+            try:
+                await message.reply("❌ صار خطأ أثناء البحث، حاول مرة ثانية.", mention_author=False)
+            except Exception:
+                pass
 
-    for command_name in arabic_commands:
+    # =====================================================
+    # PREFIX COMMANDS
+    # =====================================================
 
-        if main_bot.get_command(
-            command_name
-        ) is not None:
+    @commands.command(name="bothelp")
+    async def prefix_help(self, ctx: commands.Context):
+        await ctx.send(embed=build_help_embed())
 
-            print(
-                f"🇸🇦 Arabic command ready: "
-                f"!{command_name}"
-            )
+    @commands.command(name="search")
+    async def prefix_search(self, ctx: commands.Context, *, query: str = ""):
+        query = clean_text(query)
+        if len(query) < 2:
+            await ctx.send(embed=build_help_embed())
+            return
+        if self._on_cooldown(ctx.author.id, ctx.guild.id):
+            await ctx.reply("⏳ خفف شوي، جرب بعد ثواني.", mention_author=False)
+            return
+        await self._run_message_search(ctx.message, query, ENABLED_SOURCES, {})
 
+    @commands.command(name="تحديد_روم")
+    @commands.has_permissions(manage_guild=True)
+    async def prefix_set_search_room(self, ctx: commands.Context):
+        search_rooms[str(ctx.guild.id)] = str(ctx.channel.id)
+        save_search_rooms()
+        await ctx.send(
+            "✅ تم تحديد هذا الروم كروم البحث التلقائي.\n"
+            "من الآن أي عضو يكتب اسم ماب هنا، البوت يبحث عنه تلقائيًا."
+        )
+
+    @commands.command(name="روم_البحث")
+    async def prefix_show_search_room(self, ctx: commands.Context):
+        channel_id = search_rooms.get(str(ctx.guild.id))
+        if not channel_id:
+            await ctx.send("❌ ما تم تحديد روم للبحث التلقائي في هذا السيرفر.")
+            return
+        channel = ctx.guild.get_channel(int(channel_id))
+        if not channel:
+            await ctx.send("⚠️ روم البحث المحفوظ لم يعد موجودًا.")
+            return
+        await ctx.send(f"🔎 روم البحث التلقائي الحالي: {channel.mention}")
+
+    @commands.command(name="الغاء_روم_البحث")
+    @commands.has_permissions(manage_guild=True)
+    async def prefix_remove_search_room(self, ctx: commands.Context):
+        guild_id = str(ctx.guild.id)
+        if guild_id in search_rooms:
+            del search_rooms[guild_id]
+            save_search_rooms()
+            await ctx.send("✅ تم إلغاء روم البحث التلقائي.")
         else:
-            print(
-                f"❌ Arabic command missing: "
-                f"!{command_name}"
+            await ctx.send("ℹ️ ما فيه روم بحث محدد أصلًا.")
+
+    @commands.command(name="اضافة_روم_مساعدة")
+    @commands.has_permissions(manage_guild=True)
+    async def prefix_add_help_room(self, ctx: commands.Context, channel: Optional[discord.TextChannel] = None):
+        channel = channel or ctx.channel
+        ids = get_help_channel_ids(ctx.guild.id)
+        if str(channel.id) not in ids:
+            ids.append(str(channel.id))
+        set_help_channel_ids(ctx.guild.id, ids)
+        await ctx.send(f"✅ تمت إضافة {channel.mention} لقائمة رومات المساعدة.")
+
+    @commands.command(name="حذف_روم_مساعدة")
+    @commands.has_permissions(manage_guild=True)
+    async def prefix_remove_help_room(self, ctx: commands.Context, channel: Optional[discord.TextChannel] = None):
+        channel = channel or ctx.channel
+        ids = [item for item in get_help_channel_ids(ctx.guild.id) if item != str(channel.id)]
+        set_help_channel_ids(ctx.guild.id, ids)
+        await ctx.send(f"🗑️ تمت إزالة {channel.mention} من القائمة.")
+
+    # =====================================================
+    # SLASH: عام
+    # =====================================================
+
+    @app_commands.command(name="bothelp", description="عرض مساعدة بوت البحث")
+    async def slash_help(self, interaction: discord.Interaction):
+        await interaction.response.send_message(embed=build_help_embed(), ephemeral=True)
+
+    @app_commands.command(name="search", description="البحث عن سكربتات من المصادر المتاحة")
+    @app_commands.guild_only()
+    @app_commands.describe(
+        query="اسم الماب أو السكربت",
+        source="المصدر",
+        mode="مجاني أو مدفوع",
+        verified="موثق فقط (true) أو غير موثق (false)",
+        patched="حسب حالة التحديث",
+        key_system="مع مفتاح (true) أو بدون (false)",
+        universal="يونيفيرسال فقط",
+        mobile_only="يعمل على الجوال فقط",
+        sort_by="طريقة الترتيب",
+        sort_order="الاتجاه",
+    )
+    @app_commands.choices(source=SOURCE_CHOICES, mode=MODE_CHOICES, sort_by=SORT_CHOICES, sort_order=ORDER_CHOICES)
+    async def slash_search(
+        self,
+        interaction: discord.Interaction,
+        query: str,
+        source: str = "all",
+        mode: str = "any",
+        verified: Optional[bool] = None,
+        patched: Optional[bool] = None,
+        key_system: Optional[bool] = None,
+        universal: Optional[bool] = None,
+        mobile_only: Optional[bool] = None,
+        sort_by: str = "relevance",
+        sort_order: str = "desc",
+    ):
+        query = clean_text(query)
+        if len(query) < 2:
+            await interaction.response.send_message("❌ اكتب اسم أطول شوي.", ephemeral=True)
+            return
+        if self._on_cooldown(interaction.user.id, interaction.guild_id or 0):
+            await interaction.response.send_message("⏳ خفف شوي، جرب بعد ثواني.", ephemeral=True)
+            return
+
+        await interaction.response.defer()
+
+        filters = {
+            "mode": mode,
+            "verified": verified,
+            "patched": patched,
+            "key_system": key_system,
+            "universal": universal,
+            "mobile_only": mobile_only,
+            "sort_by": sort_by,
+            "sort_order": sort_order,
+        }
+        sources = ENABLED_SOURCES if source == "all" else (source,)
+
+        rows, had_error = await self.search(query, sources)
+        rows = apply_filters(rows, filters, query)
+        await self._send_rows_via_interaction(interaction, rows, query, had_error)
+
+    @app_commands.command(name="fetch", description="تصفح سكربتات ScriptBlox مع فلاتر")
+    @app_commands.guild_only()
+    @app_commands.describe(
+        mode="مجاني أو مدفوع",
+        verified="موثق فقط",
+        patched="حسب حالة التحديث",
+        key_system="مع مفتاح أو بدون",
+        universal="يونيفيرسال فقط",
+        sort_by="الترتيب",
+        sort_order="الاتجاه",
+        owner="اسم صانع السكربت",
+        place_id="معرف مكان اللعب (Place ID)",
+        max_results="عدد النتائج (1-20)",
+    )
+    @app_commands.choices(mode=MODE_CHOICES, sort_by=FETCH_SORT_CHOICES, sort_order=ORDER_CHOICES)
+    async def slash_fetch(
+        self,
+        interaction: discord.Interaction,
+        mode: str = "any",
+        verified: Optional[bool] = None,
+        patched: Optional[bool] = None,
+        key_system: Optional[bool] = None,
+        universal: Optional[bool] = None,
+        sort_by: str = "views",
+        sort_order: str = "desc",
+        owner: Optional[str] = None,
+        place_id: Optional[str] = None,
+        max_results: app_commands.Range[int, 1, 20] = 20,
+    ):
+        await interaction.response.defer()
+
+        params: Dict[str, Any] = {"page": 1, "max": max_results, "sortBy": sort_by, "order": sort_order}
+        if mode != "any":
+            params["mode"] = mode
+        if verified is not None:
+            params["verified"] = "1" if verified else "0"
+        if patched is not None:
+            params["patched"] = "1" if patched else "0"
+        if key_system is not None:
+            params["key"] = "1" if key_system else "0"
+        if universal is not None:
+            params["universal"] = "1" if universal else "0"
+        if owner:
+            params["owner"] = owner
+        if place_id:
+            params["placeId"] = place_id
+
+        data, error = await self.http.get_json("https://scriptblox.com/api/script/fetch", params=params)
+        rows = [_normalize_row(item, "scriptblox") for item in rows_from(data, ("result", "scripts"))]
+        await self._send_rows_via_interaction(interaction, rows, owner or place_id or "ScriptBlox", error)
+
+    @app_commands.command(name="trending", description="أكثر السكربتات رواجًا الآن")
+    @app_commands.guild_only()
+    @app_commands.describe(api="المصدر")
+    @app_commands.choices(api=[
+        app_commands.Choice(name="ScriptBlox", value="scriptblox"),
+        app_commands.Choice(name="RScripts", value="rscripts"),
+    ])
+    async def slash_trending(self, interaction: discord.Interaction, api: str = "scriptblox"):
+        await interaction.response.defer()
+        rows, error = await self._fetch_trending(api)
+        await self._send_rows_via_interaction(interaction, rows, "الرائج الآن", error)
+
+    @app_commands.command(name="script", description="جلب سكربت محدد بالمعرف أو الـ slug")
+    @app_commands.guild_only()
+    @app_commands.describe(script_id="معرف السكربت أو الـ slug", api="المصدر")
+    @app_commands.choices(api=[
+        app_commands.Choice(name="ScriptBlox", value="scriptblox"),
+        app_commands.Choice(name="RScripts", value="rscripts"),
+    ])
+    async def slash_script(self, interaction: discord.Interaction, script_id: str, api: str = "scriptblox"):
+        await interaction.response.defer()
+        row = await self._fetch_one(api, clean_text(script_id))
+        if row is None:
+            await interaction.followup.send("❌ ما لقيت السكربت بهذا المعرف.", ephemeral=True)
+            return
+        await self._send_rows_via_interaction(interaction, [row], row.get("title", script_id))
+
+    @app_commands.command(name="executors", description="قائمة الإكسبلويترات المتاحة")
+    @app_commands.guild_only()
+    async def slash_executors(self, interaction: discord.Interaction):
+        await interaction.response.defer()
+
+        data, error = await self.http.get_json("https://scriptblox.com/api/executor/list")
+        executors = [item for item in data if isinstance(item, dict)] if isinstance(data, list) else []
+        if not executors:
+            text = "❌ ما قدرت أجيب قائمة الإكسبلويترات الحين." if error else "ما فيه إكسبلويترات مسجلة حاليًا."
+            await interaction.followup.send(text, ephemeral=True)
+            return
+
+        per_page = 5
+        total_pages = math.ceil(len(executors) / per_page)
+
+        def render(index: int) -> discord.Embed:
+            embed = discord.Embed(
+                title="🎮 الإكسبلويترات المتاحة",
+                description=f"المصدر: ScriptBlox • الصفحة {index + 1}/{total_pages}",
+                color=0x206694,
             )
+            for item in executors[index * per_page:(index + 1) * per_page]:
+                lines = [
+                    f"**المنصة:** {clean_text(item.get('platform'), '—')}",
+                    f"**النوع:** {clean_text(item.get('type'), '—')}",
+                    f"**الحالة:** {'❌ متضرر' if item.get('patched') else '✅ يعمل'}",
+                    f"**الإصدار:** {clean_text(item.get('version'), '—')}",
+                ]
+                links = []
+                website = clean_text(item.get("website"))
+                discord_link = clean_text(item.get("discord"))
+                if website.startswith(("http://", "https://")):
+                    links.append(f"[الموقع]({website})")
+                if discord_link.startswith(("http://", "https://")):
+                    links.append(f"[ديسكورد]({discord_link})")
+                if links:
+                    lines.append(" • ".join(links))
+                embed.add_field(
+                    name=truncate(clean_text(item.get("name"), "Unknown"), 250),
+                    value="\n".join(lines)[:1024],
+                    inline=False,
+                )
+            embed.set_footer(text="Team Fime • ScriptBlox")
+            return embed
+
+        view = PagerView(interaction.user.id, total_pages, render)
+        kwargs: Dict[str, Any] = {"embed": render(0), "allowed_mentions": NO_MENTIONS, "wait": True}
+        if total_pages > 1:
+            kwargs["view"] = view
+        message = await interaction.followup.send(**kwargs)
+        view.message = message
+
+    @app_commands.command(name="rscripts_fetch", description="تصفح RScripts مع فلاتر")
+    @app_commands.guild_only()
+    @app_commands.describe(
+        verified_only="موثق فقط",
+        no_key_system="بدون نظام مفتاح فقط",
+        mobile_only="يعمل على الجوال فقط",
+        unpatched="غير متضرر فقط",
+        order_by="الترتيب حسب (createdAt, updatedAt, views, name)",
+        sort="الاتجاه (asc أو desc)",
+        max_results="عدد النتائج (1-20)",
+    )
+    async def slash_rscripts_fetch(
+        self,
+        interaction: discord.Interaction,
+        verified_only: Optional[bool] = None,
+        no_key_system: Optional[bool] = None,
+        mobile_only: Optional[bool] = None,
+        unpatched: Optional[bool] = None,
+        order_by: Optional[str] = None,
+        sort: Optional[str] = None,
+        max_results: app_commands.Range[int, 1, 20] = 20,
+    ):
+        await interaction.response.defer()
+
+        params: Dict[str, Any] = {"q": "", "page": 1}
+        if verified_only is not None:
+            params["verifiedOnly"] = as_flag(verified_only)
+        if no_key_system is not None:
+            params["noKeySystem"] = as_flag(no_key_system)
+        if mobile_only is not None:
+            params["mobileOnly"] = as_flag(mobile_only)
+        if unpatched is not None:
+            params["unpatched"] = as_flag(unpatched)
+        if order_by:
+            params["orderBy"] = order_by
+        if sort:
+            params["sort"] = sort
+
+        data, error = await self.http.get_json("https://rscripts.net/api/v2/scripts", params=params)
+        rows = [_normalize_row(item, "rscripts") for item in rows_from(data, ("scripts",))][:max_results]
+        await self._send_rows_via_interaction(interaction, rows, "RScripts", error)
+
+    @app_commands.command(name="rscripts_by_user", description="سكربتات صانع معين في RScripts")
+    @app_commands.guild_only()
+    @app_commands.describe(username="اسم الصانع")
+    async def slash_rscripts_by_user(self, interaction: discord.Interaction, username: str):
+        await interaction.response.defer()
+        username = clean_text(username)
+        rows = await self._fetch_rscripts_user(username)
+        await self._send_rows_via_interaction(interaction, rows, f"سكربتات {username}")
+
+    # =====================================================
+    # SLASH: روم البحث ورومات المساعدة (صلاحية إدارة السيرفر)
+    # =====================================================
+
+    @app_commands.command(name="setscriptroom", description="تحديد روم البحث التلقائي")
+    @app_commands.guild_only()
+    @app_commands.describe(channel="الروم اللي يصير فيه البحث التلقائي")
+    @app_commands.checks.has_permissions(manage_guild=True)
+    async def slash_set_search_room(self, interaction: discord.Interaction, channel: discord.TextChannel):
+        search_rooms[str(interaction.guild.id)] = str(channel.id)
+        save_search_rooms()
+        await interaction.response.send_message(
+            f"✅ تم تحديد {channel.mention} كروم البحث التلقائي.\n"
+            "🔎 العضو يكتب اسم الماب (عربي أو إنجليزي) والبوت يبحث له فورًا."
+        )
+
+    @app_commands.command(name="searchroom", description="عرض روم البحث التلقائي")
+    @app_commands.guild_only()
+    async def slash_show_search_room(self, interaction: discord.Interaction):
+        channel_id = search_rooms.get(str(interaction.guild.id))
+        if not channel_id:
+            await interaction.response.send_message("❌ ما تم تحديد روم للبحث التلقائي.", ephemeral=True)
+            return
+        channel = interaction.guild.get_channel(int(channel_id))
+        if not channel:
+            await interaction.response.send_message("⚠️ روم البحث المحفوظ لم يعد موجودًا.", ephemeral=True)
+            return
+        await interaction.response.send_message(f"🔎 روم البحث التلقائي الحالي: {channel.mention}")
+
+    @app_commands.command(name="addsearchhelproom", description="إضافة روم يظهر للعضو إذا ما لقى نتيجة")
+    @app_commands.guild_only()
+    @app_commands.describe(channel="الروم اللي تبي تضيفه")
+    @app_commands.checks.has_permissions(manage_guild=True)
+    async def slash_add_help_room(self, interaction: discord.Interaction, channel: discord.TextChannel):
+        ids = get_help_channel_ids(interaction.guild.id)
+        if str(channel.id) not in ids:
+            ids.append(str(channel.id))
+        set_help_channel_ids(interaction.guild.id, ids)
+        await interaction.response.send_message(
+            f"✅ تمت إضافة {channel.mention} لقائمة رومات المساعدة.", ephemeral=True
+        )
+
+    @app_commands.command(name="removesearchhelproom", description="إزالة روم من رومات المساعدة")
+    @app_commands.guild_only()
+    @app_commands.describe(channel="الروم اللي تبي تزيله")
+    @app_commands.checks.has_permissions(manage_guild=True)
+    async def slash_remove_help_room(self, interaction: discord.Interaction, channel: discord.TextChannel):
+        ids = [item for item in get_help_channel_ids(interaction.guild.id) if item != str(channel.id)]
+        set_help_channel_ids(interaction.guild.id, ids)
+        await interaction.response.send_message(f"🗑️ تمت إزالة {channel.mention} من القائمة.", ephemeral=True)
+
+    @app_commands.command(name="searchhelprooms", description="عرض رومات المساعدة المحددة")
+    @app_commands.guild_only()
+    async def slash_show_help_rooms(self, interaction: discord.Interaction):
+        mentions = []
+        for channel_id in get_help_channel_ids(interaction.guild.id):
+            channel = interaction.guild.get_channel(int(channel_id))
+            if channel:
+                mentions.append(channel.mention)
+        text = ", ".join(mentions) if mentions else "لا توجد رومات محددة."
+        await interaction.response.send_message(f"📚 **رومات المساعدة:**\n{text}", ephemeral=True)
+
+
+# ============================================================
+# SETUP
+# ============================================================
+
+async def setup(bot: commands.Bot):
+    await bot.add_cog(GameSearchCog(bot))
+    print("✅ Game search cog loaded (bot4 v8.0).")
