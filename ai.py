@@ -2,24 +2,28 @@
 """
 Fime AI - مساعد الذكاء الاصطناعي لسيرفر Team Fime (Discord Cog)
 
-ملف واحد جاهز للاستبدال. المطلوب في البوت:
+يتصل مباشرة بـ Gemini API الرسمية (generateContent) بمفتاح Google AI Studio.
+لا يستخدم أي طبقة OpenAI، ولا يحتاج AI_BASE_URL.
+
+intents المطلوبة في البوت:
     intents.guilds = True
     intents.message_content = True
 
 المتغيرات (Environment Variables):
-    AI_API_KEY              مفتاح Gemini من aistudio.google.com/apikey (مطلوب)
-    AI_MODEL                مثال: gemini-2.5-flash
-    AI_BASE_URL             اختياري. فاضي = endpoint جيمني المتوافق مع OpenAI
-    AI_PROVIDER_NAME        اسم يظهر في /ai status
+    AI_API_KEY              مفتاح Gemini من Google AI Studio (مطلوب)
+    AI_MODEL                اسم الموديل. مثال: gemini-2.5-flash
+    AI_PROVIDER_NAME        اسم يظهر في /ai status (اختياري)
     AI_CHANNEL_ID           روم AI الافتراضية (تُستخدم فقط إذا كانت موجودة في السيرفر)
     FIME_OWNER_ID           ايدي المالك (صلاحيات كاملة على أوامر AI)
-    AI_REASONING_EFFORT     افتراضيًا none لتوفير التوكنز. اتركه فاضي لعدم إرسال الحقل
+    AI_THINKING_BUDGET      افتراضيًا 0 (بدون تفكير لتوفير التوكنز). اتركه فاضي لعدم إرسال الحقل
     AI_MAX_OUTPUT_TOKENS    افتراضي 600
     AI_MEMORY_LIMIT         افتراضي 8 رسائل لكل عضو
     AI_USER_COOLDOWN        افتراضي 6 ثواني بين طلبين للعضو
     AI_USER_DAILY_LIMIT     افتراضي 30 طلب يوميًا لكل عضو
     AI_GLOBAL_DAILY_LIMIT   افتراضي 250 طلب يوميًا للبوت كله (اضبطه حسب باقتك)
     AI_ROOM_CONTEXT_LIMIT   افتراضي 25 روم تُرسل للنموذج في كل طلب
+
+ملاحظة: AI_BASE_URL و AI_REASONING_EFFORT ما عادوا مستخدمين، احذفهم من Environment.
 """
 
 import os
@@ -55,13 +59,35 @@ def _env_int(name: str, default: int) -> int:
         return default
 
 
+def _normalize_model_name(value: str) -> str:
+    value = (value or "").strip()
+    if value.startswith("models/"):
+        value = value[len("models/"):]
+    return value or "gemini-2.5-flash"
+
+
+def _read_thinking_budget() -> Optional[int]:
+    """0 = بدون تفكير (الافتراضي). None = لا نرسل الحقل نهائيًا."""
+    raw = os.getenv("AI_THINKING_BUDGET")
+    if raw is None:
+        return 0
+    raw = raw.strip()
+    if raw == "":
+        return None
+    try:
+        return max(0, int(raw))
+    except ValueError:
+        return 0
+
+
 AI_API_KEY = _env_str("AI_API_KEY").strip('"\'')
-AI_BASE_URL = (_env_str("AI_BASE_URL") or "https://generativelanguage.googleapis.com/v1beta/openai/").rstrip("/")
-AI_MODEL = _env_str("AI_MODEL") or "gemini-2.5-flash"
+AI_MODEL = _normalize_model_name(_env_str("AI_MODEL"))
 AI_PROVIDER_NAME = _env_str("AI_PROVIDER_NAME") or "Gemini API"
-AI_REASONING_EFFORT = _env_str("AI_REASONING_EFFORT", "none")
+AI_THINKING_BUDGET = _read_thinking_budget()
 AI_CHANNEL_ID = _env_int("AI_CHANNEL_ID", 0)
 FIME_OWNER_ID = _env_int("FIME_OWNER_ID", 0)
+
+GEMINI_API_BASE = "https://generativelanguage.googleapis.com/v1beta"
 
 MAX_OUTPUT_TOKENS = _env_int("AI_MAX_OUTPUT_TOKENS", 600)
 MEMORY_LIMIT = _env_int("AI_MEMORY_LIMIT", 8)
@@ -76,7 +102,7 @@ GLOBAL_DAILY_LIMIT = _env_int("AI_GLOBAL_DAILY_LIMIT", 250)
 REQUEST_TIMEOUT = 30
 MAX_RETRIES = 2
 MAX_CONCURRENT_REQUESTS = 4
-RETRYABLE_STATUS = (408, 425, 429, 500, 502, 503, 504)
+RETRYABLE_STATUS = (408, 429, 500, 502, 503, 504)
 
 KNOWLEDGE_FILE = Path("ai_server_knowledge.json")
 EMOJI_FILE = Path("ai_emoji_settings.json")
@@ -133,7 +159,7 @@ BASE_PROMPT = """
 # =========================================================
 
 class AIError(Exception):
-    """خطأ داخلي. التفاصيل تروح للكونسول، والمستخدم يشوف user_message فقط."""
+    """خطأ داخلي. التفاصيل تروح للكونسول والأدمن، والمستخدم يشوف user_message فقط."""
 
     def __init__(self, detail: str, user_message: str = GENERIC_ERROR):
         super().__init__(detail)
@@ -165,22 +191,37 @@ def safe_int(value: Any, default: int = 0) -> int:
         return default
 
 
-def clean_error(error: Exception) -> str:
+def clean_error(error: Any) -> str:
     text = str(error)
     if AI_API_KEY:
         text = text.replace(AI_API_KEY, "[REDACTED]")
     return truncate_text(text, 500)
 
 
+def gemini_endpoint(model: str) -> str:
+    return f"{GEMINI_API_BASE}/models/{model}:generateContent"
+
+
 def status_hint(status: int) -> str:
     hints = {
-        400: "طلب غير صالح: راجع AI_MODEL وإعدادات الطلب",
-        401: "المفتاح غير صالح: راجع AI_API_KEY",
-        403: "صلاحية مرفوضة: راجع المفتاح وتفعيل الـ API",
-        404: "الموديل غير موجود: راجع AI_MODEL",
-        429: "تجاوزت حد الاستخدام (rate/quota): راجع حدود باقتك",
+        400: "طلب غير صالح (راجع الإعدادات أو اسم الموديل)",
+        401: "المفتاح غير صالح (راجع AI_API_KEY)",
+        403: "صلاحية مرفوضة (المفتاح ما عنده صلاحية، أو الـ API غير مفعّل)",
+        404: "الموديل غير موجود أو ما يدعم generateContent (راجع AI_MODEL)",
+        429: "تجاوزت حد الاستخدام (quota أو rate limit)",
     }
     return f"HTTP {status} - {hints.get(status, 'خطأ من المزود')}"
+
+
+def google_error_message(body: str) -> str:
+    """يستخرج رسالة الخطأ من Google بدون ما يطبع الجسم كامل."""
+    try:
+        data = json.loads(body)
+        error = data.get("error") or {}
+        text = f"{error.get('status', '')} {error.get('message', '')}".strip()
+        return truncate_text(text, 400) or truncate_text(body, 300)
+    except (json.JSONDecodeError, AttributeError):
+        return truncate_text(body, 300)
 
 
 def split_for_discord(text: str, limit: int = DISCORD_LIMIT) -> List[str]:
@@ -286,7 +327,39 @@ def is_expensive_request(text: str) -> bool:
 
 
 # =========================================================
-# USAGE LIMITER (محفوظ في ملف عشان ما يتصفر بعد كل ريستart)
+# JSON STORAGE
+# =========================================================
+
+def load_json(path: Path, default: Any) -> Any:
+    try:
+        if not path.exists():
+            return default
+        with path.open("r", encoding="utf-8") as file:
+            return json.load(file)
+    except Exception as error:
+        print(f"⚠️ تعذر قراءة {path.name}: {clean_error(error)}")
+        return default
+
+
+def save_json(path: Path, data: Any) -> bool:
+    temp_path = path.with_suffix(".tmp")
+    try:
+        with temp_path.open("w", encoding="utf-8") as file:
+            json.dump(data, file, ensure_ascii=False, indent=2)
+        temp_path.replace(path)
+        return True
+    except Exception as error:
+        print(f"⚠️ تعذر حفظ {path.name}: {clean_error(error)}")
+        try:
+            if temp_path.exists():
+                temp_path.unlink()
+        except Exception:
+            pass
+        return False
+
+
+# =========================================================
+# USAGE LIMITER (محفوظ في ملف عشان ما يتصفر بعد كل إعادة تشغيل)
 # =========================================================
 
 class UsageLimiter:
@@ -329,38 +402,6 @@ class UsageLimiter:
     def snapshot(self) -> Dict[str, int]:
         self._roll_day()
         return {"global": self.state["global"], "unique_users": len(self.state["users"])}
-
-
-# =========================================================
-# JSON STORAGE
-# =========================================================
-
-def load_json(path: Path, default: Any) -> Any:
-    try:
-        if not path.exists():
-            return default
-        with path.open("r", encoding="utf-8") as file:
-            return json.load(file)
-    except Exception as error:
-        print(f"⚠️ تعذر قراءة {path.name}: {clean_error(error)}")
-        return default
-
-
-def save_json(path: Path, data: Any) -> bool:
-    temp_path = path.with_suffix(".tmp")
-    try:
-        with temp_path.open("w", encoding="utf-8") as file:
-            json.dump(data, file, ensure_ascii=False, indent=2)
-        temp_path.replace(path)
-        return True
-    except Exception as error:
-        print(f"⚠️ تعذر حفظ {path.name}: {clean_error(error)}")
-        try:
-            if temp_path.exists():
-                temp_path.unlink()
-        except Exception:
-            pass
-        return False
 
 
 # =========================================================
@@ -503,8 +544,9 @@ class ServerKnowledgeManager:
 
         if current_channel is not None:
             current = next((r for r in rooms if r.get("id") == current_channel.id), None)
-            if current and current not in selected:
-                selected = [current] + selected[:-1]
+            if current is not None and all(r is not current for r in selected):
+                # نضيف الروم الحالية في البداية بدون ما نطيح أي روم ثانية
+                selected = [current] + selected[: max(ROOM_CONTEXT_LIMIT - 1, 0)]
 
         lines = [
             f"اسم السيرفر: {guild.name}",
@@ -606,8 +648,9 @@ class FimeAI(commands.Cog):
         self.api_slots = asyncio.Semaphore(MAX_CONCURRENT_REQUESTS)
         self.session: Optional[aiohttp.ClientSession] = None
         self.background_tasks: set = set()
-        self.reasoning_field_ok = bool(AI_REASONING_EFFORT)
-        self.ready = bool(AI_API_KEY and AI_BASE_URL and AI_MODEL)
+        self.thinking_field_ok = AI_THINKING_BUDGET is not None
+        self.ready = bool(AI_API_KEY and AI_MODEL)
+        self._model_checked = False
         self._check_config()
         print("🤖 Fime AI initialized")
 
@@ -620,9 +663,15 @@ class FimeAI(commands.Cog):
             print("❌ AI_API_KEY غير موجود في Environment. Fime AI معطل.")
             return
         if not AI_API_KEY.startswith("AIza"):
-            print("⚠️ المفتاح لا يبدو مفتاح Gemini (عادةً يبدأ بـ AIza). إذا فشل الاتصال، راجع المفتاح.")
-        print(f"✅ Fime AI endpoint: {AI_BASE_URL}")
+            print("⚠️ المفتاح لا يبدو مفتاح Gemini من AI Studio (عادةً يبدأ بـ AIza).")
         print(f"🧠 Fime AI model: {AI_MODEL}")
+
+    def _get_session(self) -> aiohttp.ClientSession:
+        if self.session is None or self.session.closed:
+            self.session = aiohttp.ClientSession(
+                timeout=aiohttp.ClientTimeout(total=REQUEST_TIMEOUT)
+            )
+        return self.session
 
     def _spawn(self, coro) -> None:
         task = asyncio.create_task(coro)
@@ -643,7 +692,30 @@ class FimeAI(commands.Cog):
         for guild in self.bot.guilds:
             if not self.knowledge.get_server(guild.id).get("rooms"):
                 self.knowledge.scan_guild(guild)
+        if self.ready and not self._model_checked:
+            self._model_checked = True
+            self._spawn(self._verify_model())
         print("✅ Fime AI knowledge ready.")
+
+    async def _verify_model(self):
+        """يتحقق من الموديل مرة وحدة عند التشغيل، ويطبع سبب واضح لو فيه مشكلة."""
+        try:
+            session = self._get_session()
+            async with session.get(
+                f"{GEMINI_API_BASE}/models/{AI_MODEL}",
+                headers={"x-goog-api-key": AI_API_KEY},
+            ) as response:
+                if response.status == 200:
+                    print(f"✅ Gemini model OK: {AI_MODEL}")
+                elif response.status == 404:
+                    print(
+                        f"❌ الموديل `{AI_MODEL}` غير متاح لهذا المفتاح. "
+                        "غيّر AI_MODEL في Environment (مثال: gemini-2.5-flash)."
+                    )
+                else:
+                    print(f"⚠️ تعذر التحقق من الموديل (HTTP {response.status}). جرب /ai test.")
+        except Exception as error:
+            print(f"⚠️ تعذر التحقق من الموديل: {clean_error(error)}")
 
     @commands.Cog.listener()
     async def on_guild_join(self, guild: discord.Guild):
@@ -672,6 +744,7 @@ class FimeAI(commands.Cog):
         channel: Any,
         user_message: str,
     ) -> List[Dict[str, str]]:
+        """قائمة رسائل داخلية بصيغة (role, content). تتحول لصيغة Gemini داخل _generate."""
         system = (
             BASE_PROMPT
             + "\n=== سياق السيرفر ===\n"
@@ -686,70 +759,106 @@ class FimeAI(commands.Cog):
         return messages
 
     # -----------------------------------------------------
-    # API
+    # GEMINI API (generateContent)
     # -----------------------------------------------------
 
     @staticmethod
-    def _extract_content(body: str) -> str:
+    def _to_gemini_contents(messages: List[Dict[str, str]]) -> Tuple[str, List[Dict[str, Any]]]:
+        """يفصل رسالة النظام، ويحوّل assistant إلى model لأن Gemini يستخدم هذي الأدوار."""
+        system_texts: List[str] = []
+        contents: List[Dict[str, Any]] = []
+        for item in messages:
+            role = item.get("role")
+            text = clean_text(item.get("content"))
+            if not text:
+                continue
+            if role == "system":
+                system_texts.append(text)
+                continue
+            contents.append({
+                "role": "model" if role == "assistant" else "user",
+                "parts": [{"text": text}],
+            })
+        return "\n\n".join(system_texts), contents
+
+    @staticmethod
+    def _extract_answer(body: str) -> str:
         try:
             data = json.loads(body)
         except json.JSONDecodeError as error:
-            raise AIError("provider returned invalid JSON") from error
+            raise AIError("invalid JSON from Gemini") from error
 
-        choices = data.get("choices") or []
-        if not choices:
-            raise AIError("provider returned no choices")
+        if not isinstance(data, dict):
+            raise AIError("unexpected response shape")
 
-        choice = choices[0]
-        content = (choice.get("message") or {}).get("content")
-        if isinstance(content, list):
-            content = "".join(
-                part.get("text", "") if isinstance(part, dict) else str(part)
-                for part in content
-            )
-        content = clean_text(content)
-        finish_reason = choice.get("finish_reason")
-
-        if not content:
-            if finish_reason == "length":
+        candidates = data.get("candidates") or []
+        if not candidates:
+            block = (data.get("promptFeedback") or {}).get("blockReason")
+            if block:
                 raise AIError(
-                    "empty content due to length limit",
+                    f"prompt blocked: {block}",
+                    user_message="ما أقدر أرد على هذي الرسالة، جرب صياغة ثانية.",
+                )
+            raise AIError("no candidates in response")
+
+        candidate = candidates[0]
+        parts = (candidate.get("content") or {}).get("parts") or []
+        # نتجاهل أجزاء التفكير (thought) ونرجع النص الفعلي فقط
+        text = "".join(
+            str(part.get("text") or "")
+            for part in parts
+            if isinstance(part, dict) and not part.get("thought")
+        )
+        text = clean_text(text)
+        reason = candidate.get("finishReason")
+
+        if not text:
+            if reason == "MAX_TOKENS":
+                raise AIError(
+                    "empty due to MAX_TOKENS",
                     user_message="الرد كان أطول من الحد المسموح، اختصر سؤالك.",
                 )
-            raise AIError(f"empty content (finish_reason={finish_reason})")
+            if reason == "SAFETY":
+                raise AIError(
+                    "blocked by safety filters",
+                    user_message="ما أقدر أرد على هذي الرسالة، جرب صياغة ثانية.",
+                )
+            raise AIError(f"empty content (finishReason={reason})")
 
-        if finish_reason == "length":
-            content = content.rstrip() + "…"
-        return content
+        if reason == "MAX_TOKENS":
+            text = text.rstrip() + "…"
+        return text
 
     async def _post(self, payload: Dict[str, Any]) -> Tuple[int, str]:
-        if self.session is None or self.session.closed:
-            self.session = aiohttp.ClientSession(
-                timeout=aiohttp.ClientTimeout(total=REQUEST_TIMEOUT)
-            )
+        session = self._get_session()
         headers = {
-            "Authorization": f"Bearer {AI_API_KEY}",
+            "x-goog-api-key": AI_API_KEY,  # المفتاح في الهيدر، مو في الرابط
             "Content-Type": "application/json",
         }
-        async with self.session.post(
-            f"{AI_BASE_URL}/chat/completions",
-            headers=headers,
-            json=payload,
-        ) as response:
+        async with session.post(gemini_endpoint(AI_MODEL), headers=headers, json=payload) as response:
             return response.status, await response.text()
 
-    async def request_ai(self, messages: List[Dict[str, str]]) -> str:
+    async def _generate(self, messages: List[Dict[str, str]], max_tokens: int) -> str:
         if not self.ready:
             raise AIError("AI_API_KEY or AI_MODEL missing")
 
-        payload: Dict[str, Any] = {
-            "model": AI_MODEL,
-            "messages": messages,
-            "max_tokens": MAX_OUTPUT_TOKENS,
+        system_text, contents = self._to_gemini_contents(messages)
+        if not contents:
+            raise AIError("no contents to send")
+
+        generation_config: Dict[str, Any] = {
+            "maxOutputTokens": max_tokens,
             "temperature": 0.7,
         }
-        if AI_REASONING_EFFORT and self.reasoning_field_ok:
-            payload["reasoning_effort"] = AI_REASONING_EFFORT
+        if self.thinking_field_ok and AI_THINKING_BUDGET is not None:
+            generation_config["thinkingConfig"] = {"thinkingBudget": AI_THINKING_BUDGET}
+
+        payload: Dict[str, Any] = {
+            "contents": contents,
+            "generationConfig": generation_config,
+        }
+        if system_text:
+            payload["systemInstruction"] = {"parts": [{"text": system_text}]}
 
         last_error = "unknown error"
 
@@ -765,17 +874,18 @@ class FimeAI(commands.Cog):
                     break
 
                 if 200 <= status < 300:
-                    return self._extract_content(body)
+                    return self._extract_answer(body)
 
-                if status == 400 and "reasoning_effort" in payload:
-                    # بعض المزودات ما تدعم الحقل. نشيله ونعيد المحاولة.
-                    payload.pop("reasoning_effort")
-                    self.reasoning_field_ok = False
-                    print("ℹ️ المزود ما يدعم reasoning_effort، تم تعطيله تلقائيًا.")
+                if status == 400 and "thinkingConfig" in generation_config:
+                    # بعض الموديلات (مثل Pro) ما تقبل budget=0. نشيل الحقل ونعيد المحاولة.
+                    generation_config.pop("thinkingConfig")
+                    self.thinking_field_ok = False
+                    print("ℹ️ الموديل ما يقبل thinkingConfig، تم تعطيله تلقائيًا.")
                     continue
 
-                last_error = f"{status_hint(status)} | {truncate_text(body, 400)}"
-                print(f"❌ Fime AI: {clean_error(RuntimeError(last_error))}")
+                details = google_error_message(body)
+                last_error = f"{status_hint(status)} | {details}"
+                print(f"❌ Fime AI: {status_hint(status)} | {details}")
                 if status in RETRYABLE_STATUS and attempt < MAX_RETRIES:
                     await asyncio.sleep(1.5 * (attempt + 1))
                     continue
@@ -809,7 +919,7 @@ class FimeAI(commands.Cog):
     async def ask_ai(self, guild: discord.Guild, user: discord.abc.User, channel: Any, content: str) -> str:
         async with self.user_locks[(guild.id, user.id)]:
             messages = self.build_messages(guild, user, channel, content)
-            answer = await self.request_ai(messages)
+            answer = await self._generate(messages, MAX_OUTPUT_TOKENS)
             answer = self.normalize_channel_mentions(guild, answer)
 
             self.memory.add(guild.id, user.id, "user", content)
@@ -940,11 +1050,18 @@ class FimeAI(commands.Cog):
         guild_only=True,
     )
 
-    # ---------- status / toggle / usage ----------
+    # ---------- status / test / toggle / usage ----------
 
     @ai_group.command(name="status", description="عرض حالة Fime AI")
     async def ai_status(self, interaction: discord.Interaction):
         enabled = self.knowledge.is_enabled(interaction.guild.id)
+        if AI_THINKING_BUDGET is None:
+            thinking = "افتراضي الموديل"
+        elif AI_THINKING_BUDGET == 0:
+            thinking = "معطل (0)"
+        else:
+            thinking = f"{AI_THINKING_BUDGET} توكن"
+
         embed = discord.Embed(
             title="🤖 Fime AI",
             description="حالة نظام الذكاء الاصطناعي",
@@ -952,7 +1069,7 @@ class FimeAI(commands.Cog):
         )
         embed.add_field(name="المزود", value=AI_PROVIDER_NAME, inline=True)
         embed.add_field(name="الموديل", value=f"`{AI_MODEL}`", inline=True)
-        embed.add_field(name="التفكير", value=f"`{AI_REASONING_EFFORT}`" if AI_REASONING_EFFORT else "معطل", inline=True)
+        embed.add_field(name="التفكير", value=thinking, inline=True)
         embed.add_field(name="الذاكرة", value=f"{MEMORY_LIMIT} رسائل لكل عضو", inline=True)
         embed.add_field(
             name="الحدود",
@@ -967,6 +1084,26 @@ class FimeAI(commands.Cog):
             state = "🟢 يعمل"
         embed.add_field(name="الحالة", value=state, inline=True)
         await interaction.response.send_message(embed=embed, ephemeral=True)
+
+    @ai_group.command(name="test", description="اختبار الاتصال بـ Gemini وعرض سبب الخطأ إن وجد")
+    async def ai_test(self, interaction: discord.Interaction):
+        if not self._is_admin(interaction):
+            return await self._deny(interaction)
+        await interaction.response.defer(ephemeral=True)
+        if not self.ready:
+            await interaction.followup.send("❌ AI_API_KEY أو AI_MODEL غير موجود في Environment.", ephemeral=True)
+            return
+        try:
+            answer = await self._generate([{"role": "user", "content": "قل كلمة: تمام"}], max_tokens=30)
+            await interaction.followup.send(
+                f"✅ الاتصال شغال\nالموديل: `{AI_MODEL}`\nالرد: {truncate_text(answer, 120)}",
+                ephemeral=True,
+            )
+        except AIError as error:
+            await interaction.followup.send(
+                f"❌ فشل الاختبار\nالموديل: `{AI_MODEL}`\nالسبب: {clean_error(error)}",
+                ephemeral=True,
+            )
 
     @ai_group.command(name="toggle", description="تشغيل أو إيقاف Fime AI في هذا السيرفر")
     async def ai_toggle(self, interaction: discord.Interaction):
