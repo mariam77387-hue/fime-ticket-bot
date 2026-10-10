@@ -4555,6 +4555,8 @@ async def on_command_error(ctx, error):
 # تشغيل البوت
 # =========================================================
 
+                   
+
 if __name__ == "__main__":
     if not TOKEN:
         raise RuntimeError(
@@ -4596,7 +4598,7 @@ if __name__ == "__main__":
                 raise
 
             # =====================================================
-            # تحميل نظام الخط + منشن الدخول من bot5.py
+            # تحميل نظام الخط ومنشن الدخول من bot5.py
             # =====================================================
             try:
                 await bot.load_extension("bot5")
@@ -4613,10 +4615,7 @@ if __name__ == "__main__":
             # =====================================================
             try:
                 await bot.load_extension("bot6")
-                print(
-                    "✅ تم تحميل نظام Stock Alerts "
-                    "من bot6.py"
-                )
+                print("✅ تم تحميل نظام Stock Alerts من bot6.py")
             except Exception as error:
                 print(f"❌ تعذر تحميل bot6.py: {error}")
                 raise
@@ -4634,7 +4633,7 @@ if __name__ == "__main__":
                 print(f"❌ تعذر تحميل bot7.py: {error}")
                 raise
 
-            =====================================================
+            # =====================================================
             # تحميل نظام الذكاء الاصطناعي من ai.py
             # =====================================================
             try:
@@ -4649,22 +4648,15 @@ if __name__ == "__main__":
             # =====================================================
             try:
                 keep_alive()
-                print(
-                    "✅ تم تشغيل Keep Alive باستخدام Waitress."
-                )
+                print("✅ تم تشغيل Keep Alive باستخدام Waitress.")
             except Exception as error:
-                print(
-                    f"❌ تعذر تشغيل Keep Alive: {error}"
-                )
+                print(f"❌ تعذر تشغيل Keep Alive: {error}")
                 raise
 
             # =====================================================
             # تشغيل Discord Bot
             # =====================================================
-            print(
-                "🤖 جاري تشغيل Team Fime Bot..."
-            )
-
+            print("🤖 جاري تشغيل Team Fime Bot...")
             await bot.start(TOKEN)
 
     try:
@@ -4674,9 +4666,5 @@ if __name__ == "__main__":
         print("🛑 تم إيقاف البوت.")
 
     except Exception as error:
-        print(
-            f"❌ توقف البرنامج بسبب خطأ: {error}"
-        )
+        print(f"❌ توقف البرنامج بسبب خطأ: {error}")
         raise
-             
-         
