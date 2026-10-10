@@ -6,9 +6,9 @@ bot7.py - نظام إدارة ومراقبة متكامل لـ Discord باست�
 - تحديد رتبة الإدارة التي يسمح لها بالتحذير والتايم اوت ومسح الرسائل.
 - تحديد رتبة الحظر ورتبة الطرد.
 - اختصارات بدون prefix للحظر والطرد والتحذير والتايم اوت والمسح.
-- مكافحة سبام الرسائل.
-- مكافحة سبام المنشنات.
-- مكافحة سبام الصور/المرفقات والستيكرات.
+- أمر واحد لتشغيل/إيقاف المراقبة التلقائية مع تأكيد.
+- مكافحة سبام الرسائل والمنشنات وتكرار الرسائل والوسائط وإغراق الأحرف والروابط.
+- رصد موجات الانضمام ومؤشرات حذف القنوات/الرتب والبوتات ذات الصلاحيات الخطرة.
 - نظام تحذيرات محفوظ في bot7_data.json.
 - لوق للإجراءات الإدارية.
 - أوامر فك الحظر وإلغاء التايم اوت وعرض التحذيرات.
@@ -43,6 +43,9 @@ DATA_FILE = Path("bot7_data.json")
 # ويمكن وضع التوكن مكان PUT_BOT_TOKEN_HERE عند الحاجة.
 
 DEFAULT_GUILD_CONFIG = {
+    # جميع الحمايات لا تعمل إلا بعد الموافقة على أمر !مراقبة_تلقائية.
+    "auto_monitoring_enabled": False,
+    "trusted_bot_ids": [],
     "admin_role_id": None,
     "ban_role_id": None,
     "kick_role_id": None,
@@ -428,6 +431,8 @@ async def auto_moderate(message: discord.Message) -> bool:
 
     guild = message.guild
     cfg = get_config(guild.id)
+    if not cfg.get("auto_monitoring_enabled", False):
+        return False
     author = message.author
 
     # الإدارة ومالك السيرفر مستثنون من مكافحة السبام.
@@ -498,6 +503,25 @@ async def auto_moderate(message: discord.Message) -> bool:
                     return True
                 print(f"[AUTO MODERATION] {error}")
 
+    # ---------------------- إغراق الأحرف والروابط ----------------------
+    content = message.content or ""
+    repeated_character = re.search(r"(.)\1{19,}", content, flags=re.DOTALL)
+    url_count = len(re.findall(r"(?:https?://|www\.)\S+", content, flags=re.IGNORECASE))
+    if repeated_character or url_count >= 4:
+        last_action = LAST_AUTO_ACTION.get(key, 0)
+        if now - last_action >= 10:
+            reason = (
+                "إغراق أحرف متكررة بشكل مفرط."
+                if repeated_character else f"إغراق روابط: {url_count} روابط في رسالة واحدة."
+            )
+            await delete_message_safely(message)
+            ok, error = await apply_timeout(author, 3 * 60, reason, bot.user)
+            if ok:
+                await send_log(guild, "Auto Flood Protection", author, bot.user, reason)
+                LAST_AUTO_ACTION[key] = now
+                return True
+            print(f"[AUTO MODERATION] {error}")
+
     # ---------------------- تكرار نفس الرسالة ----------------------
     text = normalize_text(message.content)
     if text:
@@ -520,6 +544,172 @@ async def auto_moderate(message: discord.Message) -> bool:
                 print(f"[AUTO MODERATION] {error}")
 
     return False
+
+
+# ============================================================
+# حماية الانضمام ومراقبة التخريب الجماعي
+# ============================================================
+
+JOIN_HISTORY: dict[int, deque] = defaultdict(lambda: deque(maxlen=100))
+RAID_UNTIL: dict[int, float] = {}
+NUKE_HISTORY: dict[tuple[int, int, str], deque] = defaultdict(lambda: deque(maxlen=20))
+
+DANGEROUS_BOT_PERMISSIONS = (
+    "administrator", "manage_guild", "manage_roles", "manage_channels",
+    "manage_webhooks", "ban_members", "kick_members", "manage_messages",
+)
+
+
+async def find_audit_actor(
+    guild: discord.Guild,
+    action: discord.AuditLogAction,
+    target_id: Optional[int] = None,
+) -> Optional[discord.abc.User]:
+    """يحاول تحديد منفذ العملية من سجل تدقيق Discord، ويعيد None عند غياب الصلاحية."""
+    try:
+        async for entry in guild.audit_logs(limit=8, action=action):
+            created_at = entry.created_at
+            if (discord.utils.utcnow() - created_at).total_seconds() > 20:
+                continue
+            entry_target = getattr(entry, "target", None)
+            if target_id is not None and getattr(entry_target, "id", None) != target_id:
+                continue
+            return entry.user
+    except (discord.Forbidden, discord.HTTPException, AttributeError) as exc:
+        print(f"[SECURITY AUDIT] تعذر قراءة سجل التدقيق في {guild.id}: {exc}")
+    return None
+
+
+async def on_member_join(member: discord.Member):
+    guild = member.guild
+    cfg = get_config(guild.id)
+    if not cfg.get("auto_monitoring_enabled", False):
+        return
+
+    now = discord.utils.utcnow().timestamp()
+    joins = JOIN_HISTORY[guild.id]
+    joins.append(now)
+    while joins and joins[0] < now - 20:
+        joins.popleft()
+
+    # لا نعاقب حسابًا جديدًا لمجرد حداثته؛ نستخدم ذلك فقط أثناء موجة انضمام واضحة.
+    if len(joins) >= 8 and RAID_UNTIL.get(guild.id, 0) < now:
+        RAID_UNTIL[guild.id] = now + 120
+        await send_log(
+            guild, "Join-Raid Alert", member, bot.user,
+            f"رُصد انضمام {len(joins)} أعضاء خلال 20 ثانية. فُعّلت مراقبة موجة الانضمام لمدة دقيقتين.",
+        )
+
+    if member.bot:
+        # نعطي Discord لحظة لتحديث الرتب والصلاحيات بعد انضمام البوت.
+        await asyncio.sleep(1.0)
+        member = guild.get_member(member.id) or member
+        trusted_ids = {int(value) for value in cfg.get("trusted_bot_ids", []) if str(value).isdigit()}
+        if member.id in trusted_ids:
+            return
+        dangerous = [name for name in DANGEROUS_BOT_PERMISSIONS if getattr(member.guild_permissions, name, False)]
+        if not dangerous:
+            return
+        actor = await find_audit_actor(guild, discord.AuditLogAction.bot_add, member.id)
+        actor_member = guild.get_member(actor.id) if actor else None
+        inviter_is_trusted = bool(
+            actor and (
+                actor.id == guild.owner_id or
+                (actor_member is not None and actor_member.guild_permissions.administrator)
+            )
+        )
+        # لا نحاول ادعاء اكتشاف الاختراق؛ نمنع البوت ذا الصلاحيات الخطرة إذا لم نستطع توثيق مُضيف موثوق.
+        if not inviter_is_trusted:
+            me = bot_member(guild)
+            if me and me.guild_permissions.kick_members and member.top_role < me.top_role:
+                try:
+                    reason = "بوت انضم بصلاحيات عالية ولم يمكن التحقق من أن مُضيفه مالك السيرفر/مسؤول موثوق."
+                    await member.kick(reason=reason)
+                    await send_log(
+                        guild, "High-Risk Bot Removed", member, actor, reason,
+                        "الصلاحيات الخطرة: " + ", ".join(dangerous),
+                    )
+                except (discord.Forbidden, discord.HTTPException) as exc:
+                    await send_log(
+                        guild, "High-Risk Bot Alert", member, actor,
+                        f"تعذر طرد البوت: {exc}", "الصلاحيات الخطرة: " + ", ".join(dangerous),
+                    )
+            else:
+                await send_log(
+                    guild, "High-Risk Bot Alert", member, actor,
+                    "تم رصد بوت بصلاحيات عالية، لكن رتبة البوت الحالي لا تسمح بطرده.",
+                    "الصلاحيات الخطرة: " + ", ".join(dangerous),
+                )
+        else:
+            await send_log(
+                guild, "Privileged Bot Joined", member, actor,
+                "انضم بوت بصلاحيات عالية بواسطة المالك/مسؤول Administrator موثوق؛ لم يُطرد تلقائيًا.",
+                "الصلاحيات: " + ", ".join(dangerous),
+            )
+        return
+
+    if RAID_UNTIL.get(guild.id, 0) > now:
+        account_age = (discord.utils.utcnow() - member.created_at).total_seconds()
+        if account_age < 3 * 24 * 60 * 60:
+            ok, error = await apply_timeout(
+                member, 10 * 60,
+                "حماية مؤقتة أثناء موجة انضمام مع حساب عمره أقل من 3 أيام.", bot.user,
+            )
+            if ok:
+                await send_log(
+                    guild, "Raid Account Restricted", member, bot.user,
+                    "تم تقييد حساب حديث مؤقتًا أثناء رصد موجة انضمام.",
+                )
+            else:
+                print(f"[JOIN RAID] {error}")
+
+
+async def monitor_destructive_action(
+    guild: discord.Guild,
+    target_id: int,
+    action: discord.AuditLogAction,
+    label: str,
+):
+    cfg = get_config(guild.id)
+    if not cfg.get("auto_monitoring_enabled", False):
+        return
+    await asyncio.sleep(0.8)
+    actor = await find_audit_actor(guild, action, target_id)
+    if actor is None or actor.id == guild.owner_id or (bot.user and actor.id == bot.user.id):
+        return
+    actor_member = guild.get_member(actor.id)
+    if actor_member is None or actor_member.bot:
+        return
+
+    now = discord.utils.utcnow().timestamp()
+    key = (guild.id, actor.id, label)
+    history = NUKE_HISTORY[key]
+    history.append(now)
+    while history and history[0] < now - 15:
+        history.popleft()
+
+    if len(history) >= 3:
+        # حد أمان: يسجل التخريب ويحاول تايم اوت فقط، ولا يحذف رتبًا أو يحظر مسؤولًا تلقائيًا.
+        reason = f"مؤشر تخريب جماعي: {len(history)} عمليات {label} خلال 15 ثانية."
+        ok, error = await apply_timeout(actor_member, 60 * 60, reason, bot.user)
+        await send_log(
+            guild, "Anti-Nuke Alert", actor_member, bot.user,
+            reason if ok else f"{reason} تعذر التايم اوت: {error}",
+            "هذه آلية رصد واستجابة محدودة وليست ضمانًا لمنع كل هجمات التخريب.",
+        )
+        history.clear()
+
+
+async def on_guild_channel_delete(channel: discord.abc.GuildChannel):
+    await monitor_destructive_action(
+        channel.guild, channel.id, discord.AuditLogAction.channel_delete, "حذف القنوات"
+    )
+
+
+async def on_guild_role_delete(role: discord.Role):
+    await monitor_destructive_action(
+        role.guild, role.id, discord.AuditLogAction.role_delete, "حذف الرتب"
+    )
 
 
 # ============================================================
@@ -662,10 +852,8 @@ async def help_command(ctx: commands.Context):
     embed.add_field(
         name="🤖 المراقبة التلقائية",
         value=(
-            "`!مكافحة_السبام 6 8 10`\n"
-            "`!مكافحة_المنشن 5 5`\n"
-            "`!مكافحة_الوسائط 4 10 5`\n"
-            "آخر رقم في كل أمر = مدة التايم اوت بالدقائق."
+            "`!مراقبة_تلقائية` لتشغيل أو إيقاف منظومة الحماية كاملة.\n"
+            "سيظهر تأكيد قبل تغيير الحالة، ولا تحتاج لتشغيل أي حماية فرعية."
         ),
         inline=False,
     )
@@ -795,81 +983,91 @@ async def set_log(ctx: commands.Context, channel: Optional[discord.TextChannel] 
     await ctx.send(f"تم تحديد روم اللوق: {channel.mention}", allowed_mentions=discord.AllowedMentions.none())
 
 
-@bot.command(name="مكافحة_السبام")
-async def anti_spam(ctx: commands.Context, message_limit: int, window_seconds: int, timeout_minutes: int):
-    if not await require_config_permission(ctx):
-        return
-    if not (1 <= message_limit <= 50 and 1 <= window_seconds <= 120 and 1 <= timeout_minutes <= 40320):
-        await ctx.send("القيم: الرسائل 1-50، الثواني 1-120، التايم اوت 1-40320 دقيقة.")
-        return
-    cfg = get_config(ctx.guild.id)
-    cfg["anti_spam_enabled"] = True
-    cfg["spam_message_limit"] = message_limit
-    cfg["spam_window_seconds"] = window_seconds
-    cfg["spam_timeout_minutes"] = timeout_minutes
-    await save_database_async()
-    await ctx.send(f"تم تفعيل سبام الرسائل: **{message_limit}** رسائل / **{window_seconds}** ثوانٍ -> تايم اوت **{timeout_minutes}** دقيقة.")
+class MonitoringConfirmView(discord.ui.View):
+    """زر تأكيد لتشغيل/إيقاف كل الحمايات دفعة واحدة."""
+
+    def __init__(self, ctx: commands.Context, enable: bool):
+        super().__init__(timeout=60)
+        self.guild_id = ctx.guild.id
+        self.author_id = ctx.author.id
+        self.enable = enable
+        self.confirm_button = next(item for item in self.children if getattr(item, "custom_id", None) == "bot7_monitor_confirm")
+        self.cancel_button = next(item for item in self.children if getattr(item, "custom_id", None) == "bot7_monitor_cancel")
+        self.confirm_button.label = "تأكيد تشغيل الحماية" if enable else "تأكيد إيقاف الحماية"
+        self.confirm_button.style = discord.ButtonStyle.success if enable else discord.ButtonStyle.danger
+        self.confirm_button.emoji = "🛡️" if enable else "⏸️"
+
+    async def interaction_check(self, interaction: discord.Interaction) -> bool:
+        if interaction.user.id != self.author_id:
+            await interaction.response.send_message("هذا التأكيد خاص بالشخص الذي طلب الأمر.", ephemeral=True)
+            return False
+        guild = interaction.guild
+        if guild is None or not isinstance(interaction.user, discord.Member):
+            await interaction.response.send_message("هذا الزر يعمل داخل السيرفر فقط.", ephemeral=True)
+            return False
+        if not is_server_admin(interaction.user):
+            await interaction.response.send_message("يلزم مالك السيرفر أو صلاحية Administrator.", ephemeral=True)
+            return False
+        return True
+
+    @discord.ui.button(label="تأكيد التشغيل", style=discord.ButtonStyle.success, custom_id="bot7_monitor_confirm")
+    async def confirm(self, interaction: discord.Interaction, button: discord.ui.Button):
+        guild = interaction.guild
+        if guild is None:
+            await interaction.response.send_message("تعذر تحديد السيرفر.", ephemeral=True)
+            return
+        cfg = get_config(guild.id)
+        cfg["auto_monitoring_enabled"] = self.enable
+        if self.enable:
+            # القيم الافتراضية لجميع الوحدات؛ لا يحتاج المسؤول لتفعيل كل حماية منفردة.
+            cfg["anti_spam_enabled"] = True
+            cfg["anti_mentions_enabled"] = True
+            cfg["anti_media_enabled"] = True
+            cfg["spam_message_limit"] = 6
+            cfg["spam_window_seconds"] = 8
+            cfg["spam_timeout_minutes"] = 10
+            cfg["max_mentions"] = 5
+            cfg["mention_timeout_minutes"] = 5
+            cfg["media_limit"] = 4
+            cfg["media_window_seconds"] = 10
+            cfg["media_timeout_minutes"] = 5
+        await save_database_async()
+        for item in self.children:
+            item.disabled = True
+        state = "✅ تم تشغيل المراقبة التلقائية وجميع الحمايات المدمجة." if self.enable else "⏸️ تم إيقاف المراقبة التلقائية."
+        await interaction.response.edit_message(content=state, embed=None, view=None)
+        self.stop()
+
+    @discord.ui.button(label="إلغاء", style=discord.ButtonStyle.secondary, emoji="✖️", custom_id="bot7_monitor_cancel")
+    async def cancel(self, interaction: discord.Interaction, button: discord.ui.Button):
+        for item in self.children:
+            item.disabled = True
+        await interaction.response.edit_message(content="تم إلغاء العملية، ولم يتغير وضع الحماية.", embed=None, view=None)
+        self.stop()
 
 
-@bot.command(name="ايقاف_السبام")
-async def disable_spam(ctx: commands.Context):
-    if not await require_config_permission(ctx):
-        return
-    cfg = get_config(ctx.guild.id)
-    cfg["anti_spam_enabled"] = False
-    await save_database_async()
-    await ctx.send("تم إيقاف مراقبة سبام الرسائل والتكرار.")
-
-
-@bot.command(name="مكافحة_المنشن")
-async def anti_mentions(ctx: commands.Context, max_mentions: int, timeout_minutes: int):
-    if not await require_config_permission(ctx):
-        return
-    if not (1 <= max_mentions <= 50 and 1 <= timeout_minutes <= 40320):
-        await ctx.send("القيم غير صحيحة.")
-        return
-    cfg = get_config(ctx.guild.id)
-    cfg["anti_mentions_enabled"] = True
-    cfg["max_mentions"] = max_mentions
-    cfg["mention_timeout_minutes"] = timeout_minutes
-    await save_database_async()
-    await ctx.send(f"تم تفعيل مكافحة المنشن: **{max_mentions}** منشن أو أكثر -> تايم اوت **{timeout_minutes}** دقيقة.")
-
-
-@bot.command(name="ايقاف_المنشن")
-async def disable_mentions(ctx: commands.Context):
-    if not await require_config_permission(ctx):
-        return
-    cfg = get_config(ctx.guild.id)
-    cfg["anti_mentions_enabled"] = False
-    await save_database_async()
-    await ctx.send("تم إيقاف مكافحة سبام المنشنات.")
-
-
-@bot.command(name="مكافحة_الوسائط")
-async def anti_media(ctx: commands.Context, media_limit: int, window_seconds: int, timeout_minutes: int):
-    if not await require_config_permission(ctx):
-        return
-    if not (1 <= media_limit <= 50 and 1 <= window_seconds <= 120 and 1 <= timeout_minutes <= 40320):
-        await ctx.send("القيم غير صحيحة.")
-        return
-    cfg = get_config(ctx.guild.id)
-    cfg["anti_media_enabled"] = True
-    cfg["media_limit"] = media_limit
-    cfg["media_window_seconds"] = window_seconds
-    cfg["media_timeout_minutes"] = timeout_minutes
-    await save_database_async()
-    await ctx.send(f"تم تفعيل مكافحة الصور/المرفقات/الستيكرات: **{media_limit}** خلال **{window_seconds}** ثوانٍ -> تايم اوت **{timeout_minutes}** دقيقة.")
-
-
-@bot.command(name="ايقاف_الوسائط")
-async def disable_media(ctx: commands.Context):
+@bot.command(name="مراقبة_تلقائية", aliases=["مراقبة", "الحماية_التلقائية"])
+async def automatic_monitoring(ctx: commands.Context):
+    """الأمر الوحيد لتشغيل أو إيقاف منظومة الحماية كاملة."""
     if not await require_config_permission(ctx):
         return
     cfg = get_config(ctx.guild.id)
-    cfg["anti_media_enabled"] = False
-    await save_database_async()
-    await ctx.send("تم إيقاف مكافحة سبام الصور/المرفقات/الستيكرات.")
+    enable = not bool(cfg.get("auto_monitoring_enabled", False))
+    if enable:
+        description = (
+            "سيتم تشغيل الحمايات المدمجة دفعة واحدة: مكافحة السبام وتكرار الرسائل، "
+            "المنشنات الزائدة، إغراق الصور/المرفقات، إغراق الأحرف والروابط، "
+            "مؤشرات هجوم الانضمام، ومراقبة حذف القنوات والرتب والبوتات عالية الخطورة.\n\n"
+            "اضغط تأكيد للتشغيل. لن تعمل العقوبات التلقائية قبل موافقتك."
+        )
+        title = "🛡️ تأكيد تشغيل المراقبة التلقائية"
+    else:
+        description = "المراقبة التلقائية تعمل حاليًا. اضغط تأكيد لإيقاف كل الحمايات التلقائية المدمجة."
+        title = "⏸️ تأكيد إيقاف المراقبة التلقائية"
+    embed = discord.Embed(title=title, description=description, color=discord.Color.orange())
+    embed.set_footer(text="التأكيد متاح لمدة 60 ثانية ولصاحب الأمر فقط.")
+    view = MonitoringConfirmView(ctx, enable)
+    view.message = await ctx.send(embed=embed, view=view)
 
 
 # ============================================================
@@ -1206,9 +1404,11 @@ async def config_status(ctx: commands.Context):
         f"رتبة الحظر: {ban_role.mention if ban_role else 'غير محددة'}\n"
         f"رتبة الطرد: {kick_role.mention if kick_role else 'غير محددة'}\n"
         f"روم اللوق: {log_channel.mention if isinstance(log_channel, discord.TextChannel) else 'غير محدد'}\n\n"
-        f"سبام الرسائل: {'✅' if cfg.get('anti_spam_enabled') else '❌'} | {cfg.get('spam_message_limit')} / {cfg.get('spam_window_seconds')}ث | Timeout {cfg.get('spam_timeout_minutes')}د\n"
-        f"سبام المنشن: {'✅' if cfg.get('anti_mentions_enabled') else '❌'} | {cfg.get('max_mentions')} / رسالة | Timeout {cfg.get('mention_timeout_minutes')}د\n"
-        f"سبام الوسائط: {'✅' if cfg.get('anti_media_enabled') else '❌'} | {cfg.get('media_limit')} / {cfg.get('media_window_seconds')}ث | Timeout {cfg.get('media_timeout_minutes')}د"
+        f"المراقبة التلقائية: {'✅ تعمل' if cfg.get('auto_monitoring_enabled') else '⏸️ متوقفة'}\n"
+        f"الحمايات المدمجة: سبام الرسائل والتكرار، المنشنات، الوسائط، إغراق الأحرف/الروابط، "
+        f"مراقبة هجمات الانضمام وحذف القنوات والرتب والبوتات عالية الخطورة.\n"
+        f"الإعدادات الافتراضية: {cfg.get('spam_message_limit')} رسائل / {cfg.get('spam_window_seconds')} ث، "
+        f"{cfg.get('max_mentions')} منشن، {cfg.get('media_limit')} مرفقات / {cfg.get('media_window_seconds')} ث."
     )
     await ctx.send(text, allowed_mentions=discord.AllowedMentions.none())
 
@@ -1291,6 +1491,9 @@ async def setup(bot_instance: commands.Bot):
     bot.add_listener(on_ready, "on_ready")
     bot.add_listener(on_guild_join, "on_guild_join")
     bot.add_listener(on_message, "on_message")
+    bot.add_listener(on_member_join, "on_member_join")
+    bot.add_listener(on_guild_channel_delete, "on_guild_channel_delete")
+    bot.add_listener(on_guild_role_delete, "on_guild_role_delete")
     bot.add_listener(on_command_error, "on_command_error")
 
     print(
