@@ -4634,37 +4634,7 @@ if __name__ == "__main__":
                 print(f"❌ تعذر تحميل bot7.py: {error}")
                 raise
 
-            # =====================================================
-            # تحميل نظام Fime Library من fime_library.py
-            # =====================================================
-            try:
-                await bot.load_extension("fime_library")
-                print(
-                    "✅ تم تحميل نظام Fime Library "
-                    "من fime_library.py"
-                )
-            except Exception as error:
-                print(
-                    f"❌ تعذر تحميل fime_library.py: {error}"
-                )
-                raise
-
-            # =====================================================
-            # تحميل نظام Index من index.py
-            # =====================================================
-            try:
-                await bot.load_extension("index")
-                print(
-                    "✅ تم تحميل نظام Index "
-                    "من index.py"
-                )
-            except Exception as error:
-                print(
-                    f"❌ تعذر تحميل index.py: {error}"
-                )
-                raise
-
-            # =====================================================
+            =====================================================
             # تحميل نظام الذكاء الاصطناعي من ai.py
             # =====================================================
             try:
