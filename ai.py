@@ -11,11 +11,13 @@ intents المطلوبة في البوت:
 
 المتغيرات (Environment Variables):
     AI_API_KEY              مفتاح Gemini من Google AI Studio (مطلوب)
-    AI_MODEL                اسم الموديل. مثال: gemini-2.5-flash
-    AI_PROVIDER_NAME        اسم يظهر في /ai status (اختياري)
+    AI_MODEL                اسم الموديل. الافتراضي gemini-3.5-flash-lite
+                            أسماء الموديلات القديمة تتحول تلقائيًا (مثل gemini-1.5-flash)
+    AI_THINKING_LEVEL       للموديلات 3.x: minimal أو low أو medium أو high (الافتراضي minimal)
+    AI_THINKING_BUDGET      للموديلات 2.5 فقط (الافتراضي 0). اتركه فاضي لعدم إرسال الحقل
     AI_CHANNEL_ID           روم AI الافتراضية (تُستخدم فقط إذا كانت موجودة في السيرفر)
-    FIME_OWNER_ID           ايدي المالك (صلاحيات كاملة على أوامر AI)
-    AI_THINKING_BUDGET      افتراضيًا 0 (بدون تفكير لتوفير التوكنز). اتركه فاضي لعدم إرسال الحقل
+    FIME_OWNER_ID           ايدي المالك (صلاحيات كاملة + أمر /ai model)
+    AI_PROVIDER_NAME        اسم يظهر في /ai status (اختياري)
     AI_MAX_OUTPUT_TOKENS    افتراضي 600
     AI_MEMORY_LIMIT         افتراضي 8 رسائل لكل عضو
     AI_USER_COOLDOWN        افتراضي 6 ثواني بين طلبين للعضو
@@ -44,8 +46,86 @@ import aiohttp
 
 
 # =========================================================
-# CONFIG
+# MODEL SETTINGS
 # =========================================================
+# الموديل الافتراضي: من توصيات Google للمشاريع الجديدة (صفحة Deprecations).
+DEFAULT_MODEL = "gemini-3.5-flash-lite"
+
+# بدائل بالترتيب. إذا الموديل المطلوب ما كان متاح، البوت يجرب اللي بعده.
+FALLBACK_MODELS = (
+    "gemini-3.5-flash-lite",
+    "gemini-3.8-flash",
+    "gemini-3.6-flash",
+    "gemini-2.5-flash",
+)
+
+# أسماء قديمة أو متوقفة -> بديل حالي. تُطبق تلقائيًا بدون شروط.
+MODEL_ALIASES = {
+    "gemini-1.5-flash": "gemini-3.5-flash-lite",
+    "gemini-1.5-flash-latest": "gemini-3.5-flash-lite",
+    "gemini-1.5-flash-001": "gemini-3.5-flash-lite",
+    "gemini-1.5-flash-002": "gemini-3.5-flash-lite",
+    "gemini-1.5-flash-8b": "gemini-3.5-flash-lite",
+    "gemini-1.5-pro": "gemini-3.8-flash",
+    "gemini-1.5-pro-latest": "gemini-3.8-flash",
+    "gemini-2.0-flash": "gemini-3.6-flash",
+    "gemini-2.0-flash-001": "gemini-3.6-flash",
+    "gemini-2.0-flash-lite": "gemini-3.5-flash-lite",
+    "gemini-2.0-flash-lite-001": "gemini-3.5-flash-lite",
+}
+
+THINKING_LEVELS = ("minimal", "low", "medium", "high")
+
+
+def resolve_model_name(value: str) -> Tuple[str, Optional[str]]:
+    """يرجع (الاسم النهائي, الاسم الأصلي إذا تم تحويله)."""
+    name = (value or "").strip().lower()
+    if name.startswith("models/"):
+        name = name[len("models/"):]
+    if not name:
+        return DEFAULT_MODEL, None
+    if name in MODEL_ALIASES:
+        return MODEL_ALIASES[name], name
+    return name, None
+
+
+def build_model_candidates(primary: str) -> List[str]:
+    candidates = [primary]
+    for model in FALLBACK_MODELS:
+        if model not in candidates:
+            candidates.append(model)
+    return candidates
+
+
+def _read_thinking_budget() -> Optional[int]:
+    """للموديلات 2.5 فقط. 0 = بدون تفكير. None = لا نرسل الحقل."""
+    raw = os.getenv("AI_THINKING_BUDGET")
+    if raw is None:
+        return 0
+    raw = raw.strip()
+    if raw == "":
+        return None
+    try:
+        return max(0, int(raw))
+    except ValueError:
+        return 0
+
+
+def _read_thinking_level() -> str:
+    raw = (os.getenv("AI_THINKING_LEVEL") or "minimal").strip().lower()
+    return raw if raw in THINKING_LEVELS else "minimal"
+
+
+def thinking_config_for(model: str, budget_2_5: Optional[int], level_3: str) -> Optional[Dict[str, Any]]:
+    """الموديلات 3.x تستخدم thinkingLevel، والموديلات 2.5 تستخدم thinkingBudget."""
+    if model.startswith("gemini-3"):
+        return {"thinkingLevel": level_3}
+    if model.startswith("gemini-2.5") and budget_2_5 is not None:
+        return {"thinkingBudget": budget_2_5}
+    return None
+
+
+# ---------- environment ----------
 
 def _env_str(name: str, default: str = "") -> str:
     value = os.getenv(name)
@@ -59,31 +139,12 @@ def _env_int(name: str, default: int) -> int:
         return default
 
 
-def _normalize_model_name(value: str) -> str:
-    value = (value or "").strip()
-    if value.startswith("models/"):
-        value = value[len("models/"):]
-    return value or "gemini-2.5-flash"
-
-
-def _read_thinking_budget() -> Optional[int]:
-    """0 = بدون تفكير (الافتراضي). None = لا نرسل الحقل نهائيًا."""
-    raw = os.getenv("AI_THINKING_BUDGET")
-    if raw is None:
-        return 0
-    raw = raw.strip()
-    if raw == "":
-        return None
-    try:
-        return max(0, int(raw))
-    except ValueError:
-        return 0
-
-
 AI_API_KEY = _env_str("AI_API_KEY").strip('"\'')
-AI_MODEL = _normalize_model_name(_env_str("AI_MODEL"))
+ENV_MODEL_RAW = _env_str("AI_MODEL")
+ENV_MODEL, ENV_MODEL_REPLACED = resolve_model_name(ENV_MODEL_RAW)
 AI_PROVIDER_NAME = _env_str("AI_PROVIDER_NAME") or "Gemini API"
 AI_THINKING_BUDGET = _read_thinking_budget()
+AI_THINKING_LEVEL = _read_thinking_level()
 AI_CHANNEL_ID = _env_int("AI_CHANNEL_ID", 0)
 FIME_OWNER_ID = _env_int("FIME_OWNER_ID", 0)
 
@@ -102,15 +163,18 @@ GLOBAL_DAILY_LIMIT = _env_int("AI_GLOBAL_DAILY_LIMIT", 250)
 REQUEST_TIMEOUT = 30
 MAX_RETRIES = 2
 MAX_CONCURRENT_REQUESTS = 4
-RETRYABLE_STATUS = (408, 429, 500, 502, 503, 504)
+RETRYABLE_STATUS = (408, 500, 502, 503, 504)
+QUOTA_PAUSE_SECONDS = 120  # بعد خطأ 429 نوقف الطلبات مؤقتًا بدل ما نحرق المحاولات
 
 KNOWLEDGE_FILE = Path("ai_server_knowledge.json")
 EMOJI_FILE = Path("ai_emoji_settings.json")
 USAGE_FILE = Path("ai_usage.json")
+AI_SETTINGS_FILE = Path("ai_settings.json")
 
 DISCORD_LIMIT = 1900
 NO_MENTIONS = discord.AllowedMentions.none()
 GENERIC_ERROR = "صار خطأ وأنا أحاول أجيب الرد، جرب بعد شوي."
+PAUSED_MESSAGE = "الذكاء الاصطناعي مشغول الحين (وصل للحد المسموح)، جرب بعد دقيقتين."
 
 TOPIC_REDIRECTS = [
     "القوائم الطويلة والقصص ما أسويها هنا، عشان أوفر الذكاء الاصطناعي للأسئلة المفيدة. تبي أساعدك بشي عن السيرفر؟",
@@ -207,7 +271,7 @@ def status_hint(status: int) -> str:
         400: "طلب غير صالح (راجع الإعدادات أو اسم الموديل)",
         401: "المفتاح غير صالح (راجع AI_API_KEY)",
         403: "صلاحية مرفوضة (المفتاح ما عنده صلاحية، أو الـ API غير مفعّل)",
-        404: "الموديل غير موجود أو ما يدعم generateContent (راجع AI_MODEL)",
+        404: "الموديل غير موجود أو ما يدعم generateContent",
         429: "تجاوزت حد الاستخدام (quota أو rate limit)",
     }
     return f"HTTP {status} - {hints.get(status, 'خطأ من المزود')}"
@@ -356,6 +420,17 @@ def save_json(path: Path, data: Any) -> bool:
         except Exception:
             pass
         return False
+
+
+def load_model_override() -> Optional[str]:
+    """الموديل اللي حدده المالك بأمر /ai model (يتفوق على AI_MODEL)."""
+    data = load_json(AI_SETTINGS_FILE, {})
+    if not isinstance(data, dict):
+        return None
+    value = data.get("model")
+    if not isinstance(value, str) or not value.strip():
+        return None
+    return resolve_model_name(value)[0]
 
 
 # =========================================================
@@ -648,8 +723,21 @@ class FimeAI(commands.Cog):
         self.api_slots = asyncio.Semaphore(MAX_CONCURRENT_REQUESTS)
         self.session: Optional[aiohttp.ClientSession] = None
         self.background_tasks: set = set()
-        self.thinking_field_ok = AI_THINKING_BUDGET is not None
-        self.ready = bool(AI_API_KEY and AI_MODEL)
+
+        # اختيار الموديل: ملف الإعدادات (/ai model) يتفوق على AI_MODEL، والأخير يتفوق على الافتراضي
+        override = load_model_override()
+        if override:
+            primary, self.model_source = override, "أمر /ai model"
+        elif ENV_MODEL_RAW:
+            primary, self.model_source = ENV_MODEL, "AI_MODEL"
+        else:
+            primary, self.model_source = DEFAULT_MODEL, "الافتراضي"
+        self.model_candidates: List[str] = build_model_candidates(primary)
+        self.active_model: str = primary
+
+        self.thinking_field_ok = True
+        self.pause_until = 0.0
+        self.ready = bool(AI_API_KEY)
         self._model_checked = False
         self._check_config()
         print("🤖 Fime AI initialized")
@@ -664,7 +752,9 @@ class FimeAI(commands.Cog):
             return
         if not AI_API_KEY.startswith("AIza"):
             print("⚠️ المفتاح لا يبدو مفتاح Gemini من AI Studio (عادةً يبدأ بـ AIza).")
-        print(f"🧠 Fime AI model: {AI_MODEL}")
+        if ENV_MODEL_REPLACED:
+            print(f"ℹ️ الموديل `{ENV_MODEL_REPLACED}` متوقف، تم استخدام `{ENV_MODEL}` تلقائيًا.")
+        print(f"🧠 Fime AI model: {self.active_model} ({self.model_source})")
 
     def _get_session(self) -> aiohttp.ClientSession:
         if self.session is None or self.session.closed:
@@ -694,28 +784,64 @@ class FimeAI(commands.Cog):
                 self.knowledge.scan_guild(guild)
         if self.ready and not self._model_checked:
             self._model_checked = True
-            self._spawn(self._verify_model())
+            self._spawn(self._resolve_active_model())
         print("✅ Fime AI knowledge ready.")
 
-    async def _verify_model(self):
-        """يتحقق من الموديل مرة وحدة عند التشغيل، ويطبع سبب واضح لو فيه مشكلة."""
+    # -----------------------------------------------------
+    # MODEL RESOLUTION
+    # -----------------------------------------------------
+
+    async def _check_model(self, model: str) -> int:
+        """يرجع HTTP status للموديل، أو -1 لو فشل الاتصال."""
         try:
             session = self._get_session()
             async with session.get(
-                f"{GEMINI_API_BASE}/models/{AI_MODEL}",
+                f"{GEMINI_API_BASE}/models/{model}",
                 headers={"x-goog-api-key": AI_API_KEY},
             ) as response:
-                if response.status == 200:
-                    print(f"✅ Gemini model OK: {AI_MODEL}")
-                elif response.status == 404:
-                    print(
-                        f"❌ الموديل `{AI_MODEL}` غير متاح لهذا المفتاح. "
-                        "غيّر AI_MODEL في Environment (مثال: gemini-2.5-flash)."
-                    )
-                else:
-                    print(f"⚠️ تعذر التحقق من الموديل (HTTP {response.status}). جرب /ai test.")
+                return response.status
         except Exception as error:
-            print(f"⚠️ تعذر التحقق من الموديل: {clean_error(error)}")
+            print(f"⚠️ تعذر التحقق من الموديل {model}: {clean_error(error)}")
+            return -1
+
+    async def _resolve_active_model(self):
+        """عند التشغيل: يختار أول موديل متاح من القائمة."""
+        for candidate in self.model_candidates:
+            status = await self._check_model(candidate)
+            if status == 200:
+                if candidate != self.active_model:
+                    print(f"ℹ️ تم اختيار الموديل المتاح: {candidate}")
+                self.active_model = candidate
+                print(f"✅ Gemini model OK: {candidate}")
+                return
+            print(f"⚠️ الموديل {candidate} غير متاح حاليًا (HTTP {status}).")
+        print("❌ ما فيه موديل متاح من القائمة. تأكد من AI_API_KEY، وجرب /ai test.")
+
+    def _next_model_after(self, bad: str) -> Optional[str]:
+        candidates = self.model_candidates
+        remaining = candidates[candidates.index(bad) + 1:] if bad in candidates else candidates
+        for model in remaining:
+            if model != bad:
+                return model
+        return None
+
+    def _switch_model(self, bad: str) -> bool:
+        """يحول للموديل التالي إذا الموديل الحالي هو اللي فشل."""
+        if self.active_model != bad:
+            return True  # تحول بالفعل من طلب ثاني، نعيد المحاولة بالحالي
+        nxt = self._next_model_after(bad)
+        if nxt is None:
+            return False
+        print(f"⚠️ الموديل {bad} غير متاح، تم التحويل تلقائيًا إلى {nxt}.")
+        self.active_model = nxt
+        return True
+
+    def is_paused(self) -> bool:
+        return time.monotonic() < self.pause_until
+
+    # -----------------------------------------------------
+    # OTHER LISTENERS
+    # -----------------------------------------------------
 
     @commands.Cog.listener()
     async def on_guild_join(self, guild: discord.Guild):
@@ -829,65 +955,90 @@ class FimeAI(commands.Cog):
             text = text.rstrip() + "…"
         return text
 
-    async def _post(self, payload: Dict[str, Any]) -> Tuple[int, str]:
+    async def _post(self, model: str, payload: Dict[str, Any]) -> Tuple[int, str]:
         session = self._get_session()
         headers = {
             "x-goog-api-key": AI_API_KEY,  # المفتاح في الهيدر، مو في الرابط
             "Content-Type": "application/json",
         }
-        async with session.post(gemini_endpoint(AI_MODEL), headers=headers, json=payload) as response:
+        async with session.post(gemini_endpoint(model), headers=headers, json=payload) as response:
             return response.status, await response.text()
+
+    @staticmethod
+    def _is_model_problem(status: int, body: str) -> bool:
+        """يحدد إذا الخطأ بسبب الموديل نفسه (مو المفتاح أو الكوتا)."""
+        if status == 404:
+            return True
+        return status == 403 and "model" in body.lower()
 
     async def _generate(self, messages: List[Dict[str, str]], max_tokens: int) -> str:
         if not self.ready:
-            raise AIError("AI_API_KEY or AI_MODEL missing")
+            raise AIError("AI_API_KEY missing")
+        if self.is_paused():
+            raise AIError("paused after quota error", user_message=PAUSED_MESSAGE)
 
         system_text, contents = self._to_gemini_contents(messages)
         if not contents:
             raise AIError("no contents to send")
 
-        generation_config: Dict[str, Any] = {
-            "maxOutputTokens": max_tokens,
-            "temperature": 0.7,
-        }
-        if self.thinking_field_ok and AI_THINKING_BUDGET is not None:
-            generation_config["thinkingConfig"] = {"thinkingBudget": AI_THINKING_BUDGET}
-
-        payload: Dict[str, Any] = {
-            "contents": contents,
-            "generationConfig": generation_config,
-        }
-        if system_text:
-            payload["systemInstruction"] = {"parts": [{"text": system_text}]}
-
+        transient_retries = 0
         last_error = "unknown error"
 
         async with self.api_slots:
-            for attempt in range(MAX_RETRIES + 1):
+            for _ in range(8):  # حد أقصى للدورات (إعادة محاولة + تحويل موديل)
+                model = self.active_model
+
+                generation_config: Dict[str, Any] = {
+                    "maxOutputTokens": max_tokens,
+                    "temperature": 0.7,
+                }
+                thinking = thinking_config_for(model, AI_THINKING_BUDGET, AI_THINKING_LEVEL) if self.thinking_field_ok else None
+                if thinking:
+                    generation_config["thinkingConfig"] = thinking
+
+                payload: Dict[str, Any] = {
+                    "contents": contents,
+                    "generationConfig": generation_config,
+                }
+                if system_text:
+                    payload["systemInstruction"] = {"parts": [{"text": system_text}]}
+
                 try:
-                    status, body = await self._post(payload)
+                    status, body = await self._post(model, payload)
                 except (asyncio.TimeoutError, aiohttp.ClientError) as error:
                     last_error = f"network error: {type(error).__name__}"
-                    if attempt < MAX_RETRIES:
-                        await asyncio.sleep(1.0 * (attempt + 1))
+                    if transient_retries < MAX_RETRIES:
+                        transient_retries += 1
+                        await asyncio.sleep(1.0 * transient_retries)
                         continue
                     break
 
                 if 200 <= status < 300:
                     return self._extract_answer(body)
 
-                if status == 400 and "thinkingConfig" in generation_config:
-                    # بعض الموديلات (مثل Pro) ما تقبل budget=0. نشيل الحقل ونعيد المحاولة.
-                    generation_config.pop("thinkingConfig")
-                    self.thinking_field_ok = False
-                    print("ℹ️ الموديل ما يقبل thinkingConfig، تم تعطيله تلقائيًا.")
-                    continue
-
                 details = google_error_message(body)
                 last_error = f"{status_hint(status)} | {details}"
-                print(f"❌ Fime AI: {status_hint(status)} | {details}")
-                if status in RETRYABLE_STATUS and attempt < MAX_RETRIES:
-                    await asyncio.sleep(1.5 * (attempt + 1))
+
+                if status == 400 and thinking:
+                    # بعض الموديلات ما تقبل حقل التفكير. نشيله ونعيد المحاولة.
+                    self.thinking_field_ok = False
+                    print("ℹ️ الموديل ما يقبل حقل التفكير، تم تعطيله تلقائيًا.")
+                    continue
+
+                if self._is_model_problem(status, body) and self._switch_model(model):
+                    print(f"❌ Fime AI ({model}): {last_error}")
+                    continue
+
+                print(f"❌ Fime AI ({model}): {last_error}")
+
+                if status == 429:
+                    # الكوتا ما تتحل بإعادة المحاولة الفورية. نوقف مؤقتًا.
+                    self.pause_until = time.monotonic() + QUOTA_PAUSE_SECONDS
+                    break
+
+                if status in RETRYABLE_STATUS and transient_retries < MAX_RETRIES:
+                    transient_retries += 1
+                    await asyncio.sleep(1.5 * transient_retries)
                     continue
                 break
 
@@ -1000,7 +1151,12 @@ class FimeAI(commands.Cog):
             await self._send_error(message, random.choice(TOPIC_REDIRECTS))
             return
 
-        # 2) حدود الاستخدام
+        # 2) إذا الكوتا وقفت مؤقتًا، نرد بدون ما نستدعي الـ API
+        if self.is_paused():
+            await self._send_error(message, PAUSED_MESSAGE)
+            return
+
+        # 3) حدود الاستخدام
         reason = self.limiter.check(message.author.id)
         if reason == "cooldown":
             return  # صامت عشان ما يصير سبام
@@ -1037,6 +1193,10 @@ class FimeAI(commands.Cog):
         return bool(perms and perms.administrator)
 
     @staticmethod
+    def _is_owner(interaction: discord.Interaction) -> bool:
+        return bool(FIME_OWNER_ID and interaction.user.id == FIME_OWNER_ID)
+
+    @staticmethod
     async def _deny(interaction: discord.Interaction):
         await interaction.response.send_message("❌ هذا الأمر للإدارة فقط.", ephemeral=True)
 
@@ -1050,17 +1210,17 @@ class FimeAI(commands.Cog):
         guild_only=True,
     )
 
-    # ---------- status / test / toggle / usage ----------
+    # ---------- status / test / model / toggle / usage ----------
 
     @ai_group.command(name="status", description="عرض حالة Fime AI")
     async def ai_status(self, interaction: discord.Interaction):
         enabled = self.knowledge.is_enabled(interaction.guild.id)
-        if AI_THINKING_BUDGET is None:
+        if self.active_model.startswith("gemini-3"):
+            thinking = f"thinkingLevel = {AI_THINKING_LEVEL}"
+        elif AI_THINKING_BUDGET is None:
             thinking = "افتراضي الموديل"
-        elif AI_THINKING_BUDGET == 0:
-            thinking = "معطل (0)"
         else:
-            thinking = f"{AI_THINKING_BUDGET} توكن"
+            thinking = f"thinkingBudget = {AI_THINKING_BUDGET}"
 
         embed = discord.Embed(
             title="🤖 Fime AI",
@@ -1068,7 +1228,8 @@ class FimeAI(commands.Cog):
             color=discord.Color.blurple(),
         )
         embed.add_field(name="المزود", value=AI_PROVIDER_NAME, inline=True)
-        embed.add_field(name="الموديل", value=f"`{AI_MODEL}`", inline=True)
+        embed.add_field(name="الموديل الحالي", value=f"`{self.active_model}`", inline=True)
+        embed.add_field(name="مصدر الإعداد", value=self.model_source, inline=True)
         embed.add_field(name="التفكير", value=thinking, inline=True)
         embed.add_field(name="الذاكرة", value=f"{MEMORY_LIMIT} رسائل لكل عضو", inline=True)
         embed.add_field(
@@ -1078,6 +1239,8 @@ class FimeAI(commands.Cog):
         )
         if not self.ready:
             state = "🔴 مفتاح AI_API_KEY غير موجود"
+        elif self.is_paused():
+            state = "⏸️ موقف مؤقتًا (وصل حد الكوتا)"
         elif not enabled:
             state = "⏸️ متوقف في هذا السيرفر"
         else:
@@ -1091,19 +1254,55 @@ class FimeAI(commands.Cog):
             return await self._deny(interaction)
         await interaction.response.defer(ephemeral=True)
         if not self.ready:
-            await interaction.followup.send("❌ AI_API_KEY أو AI_MODEL غير موجود في Environment.", ephemeral=True)
+            await interaction.followup.send("❌ AI_API_KEY غير موجود في Environment.", ephemeral=True)
             return
+        self.pause_until = 0.0  # الاختبار اليدوي يتجاهل الإيقاف المؤقت
         try:
             answer = await self._generate([{"role": "user", "content": "قل كلمة: تمام"}], max_tokens=30)
             await interaction.followup.send(
-                f"✅ الاتصال شغال\nالموديل: `{AI_MODEL}`\nالرد: {truncate_text(answer, 120)}",
+                f"✅ الاتصال شغال\nالموديل: `{self.active_model}`\nالرد: {truncate_text(answer, 120)}",
                 ephemeral=True,
             )
         except AIError as error:
             await interaction.followup.send(
-                f"❌ فشل الاختبار\nالموديل: `{AI_MODEL}`\nالسبب: {clean_error(error)}",
+                f"❌ فشل الاختبار\nالموديل: `{self.active_model}`\nالسبب: {clean_error(error)}",
                 ephemeral=True,
             )
+
+    @ai_group.command(name="model", description="(للمالك) تغيير موديل Gemini بدون إعادة تشغيل")
+    @app_commands.describe(name="اسم الموديل مثل gemini-3.5-flash-lite، أو default للرجوع للإعداد الأصلي")
+    async def ai_model(self, interaction: discord.Interaction, name: str):
+        if not self._is_owner(interaction):
+            return await interaction.response.send_message("❌ هذا الأمر لمالك البوت فقط.", ephemeral=True)
+        await interaction.response.defer(ephemeral=True)
+
+        raw = clean_text(name).lower()
+        if raw in ("default", "reset", "افتراضي"):
+            AI_SETTINGS_FILE.unlink(missing_ok=True)
+            primary, self.model_source = (ENV_MODEL if ENV_MODEL_RAW else DEFAULT_MODEL), (
+                "AI_MODEL" if ENV_MODEL_RAW else "الافتراضي"
+            )
+            self.model_candidates = build_model_candidates(primary)
+            self.active_model = primary
+            self.thinking_field_ok = True
+            return await interaction.followup.send(f"✅ رجعت للإعداد الأصلي: `{primary}`", ephemeral=True)
+
+        model, replaced = resolve_model_name(name)
+        status = await self._check_model(model)
+        if status != 200:
+            return await interaction.followup.send(
+                f"❌ الموديل `{model}` ما هو متاح (HTTP {status}). ما غيرت شي.",
+                ephemeral=True,
+            )
+
+        save_json(AI_SETTINGS_FILE, {"model": model})
+        self.model_candidates = build_model_candidates(model)
+        self.active_model = model
+        self.model_source = "أمر /ai model"
+        self.thinking_field_ok = True
+        self.pause_until = 0.0
+        note = f" (تم تحويل `{replaced}` تلقائيًا)" if replaced else ""
+        await interaction.followup.send(f"✅ تم تغيير الموديل إلى `{model}`{note}", ephemeral=True)
 
     @ai_group.command(name="toggle", description="تشغيل أو إيقاف Fime AI في هذا السيرفر")
     async def ai_toggle(self, interaction: discord.Interaction):
