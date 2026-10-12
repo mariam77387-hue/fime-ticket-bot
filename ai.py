@@ -2,25 +2,26 @@
 """
 Fime AI - مساعد الذكاء الاصطناعي لسيرفر Team Fime (Discord Cog)
 
-المزود: OpenAI (Chat Completions). المفتاح في OPENAI_API_KEY.
+المزود: Pollinations (gen.pollinations.ai) عبر endpoint متوافق مع OpenAI.
+المفتاح في POLLINATIONS_API_KEY (من https://enter.pollinations.ai).
 
 intents المطلوبة في البوت:
     intents.guilds = True
     intents.message_content = True
 
+الملف اسمه ai.py، فحمّله في البوت باسم "ai".
+
 المتغيرات (Environment Variables):
-    OPENAI_API_KEY               مفتاح OpenAI (يبدأ بـ sk-)                [مطلوب]
-    AI_MODEL                     الافتراضي gpt-5.4-nano                    [اختياري]
+    POLLINATIONS_API_KEY         مفتاح Pollinations (sk_ أو pk_)          [مطلوب]
     FIME_OWNER_ID                ايدي المالك (يشوف الأوامر الحساسة ويستلم التنبيهات) [مطلوب]
+    AI_MODEL                     اختياري. موديل معين، مثل openai-fast. إذا ما كان متاح يختار البوت البديل
     AI_CHANNEL_ID                روم الذكاء الاصطناعي                      [اختياري]
-    AI_REASONING_EFFORT          الافتراضي none                            [اختياري]
-    AI_MAX_OUTPUT_TOKENS         الافتراضي 800                             [اختياري]
+    AI_LOW_BALANCE               الافتراضي 20. ينبه المالك إذا الرصيد أقل من هذا [اختياري]
+    AI_MAX_OUTPUT_TOKENS         الافتراضي 600                             [اختياري]
     AI_USER_COOLDOWN             الافتراضي 8 ثواني                         [اختياري]
     AI_USER_DAILY_LIMIT          الافتراضي 20 طلب للعضو يوميًا              [اختياري]
     AI_GLOBAL_DAILY_LIMIT        الافتراضي 300 طلب يوميًا للبوت             [اختياري]
     AI_GLOBAL_DAILY_TOKEN_LIMIT  الافتراضي 0 (بدون حد)                     [اختياري]
-    AI_PRICE_INPUT_PER_M         الافتراضي 0.20 دولار لكل مليون توكن إدخال [اختياري]
-    AI_PRICE_OUTPUT_PER_M        الافتراضي 1.25 دولار لكل مليون توكن إخراج [اختياري]
     AI_CACHE_TTL                 الافتراضي 1200 ثانية                      [اختياري]
     AI_MEMORY_LIMIT              الافتراضي 6                               [اختياري]
     AI_ROOM_CONTEXT_LIMIT        الافتراضي 15                              [اختياري]
@@ -66,20 +67,20 @@ def _env_float(name: str, default: float) -> float:
         return default
 
 
-OPENAI_API_BASE = "https://api.openai.com/v1"
-OPENAI_API_KEY = _env_str("OPENAI_API_KEY").strip('"\'')
-LEGACY_KEY_SET = bool(_env_str("AI_API_KEY"))  # من النسخة القديمة، ما نستخدمه
+POLLINATIONS_BASE = "https://gen.pollinations.ai"
+POLLINATIONS_API_KEY = _env_str("POLLINATIONS_API_KEY").strip('"\'')
+LEGACY_OPENAI_KEY_SET = bool(_env_str("OPENAI_API_KEY"))  # موجود من النسخة القديمة، ما نستخدمه
 
 FIME_OWNER_ID = _env_int("FIME_OWNER_ID", 0)
 AI_CHANNEL_ID = _env_int("AI_CHANNEL_ID", 0)
+AI_MODEL_ENV = _env_str("AI_MODEL")
+LOW_BALANCE = _env_float("AI_LOW_BALANCE", 20.0)
 
-MAX_OUTPUT_TOKENS = _env_int("AI_MAX_OUTPUT_TOKENS", 800)
+MAX_OUTPUT_TOKENS = _env_int("AI_MAX_OUTPUT_TOKENS", 600)
 USER_COOLDOWN = _env_int("AI_USER_COOLDOWN", 8)
 USER_DAILY_LIMIT = _env_int("AI_USER_DAILY_LIMIT", 20)
 GLOBAL_DAILY_LIMIT = _env_int("AI_GLOBAL_DAILY_LIMIT", 300)
 GLOBAL_DAILY_TOKEN_LIMIT = _env_int("AI_GLOBAL_DAILY_TOKEN_LIMIT", 0)
-PRICE_INPUT_PER_M = _env_float("AI_PRICE_INPUT_PER_M", 0.20)
-PRICE_OUTPUT_PER_M = _env_float("AI_PRICE_OUTPUT_PER_M", 1.25)
 CACHE_TTL = _env_int("AI_CACHE_TTL", 1200)
 MEMORY_LIMIT = _env_int("AI_MEMORY_LIMIT", 6)
 ROOM_CONTEXT_LIMIT = _env_int("AI_ROOM_CONTEXT_LIMIT", 15)
@@ -89,47 +90,11 @@ ROOM_CONTEXT_LIMIT = _env_int("AI_ROOM_CONTEXT_LIMIT", 15)
 # MODEL SETTINGS
 # =========================================================
 
-DEFAULT_MODEL = "gpt-5.4-nano"
-
-FALLBACK_MODELS = ("gpt-5.4-nano", "gpt-5.4-mini", "gpt-4.1-nano")
-
-MODEL_ALIASES = {
-    "gpt-5-nano": "gpt-5.4-nano",
-    "gpt-5-mini": "gpt-5.4-mini",
-    "gpt-4o-mini": "gpt-4.1-nano",
-    "gpt-4o": "gpt-5.4-mini",
-    "gpt-4.1-mini": "gpt-5.4-mini",
-}
-
-REASONING_EFFORTS = ("none", "low", "medium", "high")
-_raw_effort = _env_str("AI_REASONING_EFFORT", "none").lower()
-REASONING_EFFORT = _raw_effort if _raw_effort in REASONING_EFFORTS else "none"
-
-
-def resolve_model_name(value: str) -> Tuple[str, Optional[str]]:
-    """يرجع (الموديل النهائي, ملاحظة للكونسول إذا تم تحويله أو رفضه)."""
-    name = (value or "").strip().lower()
-    if name.startswith("models/"):
-        name = name[len("models/"):]
-    if not name:
-        return DEFAULT_MODEL, None
-    if name in MODEL_ALIASES:
-        return MODEL_ALIASES[name], f"Model '{name}' is retired, using '{MODEL_ALIASES[name]}'."
-    if not name.startswith("gpt-"):
-        return DEFAULT_MODEL, f"Model '{name}' is not an OpenAI model, using '{DEFAULT_MODEL}'."
-    return name, None
-
-
-ENV_MODEL_RAW = _env_str("AI_MODEL")
-ENV_MODEL, ENV_MODEL_NOTE = resolve_model_name(ENV_MODEL_RAW)
-
-
-def build_model_candidates(primary: str) -> List[str]:
-    candidates = [primary]
-    for model in FALLBACK_MODELS:
-        if model not in candidates:
-            candidates.append(model)
-    return candidates
+# ترتيب التفضيل. الموديلات المدفوعة (-large) ما تدخل تلقائيًا.
+PREFERRED_MODELS = ("openai-fast", "openai", "gemini-fast", "mistral", "llama")
+MODEL_CHECK_INTERVAL = 6 * 60 * 60
+BALANCE_CHECK_INTERVAL = 6 * 60 * 60
+BALANCE_CHECK_INTERVAL_PAUSED = 10 * 60
 
 
 # =========================================================
@@ -150,6 +115,7 @@ REQUEST_TIMEOUT = 25
 MAX_RETRIES = 2
 MAX_CONCURRENT_REQUESTS = 3
 RETRYABLE_STATUS = (408, 500, 502, 503, 504)
+MAX_RETRY_AFTER = 30
 
 MEMORY_TTL = 2 * 60 * 60
 MEMORY_TEXT_LIMIT = 300
@@ -165,26 +131,27 @@ PAUSE_FILE = Path("ai_pause.json")
 
 # مدة الإيقاف حسب نوع المشكلة
 PAUSE_SECONDS = {"billing": 3600, "auth": 900, "quota": 600, "rate": 60}
-PAUSE_ALERT_INTERVAL = 1800  # ما نرسل تنبيه للمالك لنفس السبب أكثر من مرة كل 30 دقيقة
+PAUSE_ALERT_INTERVAL = 1800
+LOW_BALANCE_ALERT_INTERVAL = 24 * 60 * 60
 PAUSE_REASON_AR = {
-    "billing": "رصيد الحساب خلص",
-    "auth": "المفتاح غير صالح أو منتهي",
+    "billing": "رصيد Pollen خلص",
+    "auth": "المفتاح غير صالح أو ما عنده صلاحية",
     "quota": "وصل حد الاستخدام",
     "rate": "ضغط مؤقت على الخدمة",
 }
 OWNER_ALERTS = {
     "billing": (
-        "⚠️ **فيمي متوقف مؤقتًا: رصيد حساب OpenAI خلص.**\n"
-        "أضف رصيد من: https://platform.openai.com/settings/organization/billing\n"
-        "بيحاول تلقائيًا بعد ساعة، أو استخدم `/fime-admin test` بعد ما تشحن."
+        "⚠️ **فيمي متوقف مؤقتًا: رصيد Pollen خلص.**\n"
+        "اشحن من: https://enter.pollinations.ai\n"
+        "بيحاول تلقائيًا كل 10 دقايق، أو استخدم `/fime-admin test` بعد الشحن."
     ),
     "auth": (
-        "⚠️ **فيمي متوقف مؤقتًا: مفتاح OPENAI_API_KEY غير صالح.**\n"
+        "⚠️ **فيمي متوقف مؤقتًا: مفتاح POLLINATIONS_API_KEY غير صالح أو ما عنده صلاحية.**\n"
         "عدّله في الاستضافة وأعد تشغيل البوت."
     ),
     "quota": (
         "⚠️ **فيمي متوقف مؤقتًا: وصل حد الاستخدام عند المزود.**\n"
-        "راجع الحدود في لوحة حسابك، وبيحاول تلقائيًا بعد 10 دقايق."
+        "بيحاول تلقائيًا بعد 10 دقايق."
     ),
 }
 
@@ -257,15 +224,22 @@ class AIError(Exception):
 # PATTERNS
 # =========================================================
 
+# أسئلة عن المزود أو الموديل: نرد محليًا بدون ما نكشف شي
 IDENTITY_RE = re.compile(
-    r"(\bopenai\b|\bchatgpt\b|\bgpt\b|\bgemini\b|\bapi\b|\bapi key\b|\btoken\b|\bhosting\b|\bprovider\b"
+    r"(\bpollinations\b|\bpollen\b|\bopenai\b|\bchatgpt\b|\bgpt\b|\bgemini\b|\bclaude\b|\banthropic\b"
+    r"|\bdeepseek\b|\bmistral\b|\bllama\b|\bgrok\b|\bperplexity\b|\bapi\b|\bapi key\b|\btoken\b|\bhosting\b|\bprovider\b"
     r"|\bwhat model\b|\bwhich model\b|\bwho made you\b|\bwhat ai\b"
-    r"|جي ?بي ?تي|جيمناي|جيميني|اوبن ?اي|مفتاح ?(ال)?api|موديل ?(ال)?(ذكاء|ai|جي)|موديلك|الموديل اللي|مزودك|مزود الخدمة|استضاف|من صنعك|مين صنعك|من برمجك|مين برمجك|وش انت بالضبط)",
+    r"|جي ?بي ?تي|جيمناي|جيميني|اوبن ?اي|كلود|بولي ?(نيشن|نشن|ناشن|نيشنز)|بولينيشن|بولينشن"
+    r"|مفتاح ?(ال)?api|موديل ?(ال)?(ذكاء|ai|جي)|موديلك|الموديل اللي|مزودك|مزود الخدمة|استضاف"
+    r"|من صنعك|مين صنعك|من برمجك|مين برمجك|وش انت بالضبط)",
     re.IGNORECASE,
 )
 
+# أي كلام يطلع من الرد فيه اسم المزود أو الموديل يتم استبداله
 LEAK_RE = re.compile(
-    r"(\bopenai\b|\bchatgpt\b|\bgpt-?\d[\w.\-]*|\bgemini\b|جي ?بي ?تي|جيمناي|جيميني|اوبن ?اي)",
+    r"(\bpollinations\b|\bpollen\b|\bopenai\b|\bchatgpt\b|\bgpt-?\d[\w.\-]*|\bgemini\b|\bclaude\b|\banthropic\b"
+    r"|\bdeepseek\b|\bmistral\b|\bllama\b|\bgrok\b|\bperplexity\b"
+    r"|جي ?بي ?تي|جيمناي|جيميني|اوبن ?اي|كلود|بولي ?(نيشن|نشن|ناشن))",
     re.IGNORECASE,
 )
 
@@ -281,7 +255,6 @@ def normalize_arabic(text: Any) -> str:
     return re.sub(r"\s+", " ", value).strip()
 
 
-# نطبّع كلمات الترحيب والشكر بنفس طريقة الرسالة، عشان المطابقة تشتغل
 GREET_WORDS = {normalize_arabic(word) for word in GREET_WORDS_RAW}
 THANKS_WORDS = {normalize_arabic(word) for word in THANKS_WORDS_RAW}
 
@@ -394,8 +367,8 @@ def to_int(value: Any) -> int:
 
 def clean_error(error: Any) -> str:
     text = str(error)
-    if OPENAI_API_KEY:
-        text = text.replace(OPENAI_API_KEY, "[REDACTED]")
+    if POLLINATIONS_API_KEY:
+        text = text.replace(POLLINATIONS_API_KEY, "[REDACTED]")
     return truncate_text(text, 500)
 
 
@@ -404,39 +377,52 @@ def status_hint(status: int) -> str:
         400: "bad request",
         401: "invalid API key",
         402: "payment required",
-        403: "forbidden (no access to this model or project)",
-        404: "model not found or not available",
-        429: "rate limit or quota",
+        403: "forbidden",
+        404: "model not found",
+        429: "rate limit or balance",
     }
     return f"HTTP {status} ({hints.get(status, 'provider error')})"
 
 
-def openai_error(body: str) -> Tuple[str, str]:
-    """يرجع (code, message) من خطأ OpenAI بدون ما يطبع الجسم كامل."""
+def provider_error(body: str) -> Tuple[str, str]:
+    """يرجع (code, message) من الخطأ بدون ما يطبع الجسم كامل."""
     try:
         data = json.loads(body)
-        error = data.get("error") or {}
-        code = str(error.get("code") or error.get("type") or "")
-        message = truncate_text(str(error.get("message") or ""), 300)
-        return code, message
+        error = data.get("error") if isinstance(data, dict) else None
+        if isinstance(error, dict):
+            code = str(error.get("code") or error.get("type") or "")
+            message = truncate_text(str(error.get("message") or ""), 300)
+            return code, message
+        if isinstance(error, str):
+            return "", truncate_text(error, 300)
+        return "", truncate_text(body, 300)
     except (json.JSONDecodeError, AttributeError):
         return "", truncate_text(body, 300)
 
 
 def classify_error(status: int, code: str, message: str) -> str:
-    """يصنف الخطأ: billing (رصيد)، auth (مفتاح)، quota (حد)، rate (ضغط مؤقت)، أو فاضي."""
+    """billing (رصيد Pollen)، auth (مفتاح)، quota (حد)، rate (ضغط مؤقت)، أو فاضي."""
     text = f"{code} {message}".lower()
     if status == 402 or (status in (403, 429) and any(
-        key in text for key in ("credit", "billing", "payment", "insufficient_quota")
+        key in text for key in ("pollen", "balance", "insufficient", "credit", "billing", "payment")
     )):
         return "billing"
-    if status == 401 or "invalid_api_key" in text or "incorrect api key" in text:
+    if status == 401 or "invalid api key" in text or "unauthorized" in text:
+        return "auth"
+    if status == 403 and "permission" in text:
         return "auth"
     if status == 429 and "quota" in text:
         return "quota"
     if status == 429:
         return "rate"
     return ""
+
+
+def parse_retry_after(value: Optional[str]) -> float:
+    try:
+        return min(max(float(value), 0.0), MAX_RETRY_AFTER)
+    except (TypeError, ValueError):
+        return 0.0
 
 
 def split_for_discord(text: str, limit: int = DISCORD_LIMIT) -> List[str]:
@@ -485,20 +471,14 @@ def save_json(path: Path, data: Any) -> bool:
 
 
 def load_model_override() -> Optional[str]:
-    """الموديل اللي حدده المالك بأمر /fime-admin model. يتجاهل أي قيمة ما هي OpenAI."""
+    """الموديل اللي حدده المالك بأمر /fime-admin model."""
     data = load_json(AI_SETTINGS_FILE, {})
     if not isinstance(data, dict):
         return None
     value = data.get("model")
     if not isinstance(value, str) or not value.strip():
         return None
-    name = value.strip().lower()
-    if name.startswith("models/"):
-        name = name[len("models/"):]
-    if not (name.startswith("gpt-") or name in MODEL_ALIASES):
-        return None
-    model, _ = resolve_model_name(name)
-    return model
+    return value.strip()
 
 
 # =========================================================
@@ -555,20 +535,16 @@ class UsageLimiter:
 
     def snapshot(self) -> Dict[str, Any]:
         self._roll_day()
-        inp = to_int(self.state.get("input_tokens"))
-        out = to_int(self.state.get("output_tokens"))
-        cost = (inp / 1_000_000) * PRICE_INPUT_PER_M + (out / 1_000_000) * PRICE_OUTPUT_PER_M
         return {
             "global": self.state["global"],
             "unique_users": len(self.state["users"]),
-            "input_tokens": inp,
-            "output_tokens": out,
-            "cost": cost,
+            "input_tokens": to_int(self.state.get("input_tokens")),
+            "output_tokens": to_int(self.state.get("output_tokens")),
         }
 
 
 class PauseState:
-    """إيقاف مؤقت للمزود. محفوظ في ملف عشان ما يرجع يطلب بعد إعادة التشغيل."""
+    """إيقاف مؤقت للمزود + تنبيهات. محفوظ في ملف عشان ما يرجع يطلب بعد إعادة التشغيل."""
 
     def __init__(self):
         data = load_json(PAUSE_FILE, {})
@@ -576,6 +552,7 @@ class PauseState:
         self.until = float(data.get("until") or 0)
         self.reason = str(data.get("reason") or "")
         self.last_alert = float(data.get("last_alert") or 0)
+        self.last_low_alert = float(data.get("last_low_alert") or 0)
 
     def active(self) -> bool:
         return time.time() < self.until
@@ -584,7 +561,12 @@ class PauseState:
         return max(0, int((self.until - time.time()) // 60))
 
     def _save(self):
-        save_json(PAUSE_FILE, {"until": self.until, "reason": self.reason, "last_alert": self.last_alert})
+        save_json(PAUSE_FILE, {
+            "until": self.until,
+            "reason": self.reason,
+            "last_alert": self.last_alert,
+            "last_low_alert": self.last_low_alert,
+        })
 
     def start(self, reason: str) -> bool:
         """يرجع True إذا لازم نرسل تنبيه للمالك."""
@@ -600,6 +582,13 @@ class PauseState:
     def clear(self):
         self.until = 0.0
         self.reason = ""
+        self._save()
+
+    def low_balance_alert_due(self) -> bool:
+        return time.time() - self.last_low_alert > LOW_BALANCE_ALERT_INTERVAL
+
+    def mark_low_balance_alert(self):
+        self.last_low_alert = time.time()
         self._save()
 
 
@@ -859,37 +848,52 @@ class FimeAI(commands.Cog):
         self.background_tasks: set = set()
         self._pause_notice_at: Dict[int, float] = {}
 
-        override = load_model_override()
-        if override:
-            primary, self.model_source = override, "owner command"
-        elif ENV_MODEL_RAW:
-            primary, self.model_source = ENV_MODEL, "AI_MODEL"
-        else:
-            primary, self.model_source = DEFAULT_MODEL, "default"
-        self.model_candidates: List[str] = build_model_candidates(primary)
-        self.active_model: str = primary
+        # الموديلات المتاحة من /v1/models (None = ما نجحنا نجيبها)
+        self.available_models: Optional[List[str]] = None
+        self.balance: Optional[float] = None
+        self.model_order: List[str] = []
+        self.active_model: str = ""
+        self.model_source = "auto"
+        self.ready = bool(POLLINATIONS_API_KEY)
+        self._maintenance_started = False
 
-        self.reasoning_ok = True
-        self.ready = bool(OPENAI_API_KEY)
-        self._model_checked = False
         self._check_config()
+        self.model_order = self._build_model_order()
+        self.active_model = self.model_order[0]
         print("Fime AI initialized")
 
     # -----------------------------------------------------
-    # LIFECYCLE
+    # CONFIG / SESSION / TASKS
     # -----------------------------------------------------
 
     def _check_config(self):
-        if not OPENAI_API_KEY:
-            print("ERROR: OPENAI_API_KEY is missing. Fime AI is disabled.")
-            if LEGACY_KEY_SET:
-                print("INFO: AI_API_KEY is set but not used anymore. Put the key in OPENAI_API_KEY.")
+        if not POLLINATIONS_API_KEY:
+            print("ERROR: POLLINATIONS_API_KEY is missing. Fime AI is disabled.")
+            if LEGACY_OPENAI_KEY_SET:
+                print("INFO: OPENAI_API_KEY is set but not used anymore.")
             return
-        if not OPENAI_API_KEY.startswith("sk-"):
-            print("WARNING: the key does not look like an OpenAI key (usually starts with sk-).")
-        if ENV_MODEL_NOTE:
-            print(f"INFO: {ENV_MODEL_NOTE}")
-        print(f"Fime AI model: {self.active_model} ({self.model_source})")
+        if not POLLINATIONS_API_KEY.startswith(("sk_", "pk_")):
+            print("WARNING: the key does not look like a Pollinations key (usually starts with sk_ or pk_).")
+
+    def _build_model_order(self) -> List[str]:
+        override = load_model_override()
+        if override:
+            self.model_source = "owner command"
+            configured = override
+        elif AI_MODEL_ENV:
+            self.model_source = "AI_MODEL"
+            configured = AI_MODEL_ENV
+        else:
+            self.model_source = "auto"
+            configured = None
+
+        order: List[str] = []
+        if configured:
+            order.append(configured)
+        for name in PREFERRED_MODELS:
+            if name not in order:
+                order.append(name)
+        return order
 
     def _get_session(self) -> aiohttp.ClientSession:
         if self.session is None or self.session.closed:
@@ -897,7 +901,10 @@ class FimeAI(commands.Cog):
         return self.session
 
     def _auth_headers(self) -> Dict[str, str]:
-        return {"Authorization": f"Bearer {OPENAI_API_KEY}"}
+        headers = {"Content-Type": "application/json"}
+        if POLLINATIONS_API_KEY:
+            headers["Authorization"] = f"Bearer {POLLINATIONS_API_KEY}"
+        return headers
 
     def _spawn(self, coro) -> None:
         task = asyncio.create_task(coro)
@@ -918,11 +925,9 @@ class FimeAI(commands.Cog):
         for guild in self.bot.guilds:
             if not self.knowledge.get_server(guild.id).get("rooms"):
                 self.knowledge.scan_guild(guild)
-        if self.pause.active():
-            print(f"Fime AI is paused ({self.pause.reason}), about {self.pause.remaining_minutes()} min left.")
-        if self.ready and not self._model_checked:
-            self._model_checked = True
-            self._spawn(self._resolve_active_model())
+        if self.ready and not self._maintenance_started:
+            self._maintenance_started = True
+            self._spawn(self._maintenance_loop())
         print("Fime AI knowledge ready.")
 
     @commands.Cog.listener()
@@ -940,6 +945,87 @@ class FimeAI(commands.Cog):
     @commands.Cog.listener()
     async def on_guild_channel_delete(self, channel):
         self.knowledge.remove_room(channel.guild.id, channel.id)
+
+    # -----------------------------------------------------
+    # MAINTENANCE: موديلات + رصيد (لا تستهلك Pollen)
+    # -----------------------------------------------------
+
+    async def _maintenance_loop(self):
+        last_models = 0.0
+        while True:
+            try:
+                if time.time() - last_models > MODEL_CHECK_INTERVAL or self.available_models is None:
+                    await self.refresh_models()
+                    last_models = time.time()
+                await self.refresh_balance()
+            except asyncio.CancelledError:
+                raise
+            except Exception as error:
+                print(f"Maintenance error: {clean_error(error)}")
+            interval = BALANCE_CHECK_INTERVAL_PAUSED if self.is_paused() else BALANCE_CHECK_INTERVAL
+            await asyncio.sleep(interval)
+
+    async def _get_json(self, path: str) -> Tuple[int, Any, Dict[str, str]]:
+        try:
+            session = self._get_session()
+            async with session.get(f"{POLLINATIONS_BASE}{path}", headers=self._auth_headers()) as response:
+                text = await response.text()
+                try:
+                    data: Any = json.loads(text)
+                except json.JSONDecodeError:
+                    data = None
+                return response.status, data, dict(response.headers)
+        except Exception as error:
+            print(f"GET {path} failed: {clean_error(error)}")
+            return -1, None, {}
+
+    async def refresh_models(self) -> None:
+        status, data, _ = await self._get_json("/v1/models")
+        if status != 200 or not isinstance(data, dict):
+            print(f"Could not load model list (HTTP {status}). Using configured order.")
+            return
+        items = data.get("data") if isinstance(data.get("data"), list) else []
+        ids = [str(item.get("id")) for item in items if isinstance(item, dict) and item.get("id")]
+        if not ids:
+            return
+        self.available_models = ids
+        self.model_order = self._build_model_order()
+        self.active_model = self._pick_model(ids)
+        print(f"Models loaded: {len(ids)}. Active model: {self.active_model} ({self.model_source}).")
+
+    def _pick_model(self, available: List[str]) -> str:
+        for name in self.model_order:
+            if name in available:
+                return name
+        # آخر حل: أي موديل نصي غير مدفوع
+        for name in sorted(available):
+            if not name.endswith("-large") and "audio" not in name and "image" not in name:
+                return name
+        return self.model_order[0]
+
+    async def refresh_balance(self) -> None:
+        status, data, _ = await self._get_json("/account/balance")
+        if status != 200 or not isinstance(data, dict):
+            return
+        value = data.get("balance")
+        if not isinstance(value, (int, float)):
+            return
+        self.balance = float(value)
+
+        if self.balance <= 0:
+            self._enter_pause("billing")
+            return
+
+        if self.pause.active() and self.pause.reason == "billing":
+            # الرصيد رجع، نفك الإيقاف
+            self.pause.clear()
+            print("Balance restored, resuming Fime AI.")
+
+        if FIME_OWNER_ID and self.balance < LOW_BALANCE and self.pause.low_balance_alert_due():
+            self.pause.mark_low_balance_alert()
+            self._spawn(self._alert_owner(
+                f"⚠️ رصيد Pollen قليل: `{self.balance:.2f}`. اشحن من https://enter.pollinations.ai قبل ما يخلص."
+            ))
 
     # -----------------------------------------------------
     # PAUSE / OWNER ALERTS
@@ -964,35 +1050,14 @@ class FimeAI(commands.Cog):
             print(f"Could not DM the owner: {clean_error(error)}")
 
     # -----------------------------------------------------
-    # MODEL RESOLUTION (GET /models/{id} ما يستهلك توكنز)
+    # MODEL SWITCHING
     # -----------------------------------------------------
 
-    async def _check_model(self, model: str) -> int:
-        try:
-            session = self._get_session()
-            async with session.get(f"{OPENAI_API_BASE}/models/{model}", headers=self._auth_headers()) as response:
-                return response.status
-        except Exception as error:
-            print(f"Could not check model {model}: {clean_error(error)}")
-            return -1
-
-    async def _resolve_active_model(self):
-        for candidate in self.model_candidates:
-            status = await self._check_model(candidate)
-            if status == 200:
-                if candidate != self.active_model:
-                    print(f"Selected available model: {candidate}")
-                self.active_model = candidate
-                print(f"Model OK: {candidate}")
-                return
-            print(f"Model {candidate} is not available right now (HTTP {status}).")
-        print("ERROR: no model from the candidate list is available. Check OPENAI_API_KEY and run /fime-admin test.")
-
     def _next_model_after(self, bad: str) -> Optional[str]:
-        candidates = self.model_candidates
-        remaining = candidates[candidates.index(bad) + 1:] if bad in candidates else candidates
+        order = self.model_order
+        remaining = order[order.index(bad) + 1:] if bad in order else order
         for model in remaining:
-            if model != bad:
+            if model != bad and (self.available_models is None or model in self.available_models):
                 return model
         return None
 
@@ -1022,26 +1087,24 @@ class FimeAI(commands.Cog):
         return messages
 
     # -----------------------------------------------------
-    # OPENAI API (Chat Completions)
+    # CHAT COMPLETIONS
     # -----------------------------------------------------
 
-    async def _post(self, payload: Dict[str, Any]) -> Tuple[int, str]:
+    async def _post(self, payload: Dict[str, Any]) -> Tuple[int, str, Dict[str, str]]:
         session = self._get_session()
-        headers = {**self._auth_headers(), "Content-Type": "application/json"}
-        async with session.post(f"{OPENAI_API_BASE}/chat/completions", headers=headers, json=payload) as response:
-            return response.status, await response.text()
+        async with session.post(
+            f"{POLLINATIONS_BASE}/v1/chat/completions",
+            headers=self._auth_headers(),
+            json=payload,
+        ) as response:
+            return response.status, await response.text(), dict(response.headers)
 
     def _build_payload(self, model: str, messages: List[Dict[str, str]], max_tokens: int) -> Dict[str, Any]:
-        payload: Dict[str, Any] = {
+        return {
             "model": model,
             "messages": messages,
-            # موديلات GPT-5.x تقبل temperature = 1 فقط
-            "temperature": 1,
-            "max_completion_tokens": max_tokens,
+            "max_tokens": max_tokens,
         }
-        if self.reasoning_ok:
-            payload["reasoning_effort"] = REASONING_EFFORT
-        return payload
 
     def _extract(self, data: Dict[str, Any]) -> str:
         choices = data.get("choices") or []
@@ -1049,7 +1112,10 @@ class FimeAI(commands.Cog):
             raise AIError("no choices in response")
         choice = choices[0] or {}
         message = choice.get("message") or {}
-        content = clean_text(message.get("content"))
+        content = message.get("content")
+        if isinstance(content, list):
+            content = "".join(str(part.get("text", "")) for part in content if isinstance(part, dict))
+        content = clean_text(content)
         finish = choice.get("finish_reason")
 
         if content:
@@ -1064,7 +1130,7 @@ class FimeAI(commands.Cog):
 
     async def _generate(self, messages: List[Dict[str, str]], max_tokens: int) -> str:
         if not self.ready:
-            raise AIError("OPENAI_API_KEY is missing")
+            raise AIError("POLLINATIONS_API_KEY is missing")
         if self.is_paused():
             raise AIError(f"paused ({self.pause.reason})", user_message=PAUSED_MESSAGE, kind=self.pause.reason)
 
@@ -1080,7 +1146,7 @@ class FimeAI(commands.Cog):
                 payload = self._build_payload(model, messages, cap)
 
                 try:
-                    status, body = await self._post(payload)
+                    status, body, headers = await self._post(payload)
                 except (asyncio.TimeoutError, aiohttp.ClientError) as error:
                     last_error = f"network error: {type(error).__name__}"
                     if transient < MAX_RETRIES:
@@ -1101,35 +1167,28 @@ class FimeAI(commands.Cog):
                     self.limiter.add_tokens(to_int(usage.get("prompt_tokens")), to_int(usage.get("completion_tokens")))
 
                     choice = (data.get("choices") or [{}])[0] or {}
-                    content = clean_text((choice.get("message") or {}).get("content"))
-                    # مع reasoning none أحيانًا تخلص الميزانية في التفكير ويرجع فاضي.
-                    # نعيد المحاولة مرة وحدة بسقف أكبر.
-                    if not content and choice.get("finish_reason") == "length" and not empty_retry_done:
+                    content = (choice.get("message") or {}).get("content")
+                    # بعض الموديلات تخلص الميزانية في التفكير وترجع فاضي. نعيد مرة وحدة بسقف أكبر.
+                    if not clean_text(content if isinstance(content, str) else "") and \
+                            choice.get("finish_reason") == "length" and not empty_retry_done:
                         empty_retry_done = True
                         cap = min(cap * 2, 2000)
-                        print(f"Empty reply at length limit, retrying with max_completion_tokens={cap}.")
+                        print(f"Empty reply at length limit, retrying with max_tokens={cap}.")
                         continue
 
                     return self._extract(data)
 
-                code, message = openai_error(body)
+                code, message = provider_error(body)
                 last_error = f"{status_hint(status)} | {code} {message}".strip()
                 print(f"Fime AI error ({model}): {last_error}")
 
-                if status == 400 and self.reasoning_ok and "reasoning" in f"{code} {message}".lower():
-                    self.reasoning_ok = False
-                    print("Model does not accept reasoning_effort, disabled it.")
-                    continue
-
                 if status == 404 and self._switch_model(model):
                     continue
-
-                if status == 403 and "model" in f"{code} {message}".lower() and self._switch_model(model):
+                if status in (400, 403) and "model" in f"{code} {message}".lower() and self._switch_model(model):
                     continue
 
                 kind = classify_error(status, code, message)
 
-                # الرصيد والمفتاح والحد: ما نعيد المحاولة، نوقف ونبلغ المالك
                 if kind in ("billing", "auth", "quota"):
                     self._enter_pause(kind)
                     last_kind = kind
@@ -1138,7 +1197,8 @@ class FimeAI(commands.Cog):
                 if kind == "rate":
                     if transient < MAX_RETRIES:
                         transient += 1
-                        await asyncio.sleep(2.0 * transient)
+                        wait = parse_retry_after(headers.get("Retry-After")) or 2.0 * transient
+                        await asyncio.sleep(wait)
                         continue
                     self._enter_pause("rate")
                     last_kind = "rate"
@@ -1262,7 +1322,7 @@ class FimeAI(commands.Cog):
 
         normalized = normalize_arabic(content)
 
-        # 1) ردود جاهزة بدون توكنز
+        # 1) ردود جاهزة بدون استهلاك
         if normalized in GREET_WORDS:
             await self._send_error(message, GREET_REPLY)
             return
@@ -1270,7 +1330,7 @@ class FimeAI(commands.Cog):
             await self._send_error(message, THANKS_REPLY)
             return
 
-        # 2) أسئلة عن المزود أو الاستضافة: نرد محليًا
+        # 2) أسئلة عن المزود أو الموديل: نرد محليًا
         if IDENTITY_RE.search(content):
             await self._send_error(message, IDENTITY_REPLY)
             return
@@ -1280,13 +1340,13 @@ class FimeAI(commands.Cog):
             await self._send_error(message, random.choice(TOPIC_REDIRECTS))
             return
 
-        # 4) إجابة محفوظة لنفس السؤال في نفس الروم (بدون توكنز، حتى وقت الإيقاف)
+        # 4) إجابة محفوظة لنفس السؤال في نفس الروم (حتى وقت الإيقاف)
         cached = self.cache.get(self._cache_key(message.guild, message.channel, content))
         if cached:
             await self.send_answer(message, cached)
             return
 
-        # 5) المزود موقف مؤقتًا: نرد مرة كل 10 دقايق لكل روم، بدون ما نطلب من الـ API
+        # 5) المزود موقف مؤقتًا: رد مرة كل 10 دقايق لكل روم
         if self.is_paused():
             last = self._pause_notice_at.get(message.channel.id, 0.0)
             if time.time() - last > 600:
@@ -1315,7 +1375,6 @@ class FimeAI(commands.Cog):
             await self.send_answer(message, answer)
         except AIError as error:
             if error.user_message == PAUSED_MESSAGE:
-                # نسجل الإشعار عشان الرسائل اللي بعدها في نفس الروم ما تكرر الرد
                 self._pause_notice_at[message.channel.id] = time.time()
             await self._send_error(message, error.user_message)
         except Exception as error:
@@ -1353,7 +1412,7 @@ class FimeAI(commands.Cog):
         default_permissions=discord.Permissions(administrator=True),
     )
 
-    # ---------- status / test / model (owner) ----------
+    # ---------- owner only ----------
 
     @fime_admin.command(name="status", description="حالة فيمي")
     async def fa_status(self, interaction: discord.Interaction):
@@ -1383,8 +1442,11 @@ class FimeAI(commands.Cog):
                 )
             embed.add_field(name="الموديل", value=f"`{self.active_model}`", inline=True)
             embed.add_field(name="مصدر الإعداد", value=self.model_source, inline=True)
-            embed.add_field(name="التفكير", value=f"`{REASONING_EFFORT if self.reasoning_ok else 'off'}`", inline=True)
-
+            embed.add_field(
+                name="الرصيد",
+                value=f"{self.balance:.2f} Pollen" if self.balance is not None else "غير معروف",
+                inline=True,
+            )
         await interaction.response.send_message(embed=embed, ephemeral=True)
 
     @fime_admin.command(name="test", description="(للمالك) فحص الخدمة الداخلية")
@@ -1393,13 +1455,14 @@ class FimeAI(commands.Cog):
             return await self._deny(interaction, owner_only=True)
         await interaction.response.defer(ephemeral=True)
         if not self.ready:
-            return await interaction.followup.send("❌ OPENAI_API_KEY غير موجود في Environment.", ephemeral=True)
+            return await interaction.followup.send("❌ POLLINATIONS_API_KEY غير موجود في Environment.", ephemeral=True)
 
         self.pause.clear()  # الفحص اليدوي يتجاهل الإيقاف المؤقت
+        await self.refresh_balance()
         try:
             answer = await self._generate([{"role": "user", "content": "قل كلمة: تمام"}], max_tokens=40)
             await interaction.followup.send(
-                f"✅ الخدمة شغالة\nالموديل: `{self.active_model}`\nالرد: {truncate_text(answer, 120)}",
+                f"✅ الخدمة شغالة\nالموديل: `{self.active_model}`\nالرصيد: {self.balance}\nالرد: {truncate_text(answer, 120)}",
                 ephemeral=True,
             )
         except AIError as error:
@@ -1409,37 +1472,56 @@ class FimeAI(commands.Cog):
                 ephemeral=True,
             )
 
-    @fime_admin.command(name="model", description="(للمالك) إعداد داخلي بدون إعادة تشغيل")
-    @app_commands.describe(name="قيمة الإعداد، أو default للرجوع للإعداد الأصلي")
+    @fime_admin.command(name="models", description="(للمالك) الموديلات المتاحة الآن")
+    async def fa_models(self, interaction: discord.Interaction):
+        if not self._is_owner(interaction):
+            return await self._deny(interaction, owner_only=True)
+        await interaction.response.defer(ephemeral=True)
+        await self.refresh_models()
+        if not self.available_models:
+            return await interaction.followup.send("❌ ما قدرت أجيب قائمة الموديلات الحين.", ephemeral=True)
+        shown = [m for m in self.available_models if not m.endswith("-large")][:60]
+        await interaction.followup.send(
+            f"النشط: `{self.active_model}`\nالمتاح (بدون المدفوع):\n" + ", ".join(f"`{m}`" for m in shown),
+            ephemeral=True,
+        )
+
+    @fime_admin.command(name="model", description="(للمالك) تغيير الموديل بدون إعادة تشغيل")
+    @app_commands.describe(name="اسم الموديل، أو default للرجوع للتلقائي")
     async def fa_model(self, interaction: discord.Interaction, name: str):
         if not self._is_owner(interaction):
             return await self._deny(interaction, owner_only=True)
         await interaction.response.defer(ephemeral=True)
 
         raw = clean_text(name).lower()
-        if raw in ("default", "reset", "افتراضي"):
+        if raw in ("default", "reset", "auto", "تلقائي"):
             AI_SETTINGS_FILE.unlink(missing_ok=True)
-            primary = ENV_MODEL if ENV_MODEL_RAW else DEFAULT_MODEL
-            self.model_source = "AI_MODEL" if ENV_MODEL_RAW else "default"
-            self.model_candidates = build_model_candidates(primary)
-            self.active_model = primary
-            self.reasoning_ok = True
-            return await interaction.followup.send(f"✅ رجعت للإعداد الأصلي: `{primary}`", ephemeral=True)
+            self.model_order = self._build_model_order()
+            self.model_source = "AI_MODEL" if AI_MODEL_ENV else "auto"
+            self.active_model = self._pick_model(self.available_models or [])
+            return await interaction.followup.send(f"✅ رجعت للوضع التلقائي: `{self.active_model}`", ephemeral=True)
 
-        model, note = resolve_model_name(name)
-        status = await self._check_model(model)
-        if status != 200:
+        model = raw
+        if self.available_models is not None and model not in self.available_models:
             return await interaction.followup.send(
-                f"❌ الموديل `{model}` ما هو متاح (HTTP {status}). ما غيرت شي.",
+                f"❌ الموديل `{model}` ما هو موجود في القائمة. شوف الأسماء بأمر `/fime-admin models`.",
                 ephemeral=True,
             )
         save_json(AI_SETTINGS_FILE, {"model": model})
-        self.model_candidates = build_model_candidates(model)
+        self.model_order = self._build_model_order()
         self.active_model = model
         self.model_source = "owner command"
-        self.reasoning_ok = True
-        extra = f"\n{note}" if note else ""
-        await interaction.followup.send(f"✅ تم تغيير الإعداد إلى `{model}`{extra}", ephemeral=True)
+        await interaction.followup.send(f"✅ تم تغيير الموديل إلى `{model}`", ephemeral=True)
+
+    @fime_admin.command(name="balance", description="(للمالك) رصيد Pollen الحالي")
+    async def fa_balance(self, interaction: discord.Interaction):
+        if not self._is_owner(interaction):
+            return await self._deny(interaction, owner_only=True)
+        await interaction.response.defer(ephemeral=True)
+        await self.refresh_balance()
+        if self.balance is None:
+            return await interaction.followup.send("❌ ما قدرت أجيب الرصيد. تأكد من المفتاح.", ephemeral=True)
+        await interaction.followup.send(f"💰 الرصيد الحالي: `{self.balance:.2f}` Pollen", ephemeral=True)
 
     # ---------- admins ----------
 
@@ -1465,8 +1547,6 @@ class FimeAI(commands.Cog):
         embed.add_field(name="ردود محفوظة", value=f"{len(self.cache.items)}", inline=True)
         embed.add_field(name="توكنز الإدخال", value=f"{snap['input_tokens']:,}", inline=True)
         embed.add_field(name="توكنز الإخراج", value=f"{snap['output_tokens']:,}", inline=True)
-        if self._is_owner(interaction):
-            embed.add_field(name="التكلفة التقريبية", value=f"${snap['cost']:.4f}", inline=True)
         await interaction.response.send_message(embed=embed, ephemeral=True)
 
     @fime_admin.command(name="emoji", description="الإيموجي اللي يضاف لنهاية الردود")
