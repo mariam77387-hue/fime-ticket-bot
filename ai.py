@@ -2,18 +2,18 @@
 """
 Fime AI - مساعد الذكاء الاصطناعي لسيرفر Team Fime (Discord Cog)
 
-المزود: OpenAI (Chat Completions). المفتاح في OPENAI_API_KEY.
+المزود: Google Gemini API. المفتاح في AI_API_KEY.
 
 intents المطلوبة في البوت:
     intents.guilds = True
     intents.message_content = True
 
 المتغيرات (Environment Variables):
-    OPENAI_API_KEY               مفتاح OpenAI (يبدأ بـ sk-)                [مطلوب]
-    AI_MODEL                     الافتراضي gpt-5.4-nano                    [اختياري]
+    AI_API_KEY                    مفتاح Google Gemini API                  [مطلوب]
+    AI_MODEL                     الافتراضي gemini-3.5-flash-lite                    [اختياري]
     FIME_OWNER_ID                ايدي المالك (يشوف الأوامر الحساسة ويستلم التنبيهات) [مطلوب]
     AI_CHANNEL_ID                روم الذكاء الاصطناعي                      [اختياري]
-    AI_REASONING_EFFORT          الافتراضي none                            [اختياري]
+    AI_THINKING_LEVEL             الافتراضي minimal                         [اختياري]
     AI_MAX_OUTPUT_TOKENS         الافتراضي 800                             [اختياري]
     AI_USER_COOLDOWN             الافتراضي 8 ثواني                         [اختياري]
     AI_USER_DAILY_LIMIT          الافتراضي 20 طلب للعضو يوميًا              [اختياري]
@@ -66,9 +66,9 @@ def _env_float(name: str, default: float) -> float:
         return default
 
 
-OPENAI_API_BASE = "https://api.openai.com/v1"
-OPENAI_API_KEY = _env_str("OPENAI_API_KEY").strip('"\'')
-LEGACY_KEY_SET = bool(_env_str("AI_API_KEY"))  # من النسخة القديمة، ما نستخدمه
+GEMINI_API_BASE = "https://generativelanguage.googleapis.com/v1beta"
+AI_API_KEY = _env_str("AI_API_KEY").strip('"\'')
+
 
 FIME_OWNER_ID = _env_int("FIME_OWNER_ID", 0)
 AI_CHANNEL_ID = _env_int("AI_CHANNEL_ID", 0)
@@ -89,34 +89,26 @@ ROOM_CONTEXT_LIMIT = _env_int("AI_ROOM_CONTEXT_LIMIT", 15)
 # MODEL SETTINGS
 # =========================================================
 
-DEFAULT_MODEL = "gpt-5.4-nano"
-
-FALLBACK_MODELS = ("gpt-5.4-nano", "gpt-5.4-mini", "gpt-4.1-nano")
-
-MODEL_ALIASES = {
-    "gpt-5-nano": "gpt-5.4-nano",
-    "gpt-5-mini": "gpt-5.4-mini",
-    "gpt-4o-mini": "gpt-4.1-nano",
-    "gpt-4o": "gpt-5.4-mini",
-    "gpt-4.1-mini": "gpt-5.4-mini",
-}
-
-REASONING_EFFORTS = ("none", "low", "medium", "high")
-_raw_effort = _env_str("AI_REASONING_EFFORT", "none").lower()
-REASONING_EFFORT = _raw_effort if _raw_effort in REASONING_EFFORTS else "none"
+DEFAULT_MODEL = "gemini-3.5-flash-lite"
+FALLBACK_MODELS = ("gemini-2.5-flash-lite", "gemini-2.5-flash")
+MODEL_ALIASES = {}
+THINKING_LEVELS = ("minimal", "low", "medium", "high")
+_raw_thinking = _env_str("AI_THINKING_LEVEL", "minimal").lower()
+AI_THINKING_LEVEL = _raw_thinking if _raw_thinking in THINKING_LEVELS else "minimal"
+REASONING_EFFORT = AI_THINKING_LEVEL
 
 
 def resolve_model_name(value: str) -> Tuple[str, Optional[str]]:
-    """يرجع (الموديل النهائي, ملاحظة للكونسول إذا تم تحويله أو رفضه)."""
-    name = (value or "").strip().lower()
+    """Validate a Gemini model name without silently replacing valid model IDs."""
+    name = (value or "").strip()
     if name.startswith("models/"):
         name = name[len("models/"):]
     if not name:
         return DEFAULT_MODEL, None
-    if name in MODEL_ALIASES:
-        return MODEL_ALIASES[name], f"Model '{name}' is retired, using '{MODEL_ALIASES[name]}'."
-    if not name.startswith("gpt-"):
-        return DEFAULT_MODEL, f"Model '{name}' is not an OpenAI model, using '{DEFAULT_MODEL}'."
+    if not re.fullmatch(r"[A-Za-z0-9._-]{3,100}", name):
+        return DEFAULT_MODEL, f"Invalid Gemini model name '{name}', using '{DEFAULT_MODEL}'."
+    if not name.lower().startswith("gemini-"):
+        return DEFAULT_MODEL, f"Model '{name}' is not a Gemini model, using '{DEFAULT_MODEL}'."
     return name, None
 
 
@@ -174,12 +166,12 @@ PAUSE_REASON_AR = {
 }
 OWNER_ALERTS = {
     "billing": (
-        "⚠️ **فيمي متوقف مؤقتًا: رصيد حساب OpenAI خلص.**\n"
-        "أضف رصيد من: https://platform.openai.com/settings/organization/billing\n"
+        "⚠️ **فيمي متوقف مؤقتًا: رصيد أو حد استخدام Gemini وصل للحد.**\n"
+        "أضف رصيد من: https://platform.gemini.com/settings/organization/billing\n"
         "بيحاول تلقائيًا بعد ساعة، أو استخدم `/fime-admin test` بعد ما تشحن."
     ),
     "auth": (
-        "⚠️ **فيمي متوقف مؤقتًا: مفتاح OPENAI_API_KEY غير صالح.**\n"
+        "⚠️ **فيمي متوقف مؤقتًا: مفتاح AI_API_KEY غير صالح أو لا يملك صلاحية.**\n"
         "عدّله في الاستضافة وأعد تشغيل البوت."
     ),
     "quota": (
@@ -258,14 +250,14 @@ class AIError(Exception):
 # =========================================================
 
 IDENTITY_RE = re.compile(
-    r"(\bopenai\b|\bchatgpt\b|\bgpt\b|\bgemini\b|\bapi\b|\bapi key\b|\btoken\b|\bhosting\b|\bprovider\b"
+    r"(\bgemini\b|\bchatgpt\b|\bgpt\b|\bgemini\b|\bapi\b|\bapi key\b|\btoken\b|\bhosting\b|\bprovider\b"
     r"|\bwhat model\b|\bwhich model\b|\bwho made you\b|\bwhat ai\b"
     r"|جي ?بي ?تي|جيمناي|جيميني|اوبن ?اي|مفتاح ?(ال)?api|موديل ?(ال)?(ذكاء|ai|جي)|موديلك|الموديل اللي|مزودك|مزود الخدمة|استضاف|من صنعك|مين صنعك|من برمجك|مين برمجك|وش انت بالضبط)",
     re.IGNORECASE,
 )
 
 LEAK_RE = re.compile(
-    r"(\bopenai\b|\bchatgpt\b|\bgpt-?\d[\w.\-]*|\bgemini\b|جي ?بي ?تي|جيمناي|جيميني|اوبن ?اي)",
+    r"(\bgemini\b|\bchatgpt\b|\bgpt-?\d[\w.\-]*|\bgemini\b|جي ?بي ?تي|جيمناي|جيميني|اوبن ?اي)",
     re.IGNORECASE,
 )
 
@@ -394,8 +386,8 @@ def to_int(value: Any) -> int:
 
 def clean_error(error: Any) -> str:
     text = str(error)
-    if OPENAI_API_KEY:
-        text = text.replace(OPENAI_API_KEY, "[REDACTED]")
+    if AI_API_KEY:
+        text = text.replace(AI_API_KEY, "[REDACTED]")
     return truncate_text(text, 500)
 
 
@@ -411,15 +403,15 @@ def status_hint(status: int) -> str:
     return f"HTTP {status} ({hints.get(status, 'provider error')})"
 
 
-def openai_error(body: str) -> Tuple[str, str]:
-    """يرجع (code, message) من خطأ OpenAI بدون ما يطبع الجسم كامل."""
+def gemini_error(body: str) -> Tuple[str, str]:
+    """Parse Gemini's {error:{status,message}} response."""
     try:
         data = json.loads(body)
         error = data.get("error") or {}
-        code = str(error.get("code") or error.get("type") or "")
+        code = str(error.get("status") or error.get("code") or error.get("type") or "")
         message = truncate_text(str(error.get("message") or ""), 300)
         return code, message
-    except (json.JSONDecodeError, AttributeError):
+    except (json.JSONDecodeError, AttributeError, TypeError):
         return "", truncate_text(body, 300)
 
 
@@ -485,7 +477,7 @@ def save_json(path: Path, data: Any) -> bool:
 
 
 def load_model_override() -> Optional[str]:
-    """الموديل اللي حدده المالك بأمر /fime-admin model. يتجاهل أي قيمة ما هي OpenAI."""
+    """الموديل اللي حدده المالك بأمر /fime-admin model. يتجاهل أي قيمة ما هي Google Gemini."""
     data = load_json(AI_SETTINGS_FILE, {})
     if not isinstance(data, dict):
         return None
@@ -495,7 +487,7 @@ def load_model_override() -> Optional[str]:
     name = value.strip().lower()
     if name.startswith("models/"):
         name = name[len("models/"):]
-    if not (name.startswith("gpt-") or name in MODEL_ALIASES):
+    if not name.startswith("gemini-"):
         return None
     model, _ = resolve_model_name(name)
     return model
@@ -870,7 +862,7 @@ class FimeAI(commands.Cog):
         self.active_model: str = primary
 
         self.reasoning_ok = True
-        self.ready = bool(OPENAI_API_KEY)
+        self.ready = bool(AI_API_KEY)
         self._model_checked = False
         self._check_config()
         print("Fime AI initialized")
@@ -880,16 +872,12 @@ class FimeAI(commands.Cog):
     # -----------------------------------------------------
 
     def _check_config(self):
-        if not OPENAI_API_KEY:
-            print("ERROR: OPENAI_API_KEY is missing. Fime AI is disabled.")
-            if LEGACY_KEY_SET:
-                print("INFO: AI_API_KEY is set but not used anymore. Put the key in OPENAI_API_KEY.")
+        if not AI_API_KEY:
+            print("ERROR: AI_API_KEY is missing. Fime AI is disabled.")
             return
-        if not OPENAI_API_KEY.startswith("sk-"):
-            print("WARNING: the key does not look like an OpenAI key (usually starts with sk-).")
         if ENV_MODEL_NOTE:
             print(f"INFO: {ENV_MODEL_NOTE}")
-        print(f"Fime AI model: {self.active_model} ({self.model_source})")
+        print(f"Fime AI provider: Google Gemini; model: {self.active_model} ({self.model_source})")
 
     def _get_session(self) -> aiohttp.ClientSession:
         if self.session is None or self.session.closed:
@@ -897,7 +885,7 @@ class FimeAI(commands.Cog):
         return self.session
 
     def _auth_headers(self) -> Dict[str, str]:
-        return {"Authorization": f"Bearer {OPENAI_API_KEY}"}
+        return {"Content-Type": "application/json", "x-goog-api-key": AI_API_KEY}
 
     def _spawn(self, coro) -> None:
         task = asyncio.create_task(coro)
@@ -970,10 +958,11 @@ class FimeAI(commands.Cog):
     async def _check_model(self, model: str) -> int:
         try:
             session = self._get_session()
-            async with session.get(f"{OPENAI_API_BASE}/models/{model}", headers=self._auth_headers()) as response:
+            url = f"{GEMINI_API_BASE}/models/{model}"
+            async with session.get(url, headers=self._auth_headers()) as response:
                 return response.status
         except Exception as error:
-            print(f"Could not check model {model}: {clean_error(error)}")
+            print(f"Could not check Gemini model {model}: {clean_error(error)}")
             return -1
 
     async def _resolve_active_model(self):
@@ -986,7 +975,7 @@ class FimeAI(commands.Cog):
                 print(f"Model OK: {candidate}")
                 return
             print(f"Model {candidate} is not available right now (HTTP {status}).")
-        print("ERROR: no model from the candidate list is available. Check OPENAI_API_KEY and run /fime-admin test.")
+        print("ERROR: no model from the candidate list is available. Check AI_API_KEY and run /fime-admin test.")
 
     def _next_model_after(self, bad: str) -> Optional[str]:
         candidates = self.model_candidates
@@ -1022,70 +1011,84 @@ class FimeAI(commands.Cog):
         return messages
 
     # -----------------------------------------------------
-    # OPENAI API (Chat Completions)
+    # GOOGLE GEMINI API (generateContent)
     # -----------------------------------------------------
 
-    async def _post(self, payload: Dict[str, Any]) -> Tuple[int, str]:
+    async def _post(self, model: str, payload: Dict[str, Any]) -> Tuple[int, str]:
         session = self._get_session()
-        headers = {**self._auth_headers(), "Content-Type": "application/json"}
-        async with session.post(f"{OPENAI_API_BASE}/chat/completions", headers=headers, json=payload) as response:
+        url = f"{GEMINI_API_BASE}/models/{model}:generateContent"
+        async with session.post(url, headers=self._auth_headers(), json=payload) as response:
             return response.status, await response.text()
 
-    def _build_payload(self, model: str, messages: List[Dict[str, str]], max_tokens: int) -> Dict[str, Any]:
+    def _build_payload(self, messages: List[Dict[str, str]], max_tokens: int) -> Dict[str, Any]:
+        system_text = ""
+        contents = []
+        for item in messages:
+            role = item.get("role", "user")
+            content = clean_text(item.get("content"))
+            if not content:
+                continue
+            if role == "system":
+                system_text += content + "\n"
+            else:
+                contents.append({
+                    "role": "model" if role == "assistant" else "user",
+                    "parts": [{"text": content}],
+                })
+        if not contents:
+            contents = [{"role": "user", "parts": [{"text": "هلا"}]}]
+        generation_config = {"maxOutputTokens": max(1, min(int(max_tokens), 8192))}
         payload: Dict[str, Any] = {
-            "model": model,
-            "messages": messages,
-            # موديلات GPT-5.x تقبل temperature = 1 فقط
-            "temperature": 1,
-            "max_completion_tokens": max_tokens,
+            "contents": contents,
+            "generationConfig": generation_config,
         }
-        if self.reasoning_ok:
-            payload["reasoning_effort"] = REASONING_EFFORT
+        if system_text.strip():
+            payload["systemInstruction"] = {"parts": [{"text": system_text.strip()}]}
+        # Gemini 3 supports thinkingLevel; unsupported model/API versions are handled by retry without it.
+        generation_config["thinkingConfig"] = {"thinkingLevel": AI_THINKING_LEVEL.upper()}
         return payload
 
     def _extract(self, data: Dict[str, Any]) -> str:
-        choices = data.get("choices") or []
-        if not choices:
-            raise AIError("no choices in response")
-        choice = choices[0] or {}
-        message = choice.get("message") or {}
-        content = clean_text(message.get("content"))
-        finish = choice.get("finish_reason")
-
-        if content:
-            if finish == "length":
-                content = content.rstrip() + "…"
-            return content
-        if finish == "length":
-            raise AIError("empty reply at length limit", user_message="الرد كان أطول من الحد المسموح، اختصر سؤالك.")
-        if finish == "content_filter" or message.get("refusal"):
-            raise AIError("reply filtered", user_message="ما أقدر أرد على هذي الرسالة، جرب صياغة ثانية.")
-        raise AIError(f"empty reply (finish_reason={finish})")
+        candidates = data.get("candidates") or []
+        if not candidates:
+            feedback = data.get("promptFeedback") or {}
+            reason = feedback.get("blockReason")
+            if reason:
+                raise AIError(f"Gemini blocked prompt: {reason}", user_message="ما أقدر أرد على هذي الرسالة، جرب صياغة ثانية.")
+            raise AIError("Gemini returned no candidates")
+        candidate = candidates[0] or {}
+        content = candidate.get("content") or {}
+        parts = content.get("parts") or []
+        answer = clean_text("\n".join(str(part.get("text", "")) for part in parts if isinstance(part, dict)))
+        finish = candidate.get("finishReason")
+        if answer:
+            if finish == "MAX_TOKENS":
+                answer = answer.rstrip() + "…"
+            return answer
+        if finish in ("SAFETY", "BLOCKLIST", "PROHIBITED_CONTENT"):
+            raise AIError("Gemini safety filter", user_message="ما أقدر أرد على هذي الرسالة، جرب صياغة ثانية.")
+        raise AIError(f"Empty Gemini reply (finishReason={finish})")
 
     async def _generate(self, messages: List[Dict[str, str]], max_tokens: int) -> str:
         if not self.ready:
-            raise AIError("OPENAI_API_KEY is missing")
+            raise AIError("AI_API_KEY is missing")
         if self.is_paused():
             raise AIError(f"paused ({self.pause.reason})", user_message=PAUSED_MESSAGE, kind=self.pause.reason)
 
         transient = 0
-        empty_retry_done = False
-        cap = max_tokens
-        last_error = "unknown error"
+        last_error = "unknown Gemini error"
         last_kind = ""
-
         async with self.api_slots:
-            for _ in range(10):
+            for attempt in range(MAX_RETRIES + 3):
                 model = self.active_model
-                payload = self._build_payload(model, messages, cap)
-
+                payload = self._build_payload(messages, max_tokens)
                 try:
-                    status, body = await self._post(payload)
+                    status, body = await self._post(model, payload)
                 except (asyncio.TimeoutError, aiohttp.ClientError) as error:
                     last_error = f"network error: {type(error).__name__}"
                     if transient < MAX_RETRIES:
                         transient += 1
-                        await asyncio.sleep(1.0 * transient)
+                        await asyncio.sleep(float(transient))
                         continue
                     break
 
@@ -1093,49 +1096,44 @@ class FimeAI(commands.Cog):
                     try:
                         data = json.loads(body)
                     except json.JSONDecodeError as error:
-                        raise AIError("invalid JSON from provider") from error
-                    if not isinstance(data, dict):
-                        raise AIError("unexpected response shape")
-
-                    usage = data.get("usage") or {}
-                    self.limiter.add_tokens(to_int(usage.get("prompt_tokens")), to_int(usage.get("completion_tokens")))
-
-                    choice = (data.get("choices") or [{}])[0] or {}
-                    content = clean_text((choice.get("message") or {}).get("content"))
-                    # مع reasoning none أحيانًا تخلص الميزانية في التفكير ويرجع فاضي.
-                    # نعيد المحاولة مرة وحدة بسقف أكبر.
-                    if not content and choice.get("finish_reason") == "length" and not empty_retry_done:
-                        empty_retry_done = True
-                        cap = min(cap * 2, 2000)
-                        print(f"Empty reply at length limit, retrying with max_completion_tokens={cap}.")
-                        continue
-
+                        raise AIError("invalid JSON from Gemini") from error
+                    usage = data.get("usageMetadata") or {}
+                    self.limiter.add_tokens(
+                        to_int(usage.get("promptTokenCount")),
+                        to_int(usage.get("candidatesTokenCount")),
+                    )
                     return self._extract(data)
 
-                code, message = openai_error(body)
-                last_error = f"{status_hint(status)} | {code} {message}".strip()
-                print(f"Fime AI error ({model}): {last_error}")
+                code, message = gemini_error(body)
+                last_error = f"HTTP {status} | {code} {message}".strip()
+                print(f"Fime Gemini error ({model}): {last_error}")
+                error_text = f"{code} {message}".lower()
 
-                if status == 400 and self.reasoning_ok and "reasoning" in f"{code} {message}".lower():
-                    self.reasoning_ok = False
-                    print("Model does not accept reasoning_effort, disabled it.")
-                    continue
+                # Some models/API versions do not accept thinkingConfig. Retry once without it.
+                if status == 400 and "thinking" in error_text and "thinkingConfig" in payload.get("generationConfig", {}):
+                    payload["generationConfig"].pop("thinkingConfig", None)
+                    try:
+                        status2, body2 = await self._post(model, payload)
+                        if 200 <= status2 < 300:
+                            data2 = json.loads(body2)
+                            usage = data2.get("usageMetadata") or {}
+                            self.limiter.add_tokens(to_int(usage.get("promptTokenCount")), to_int(usage.get("candidatesTokenCount")))
+                            return self._extract(data2)
+                        status, body = status2, body2
+                        code, message = gemini_error(body)
+                        last_error = f"HTTP {status} | {code} {message}".strip()
+                    except (asyncio.TimeoutError, aiohttp.ClientError):
+                        pass
 
-                if status == 404 and self._switch_model(model):
-                    continue
-
-                if status == 403 and "model" in f"{code} {message}".lower() and self._switch_model(model):
-                    continue
-
-                kind = classify_error(status, code, message)
-
-                # الرصيد والمفتاح والحد: ما نعيد المحاولة، نوقف ونبلغ المالك
-                if kind in ("billing", "auth", "quota"):
-                    self._enter_pause(kind)
-                    last_kind = kind
+                if status in (401, 403):
+                    self._enter_pause("auth")
+                    last_kind = "auth"
                     break
-
-                if kind == "rate":
+                if status == 429:
+                    if any(word in error_text for word in ("quota", "resource_exhausted")):
+                        self._enter_pause("quota")
+                        last_kind = "quota"
+                        break
                     if transient < MAX_RETRIES:
                         transient += 1
                         await asyncio.sleep(2.0 * transient)
@@ -1143,15 +1141,15 @@ class FimeAI(commands.Cog):
                     self._enter_pause("rate")
                     last_kind = "rate"
                     break
-
+                if status == 404 and self._switch_model(model):
+                    continue
                 if status in RETRYABLE_STATUS and transient < MAX_RETRIES:
                     transient += 1
                     await asyncio.sleep(1.5 * transient)
                     continue
                 break
 
-        user_message = PAUSED_MESSAGE if last_kind else GENERIC_ERROR
-        raise AIError(last_error, user_message=user_message, kind=last_kind)
+        raise AIError(last_error, user_message=PAUSED_MESSAGE if last_kind else GENERIC_ERROR, kind=last_kind)
 
     # -----------------------------------------------------
     # ASK / OUTPUT SAFETY
@@ -1383,7 +1381,7 @@ class FimeAI(commands.Cog):
                 )
             embed.add_field(name="الموديل", value=f"`{self.active_model}`", inline=True)
             embed.add_field(name="مصدر الإعداد", value=self.model_source, inline=True)
-            embed.add_field(name="التفكير", value=f"`{REASONING_EFFORT if self.reasoning_ok else 'off'}`", inline=True)
+            embed.add_field(name="التفكير", value=f"`{AI_THINKING_LEVEL if self.reasoning_ok else 'off'}`", inline=True)
 
         await interaction.response.send_message(embed=embed, ephemeral=True)
 
@@ -1393,7 +1391,7 @@ class FimeAI(commands.Cog):
             return await self._deny(interaction, owner_only=True)
         await interaction.response.defer(ephemeral=True)
         if not self.ready:
-            return await interaction.followup.send("❌ OPENAI_API_KEY غير موجود في Environment.", ephemeral=True)
+            return await interaction.followup.send("❌ AI_API_KEY غير موجود في Environment.", ephemeral=True)
 
         self.pause.clear()  # الفحص اليدوي يتجاهل الإيقاف المؤقت
         try:
