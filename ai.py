@@ -15,7 +15,7 @@ intents المطلوبة في البوت:
     AI_CHANNEL_ID                روم الذكاء الاصطناعي                      [اختياري]
     AI_THINKING_LEVEL             الافتراضي minimal                         [اختياري]
     AI_MAX_OUTPUT_TOKENS         الافتراضي 800                             [اختياري]
-    AI_USER_COOLDOWN             الافتراضي 8 ثواني                         [اختياري]
+    AI_USER_COOLDOWN             الافتراضي 0 (لا يتم إسقاط الرسائل بصمت)     [اختياري]
     AI_USER_DAILY_LIMIT          الافتراضي 20 طلب للعضو يوميًا              [اختياري]
     AI_GLOBAL_DAILY_LIMIT        الافتراضي 300 طلب يوميًا للبوت             [اختياري]
     AI_GLOBAL_DAILY_TOKEN_LIMIT  الافتراضي 0 (بدون حد)                     [اختياري]
@@ -73,8 +73,8 @@ AI_API_KEY = _env_str("AI_API_KEY").strip('"\'')
 FIME_OWNER_ID = _env_int("FIME_OWNER_ID", 0)
 AI_CHANNEL_ID = _env_int("AI_CHANNEL_ID", 0)
 
-MAX_OUTPUT_TOKENS = _env_int("AI_MAX_OUTPUT_TOKENS", 800)
-USER_COOLDOWN = _env_int("AI_USER_COOLDOWN", 8)
+MAX_OUTPUT_TOKENS = max(128, min(_env_int("AI_MAX_OUTPUT_TOKENS", 500), 600))
+USER_COOLDOWN = max(0, _env_int("AI_USER_COOLDOWN", 0))
 USER_DAILY_LIMIT = _env_int("AI_USER_DAILY_LIMIT", 20)
 GLOBAL_DAILY_LIMIT = _env_int("AI_GLOBAL_DAILY_LIMIT", 300)
 GLOBAL_DAILY_TOKEN_LIMIT = _env_int("AI_GLOBAL_DAILY_TOKEN_LIMIT", 0)
@@ -82,7 +82,7 @@ PRICE_INPUT_PER_M = _env_float("AI_PRICE_INPUT_PER_M", 0.20)
 PRICE_OUTPUT_PER_M = _env_float("AI_PRICE_OUTPUT_PER_M", 1.25)
 CACHE_TTL = _env_int("AI_CACHE_TTL", 1200)
 MEMORY_LIMIT = _env_int("AI_MEMORY_LIMIT", 6)
-ROOM_CONTEXT_LIMIT = _env_int("AI_ROOM_CONTEXT_LIMIT", 15)
+ROOM_CONTEXT_LIMIT = max(3, min(_env_int("AI_ROOM_CONTEXT_LIMIT", 8), 12))
 
 
 # =========================================================
@@ -91,7 +91,7 @@ ROOM_CONTEXT_LIMIT = _env_int("AI_ROOM_CONTEXT_LIMIT", 15)
 
 DEFAULT_MODEL = "gemini-3.5-flash-lite"
 # النماذج الأحدث أولًا؛ نتجنب 2.5 و2.0 لأنها قد تكون محدودة أو متوقفة لحسابات جديدة.
-FALLBACK_MODELS = ("gemini-3.8-flash", "gemini-3.6-flash")
+FALLBACK_MODELS = ("gemini-3.5-flash-lite",)
 MODEL_ALIASES = {}
 THINKING_LEVELS = ("minimal", "low", "medium", "high")
 _raw_thinking = _env_str("AI_THINKING_LEVEL", "minimal").lower()
@@ -109,9 +109,9 @@ def resolve_model_name(value: str) -> Tuple[str, Optional[str]]:
     # ترحيل تلقائي من أسماء قديمة ظهرت في إعدادات الاستضافة أو ملف الإعدادات.
     legacy_models = {
         "gemini-2.5-flash-lite": "gemini-3.5-flash-lite",
-        "gemini-2.5-flash": "gemini-3.8-flash",
-        "gemini-2.0-flash": "gemini-3.6-flash",
-        "gemini-2.0-flash-001": "gemini-3.6-flash",
+        "gemini-2.5-flash": "gemini-3.5-flash-lite",
+        "gemini-2.0-flash": "gemini-3.5-flash-lite",
+        "gemini-2.0-flash-001": "gemini-3.5-flash-lite",
     }
     name = legacy_models.get(name.lower(), name)
     if not re.fullmatch(r"[A-Za-z0-9._-]{3,100}", name):
@@ -147,16 +147,16 @@ LEAK_REPLY = "ما أقدر أتكلم عن تفاصيل تشغيلي، بس أ�
 GREET_REPLY = "هلا والله! وش تبي تعرف عن السيرفر؟"
 THANKS_REPLY = "العفو، أي وقت."
 
-REQUEST_TIMEOUT = 25
-MAX_RETRIES = 2
-MAX_CONCURRENT_REQUESTS = 3
+REQUEST_TIMEOUT = 18
+MAX_RETRIES = 1
+MAX_CONCURRENT_REQUESTS = 5
 RETRYABLE_STATUS = (408, 500, 502, 503, 504)
 
 MEMORY_TTL = 2 * 60 * 60
 MEMORY_TEXT_LIMIT = 300
 MAX_MESSAGE_LENGTH = 600
 ROOM_DESCRIPTION_LIMIT = 80
-CONTEXT_CHAR_LIMIT = 4000
+CONTEXT_CHAR_LIMIT = 2500
 
 KNOWLEDGE_FILE = Path("ai_server_knowledge.json")
 EMOJI_FILE = Path("ai_emoji_settings.json")
@@ -532,8 +532,6 @@ class UsageLimiter:
             to_int(self.state.get("input_tokens")) + to_int(self.state.get("output_tokens"))
         ) >= GLOBAL_DAILY_TOKEN_LIMIT:
             return "tokens"
-        if time.monotonic() - self.last_call.get(user_id, float("-inf")) < USER_COOLDOWN:
-            return "cooldown"
         if self.state["users"].get(str(user_id), 0) >= USER_DAILY_LIMIT:
             return "daily"
         return None
@@ -859,6 +857,8 @@ class FimeAI(commands.Cog):
         self.session: Optional[aiohttp.ClientSession] = None
         self.background_tasks: set = set()
         self._pause_notice_at: Dict[int, float] = {}
+        self._seen_message_ids = deque(maxlen=5000)
+        self._seen_message_id_set = set()
 
         override = load_model_override()
         if override:
@@ -886,7 +886,7 @@ class FimeAI(commands.Cog):
             return
         if ENV_MODEL_NOTE:
             print(f"INFO: {ENV_MODEL_NOTE}")
-        print(f"Fime AI provider: Google Gemini; configured AI_MODEL={ENV_MODEL_RAW or DEFAULT_MODEL}; active model={self.active_model} ({self.model_source})")
+        print(f"Fime AI provider: Google Gemini; configured AI_MODEL={ENV_MODEL_RAW or DEFAULT_MODEL}; active model={self.active_model} ({self.model_source}); cooldown=off; timeout={REQUEST_TIMEOUT}s; max_tokens={MAX_OUTPUT_TOKENS}")
 
     def _get_session(self) -> aiohttp.ClientSession:
         if self.session is None or self.session.closed:
@@ -984,7 +984,7 @@ class FimeAI(commands.Cog):
                 print(f"Model OK: {candidate}")
                 return
             print(f"Model {candidate} is not available right now (HTTP {status}).")
-        print("ERROR: no configured Gemini model is available. Set AI_MODEL=gemini-3.5-flash-lite (or gemini-3.8-flash), verify AI_API_KEY and API access, then restart.")
+        print("ERROR: no configured Gemini model is available. Set AI_MODEL=gemini-3.5-flash-lite, verify AI_API_KEY and API access, then restart.")
 
     def _next_model_after(self, bad: str) -> Optional[str]:
         candidates = self.model_candidates
@@ -1097,7 +1097,7 @@ class FimeAI(commands.Cog):
                     last_error = f"network error: {type(error).__name__}"
                     if transient < MAX_RETRIES:
                         transient += 1
-                        await asyncio.sleep(float(transient))
+                        await asyncio.sleep(0.35 * transient)
                         continue
                     break
 
@@ -1145,7 +1145,7 @@ class FimeAI(commands.Cog):
                         break
                     if transient < MAX_RETRIES:
                         transient += 1
-                        await asyncio.sleep(2.0 * transient)
+                        await asyncio.sleep(0.5 * transient)
                         continue
                     self._enter_pause("rate")
                     last_kind = "rate"
@@ -1154,7 +1154,7 @@ class FimeAI(commands.Cog):
                     continue
                 if status in RETRYABLE_STATUS and transient < MAX_RETRIES:
                     transient += 1
-                    await asyncio.sleep(1.5 * transient)
+                    await asyncio.sleep(0.5 * transient)
                     continue
                 break
 
@@ -1240,6 +1240,15 @@ class FimeAI(commands.Cog):
         if message.author.bot or not message.guild or not self.ready:
             return
 
+        # Guard against accidental duplicate dispatch without suppressing the user's next message.
+        if message.id in self._seen_message_id_set:
+            return
+        if len(self._seen_message_ids) == self._seen_message_ids.maxlen:
+            expired = self._seen_message_ids[0]
+            self._seen_message_id_set.discard(expired)
+        self._seen_message_ids.append(message.id)
+        self._seen_message_id_set.add(message.id)
+
         mentioned = bool(self.bot.user and self.bot.user in message.mentions)
         ai_channel_id = self.knowledge.get_ai_channel_id(message.guild)
 
@@ -1303,8 +1312,6 @@ class FimeAI(commands.Cog):
 
         # 6) حدود الاستخدام
         reason = self.limiter.check(message.author.id)
-        if reason == "cooldown":
-            return
         if reason:
             await self._send_error(message, LIMIT_MESSAGES[reason])
             return
@@ -1313,6 +1320,7 @@ class FimeAI(commands.Cog):
         self._spawn(self.process_message(message, content))
 
     async def process_message(self, message: discord.Message, content: str):
+        started_at = time.perf_counter()
         try:
             try:
                 await message.channel.trigger_typing()
@@ -1320,13 +1328,15 @@ class FimeAI(commands.Cog):
                 pass
             answer = await self.ask_ai(message.guild, message.author, message.channel, content)
             await self.send_answer(message, answer)
+            print(f"Fime AI reply sent in {time.perf_counter() - started_at:.2f}s | channel={message.channel.id} | user={message.author.id}")
         except AIError as error:
+            print(f"Fime AI request failed after {time.perf_counter() - started_at:.2f}s: {clean_error(error)}")
             if error.user_message == PAUSED_MESSAGE:
                 # نسجل الإشعار عشان الرسائل اللي بعدها في نفس الروم ما تكرر الرد
                 self._pause_notice_at[message.channel.id] = time.time()
             await self._send_error(message, error.user_message)
         except Exception as error:
-            print(f"Fime AI unexpected error: {clean_error(error)}")
+            print(f"Fime AI unexpected error after {time.perf_counter() - started_at:.2f}s: {clean_error(error)}")
             await self._send_error(message, GENERIC_ERROR)
 
     # -----------------------------------------------------
@@ -1379,7 +1389,7 @@ class FimeAI(commands.Cog):
         embed = discord.Embed(title="🤖 فيمي", color=discord.Color.blurple())
         embed.add_field(name="الحالة", value=state, inline=True)
         embed.add_field(name="الذاكرة", value=f"{MEMORY_LIMIT} رسائل لكل عضو", inline=True)
-        embed.add_field(name="الحدود", value=f"{USER_DAILY_LIMIT} طلب/يوم للعضو • كولداون {USER_COOLDOWN} ثواني", inline=False)
+        embed.add_field(name="الحدود", value=f"{USER_DAILY_LIMIT} طلب/يوم للعضو • لا يتم إسقاط الرسائل بسبب الكولداون", inline=False)
 
         if self._is_owner(interaction):
             if self.is_paused():
@@ -1402,17 +1412,20 @@ class FimeAI(commands.Cog):
         if not self.ready:
             return await interaction.followup.send("❌ AI_API_KEY غير موجود في Environment.", ephemeral=True)
 
-        self.pause.clear()  # الفحص اليدوي يتجاهل الإيقاف المؤقت
+        # الفحص اليدوي يقيس زمن الاستجابة الفعلي بدل عرض رسالة انتظار شكلية.
+        started_at = time.perf_counter()
         try:
-            answer = await self._generate([{"role": "user", "content": "قل كلمة: تمام"}], max_tokens=40)
+            answer = await self._generate([{"role": "user", "content": "قل كلمة: تمام"}], max_tokens=32)
+            elapsed = time.perf_counter() - started_at
             await interaction.followup.send(
-                f"✅ الخدمة شغالة\nالموديل: `{self.active_model}`\nالرد: {truncate_text(answer, 120)}",
+                f"✅ الخدمة شغالة\nالموديل: `{self.active_model}`\nزمن استجابة Gemini: `{elapsed:.2f} ثانية`\nالرد: {truncate_text(answer, 120)}",
                 ephemeral=True,
             )
         except AIError as error:
+            elapsed = time.perf_counter() - started_at
             reason = PAUSE_REASON_AR.get(error.kind, "خطأ من المزود")
             await interaction.followup.send(
-                f"❌ فشل الفحص\nالسبب: {reason}\nالتفاصيل: {clean_error(error)}",
+                f"❌ فشل الفحص بعد `{elapsed:.2f} ثانية`\nالسبب: {reason}\nالتفاصيل: {clean_error(error)}",
                 ephemeral=True,
             )
 
