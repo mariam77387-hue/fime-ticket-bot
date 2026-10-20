@@ -10,7 +10,7 @@ intents المطلوبة في البوت:
 
 المتغيرات (Environment Variables):
     AI_API_KEY                    مفتاح Google Gemini API                  [مطلوب]
-    AI_MODEL                     الافتراضي gemini-3.5-flash-lite                    [اختياري]
+    AI_MODEL                     الافتراضي gemini-2.5-flash                    [اختياري]
     FIME_OWNER_ID                ايدي المالك (يشوف الأوامر الحساسة ويستلم التنبيهات) [مطلوب]
     AI_CHANNEL_ID                روم الذكاء الاصطناعي                      [اختياري]
     AI_THINKING_LEVEL             الافتراضي minimal                         [اختياري]
@@ -89,8 +89,8 @@ ROOM_CONTEXT_LIMIT = _env_int("AI_ROOM_CONTEXT_LIMIT", 15)
 # MODEL SETTINGS
 # =========================================================
 
-DEFAULT_MODEL = "gemini-3.5-flash-lite"
-FALLBACK_MODELS = ("gemini-2.5-flash-lite", "gemini-2.5-flash")
+DEFAULT_MODEL = "gemini-2.5-flash"
+FALLBACK_MODELS = ("gemini-2.5-flash-lite", "gemini-2.0-flash")
 MODEL_ALIASES = {}
 THINKING_LEVELS = ("minimal", "low", "medium", "high")
 _raw_thinking = _env_str("AI_THINKING_LEVEL", "minimal").lower()
@@ -119,7 +119,7 @@ ENV_MODEL, ENV_MODEL_NOTE = resolve_model_name(ENV_MODEL_RAW)
 def build_model_candidates(primary: str) -> List[str]:
     candidates = [primary]
     for model in FALLBACK_MODELS:
-        if model not in candidates:
+        if model not in candidates and model != "gemini-1.5-flash":
             candidates.append(model)
     return candidates
 
@@ -877,7 +877,7 @@ class FimeAI(commands.Cog):
             return
         if ENV_MODEL_NOTE:
             print(f"INFO: {ENV_MODEL_NOTE}")
-        print(f"Fime AI provider: Google Gemini; model: {self.active_model} ({self.model_source})")
+        print(f"Fime AI provider: Google Gemini; configured AI_MODEL={ENV_MODEL_RAW or DEFAULT_MODEL}; active model={self.active_model} ({self.model_source})")
 
     def _get_session(self) -> aiohttp.ClientSession:
         if self.session is None or self.session.closed:
@@ -975,7 +975,7 @@ class FimeAI(commands.Cog):
                 print(f"Model OK: {candidate}")
                 return
             print(f"Model {candidate} is not available right now (HTTP {status}).")
-        print("ERROR: no model from the candidate list is available. Check AI_API_KEY and run /fime-admin test.")
+        print("ERROR: no configured Gemini model is available. Set AI_MODEL to gemini-2.5-flash or gemini-2.5-flash-lite, verify AI_API_KEY, then restart.")
 
     def _next_model_after(self, bad: str) -> Optional[str]:
         candidates = self.model_candidates
