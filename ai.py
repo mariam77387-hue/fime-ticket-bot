@@ -10,7 +10,7 @@ intents المطلوبة في البوت:
 
 المتغيرات (Environment Variables):
     AI_API_KEY                    مفتاح Google Gemini API                  [مطلوب]
-    AI_MODEL                     الافتراضي gemini-2.5-flash                    [اختياري]
+    AI_MODEL                     الافتراضي gemini-3.5-flash-lite               [اختياري]
     FIME_OWNER_ID                ايدي المالك (يشوف الأوامر الحساسة ويستلم التنبيهات) [مطلوب]
     AI_CHANNEL_ID                روم الذكاء الاصطناعي                      [اختياري]
     AI_THINKING_LEVEL             الافتراضي minimal                         [اختياري]
@@ -89,8 +89,9 @@ ROOM_CONTEXT_LIMIT = _env_int("AI_ROOM_CONTEXT_LIMIT", 15)
 # MODEL SETTINGS
 # =========================================================
 
-DEFAULT_MODEL = "gemini-2.5-flash"
-FALLBACK_MODELS = ("gemini-2.5-flash-lite", "gemini-2.0-flash")
+DEFAULT_MODEL = "gemini-3.5-flash-lite"
+# النماذج الأحدث أولًا؛ نتجنب 2.5 و2.0 لأنها قد تكون محدودة أو متوقفة لحسابات جديدة.
+FALLBACK_MODELS = ("gemini-3.8-flash", "gemini-3.6-flash")
 MODEL_ALIASES = {}
 THINKING_LEVELS = ("minimal", "low", "medium", "high")
 _raw_thinking = _env_str("AI_THINKING_LEVEL", "minimal").lower()
@@ -105,6 +106,14 @@ def resolve_model_name(value: str) -> Tuple[str, Optional[str]]:
         name = name[len("models/"):]
     if not name:
         return DEFAULT_MODEL, None
+    # ترحيل تلقائي من أسماء قديمة ظهرت في إعدادات الاستضافة أو ملف الإعدادات.
+    legacy_models = {
+        "gemini-2.5-flash-lite": "gemini-3.5-flash-lite",
+        "gemini-2.5-flash": "gemini-3.8-flash",
+        "gemini-2.0-flash": "gemini-3.6-flash",
+        "gemini-2.0-flash-001": "gemini-3.6-flash",
+    }
+    name = legacy_models.get(name.lower(), name)
     if not re.fullmatch(r"[A-Za-z0-9._-]{3,100}", name):
         return DEFAULT_MODEL, f"Invalid Gemini model name '{name}', using '{DEFAULT_MODEL}'."
     if not name.lower().startswith("gemini-"):
@@ -119,7 +128,7 @@ ENV_MODEL, ENV_MODEL_NOTE = resolve_model_name(ENV_MODEL_RAW)
 def build_model_candidates(primary: str) -> List[str]:
     candidates = [primary]
     for model in FALLBACK_MODELS:
-        if model not in candidates and model != "gemini-1.5-flash":
+        if model not in candidates and model not in ("gemini-1.5-flash", "gemini-2.5-flash-lite", "gemini-2.0-flash", "gemini-2.0-flash-001"):
             candidates.append(model)
     return candidates
 
@@ -975,7 +984,7 @@ class FimeAI(commands.Cog):
                 print(f"Model OK: {candidate}")
                 return
             print(f"Model {candidate} is not available right now (HTTP {status}).")
-        print("ERROR: no configured Gemini model is available. Set AI_MODEL to gemini-2.5-flash or gemini-2.5-flash-lite, verify AI_API_KEY, then restart.")
+        print("ERROR: no configured Gemini model is available. Set AI_MODEL=gemini-3.5-flash-lite (or gemini-3.8-flash), verify AI_API_KEY and API access, then restart.")
 
     def _next_model_after(self, bad: str) -> Optional[str]:
         candidates = self.model_candidates
