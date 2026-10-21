@@ -23,7 +23,9 @@ intents المطلوبة في البوت:
     AI_PRICE_OUTPUT_PER_M        الافتراضي 1.25 دولار لكل مليون توكن إخراج [اختياري]
     AI_CACHE_TTL                 الافتراضي 1200 ثانية                      [اختياري]
     AI_MEMORY_LIMIT              الافتراضي 6                               [اختياري]
-    AI_ROOM_CONTEXT_LIMIT        الافتراضي 15                              [اختياري]
+    AI_ROOM_CONTEXT_LIMIT        الافتراضي 8                               [اختياري]
+    AI_MAX_CONCURRENT_REQUESTS  الافتراضي 10                              [اختياري]
+    AI_MAX_RETRIES               الافتراضي 0 (لا انتظار لإعادة المحاولة)    [اختياري]
 """
 
 import os
@@ -73,7 +75,7 @@ AI_API_KEY = _env_str("AI_API_KEY").strip('"\'')
 FIME_OWNER_ID = _env_int("FIME_OWNER_ID", 0)
 AI_CHANNEL_ID = _env_int("AI_CHANNEL_ID", 0)
 
-MAX_OUTPUT_TOKENS = max(128, min(_env_int("AI_MAX_OUTPUT_TOKENS", 500), 600))
+MAX_OUTPUT_TOKENS = max(128, min(_env_int("AI_MAX_OUTPUT_TOKENS", 350), 500))
 USER_COOLDOWN = max(0, _env_int("AI_USER_COOLDOWN", 0))
 USER_DAILY_LIMIT = _env_int("AI_USER_DAILY_LIMIT", 20)
 GLOBAL_DAILY_LIMIT = _env_int("AI_GLOBAL_DAILY_LIMIT", 300)
@@ -145,23 +147,25 @@ PAUSED_MESSAGE = "فيمي مشغول الحين، جرب بعد شوي."
 IDENTITY_REPLY = "أنا فيمي، مساعد سيرفر Team Fime. وش تبي تعرف عن السيرفر؟"
 LEAK_REPLY = "ما أقدر أتكلم عن تفاصيل تشغيلي، بس أقدر أساعدك بأي شي عن السيرفر."
 GREET_REPLY = "هلا والله! وش تبي تعرف عن السيرفر؟"
+SALAM_REPLY = "و عليكم السلام ورحمة الله وبركاته ♥️"
 THANKS_REPLY = "العفو، أي وقت."
 
-REQUEST_TIMEOUT = 18
-MAX_RETRIES = 1
-MAX_CONCURRENT_REQUESTS = 5
+REQUEST_TIMEOUT = max(8, min(_env_int("AI_REQUEST_TIMEOUT", 14), 30))
+MAX_RETRIES = max(0, min(_env_int("AI_MAX_RETRIES", 0), 1))
+MAX_CONCURRENT_REQUESTS = max(5, min(_env_int("AI_MAX_CONCURRENT_REQUESTS", 10), 20))
 RETRYABLE_STATUS = (408, 500, 502, 503, 504)
 
 MEMORY_TTL = 2 * 60 * 60
 MEMORY_TEXT_LIMIT = 300
-MAX_MESSAGE_LENGTH = 600
+MAX_MESSAGE_LENGTH = 3000
 ROOM_DESCRIPTION_LIMIT = 80
-CONTEXT_CHAR_LIMIT = 2500
+CONTEXT_CHAR_LIMIT = 1400
 
 KNOWLEDGE_FILE = Path("ai_server_knowledge.json")
 EMOJI_FILE = Path("ai_emoji_settings.json")
 USAGE_FILE = Path("ai_usage.json")
 AI_SETTINGS_FILE = Path("ai_settings.json")
+REACTION_SETTINGS_FILE = Path("ai_reaction_settings.json")
 PAUSE_FILE = Path("ai_pause.json")
 
 # مدة الإيقاف حسب نوع المشكلة
@@ -284,6 +288,7 @@ def normalize_arabic(text: Any) -> str:
 
 # نطبّع كلمات الترحيب والشكر بنفس طريقة الرسالة، عشان المطابقة تشتغل
 GREET_WORDS = {normalize_arabic(word) for word in GREET_WORDS_RAW}
+SALAM_WORDS = {normalize_arabic(word) for word in ("السلام عليكم", "سلام عليكم")}
 THANKS_WORDS = {normalize_arabic(word) for word in THANKS_WORDS_RAW}
 
 
@@ -838,6 +843,24 @@ class EmojiManager:
         save_json(EMOJI_FILE, self.data)
 
 
+class ReactionManager:
+    """Per-server reaction emoji. Custom emoji are stored as <:name:id> / <a:name:id>."""
+    def __init__(self):
+        loaded = load_json(REACTION_SETTINGS_FILE, {})
+        self.data: Dict[str, str] = loaded if isinstance(loaded, dict) else {}
+
+    def get(self, guild_id: int) -> str:
+        return clean_text(self.data.get(str(guild_id), ""))
+
+    def set(self, guild_id: int, emoji: str):
+        self.data[str(guild_id)] = emoji.strip()
+        save_json(REACTION_SETTINGS_FILE, self.data)
+
+    def reset(self, guild_id: int):
+        self.data.pop(str(guild_id), None)
+        save_json(REACTION_SETTINGS_FILE, self.data)
+
+
 # =========================================================
 # FIME AI COG
 # =========================================================
@@ -849,6 +872,7 @@ class FimeAI(commands.Cog):
         self.knowledge = ServerKnowledgeManager()
         self.memory = MemoryManager()
         self.emojis = EmojiManager()
+        self.reactions = ReactionManager()
         self.limiter = UsageLimiter()
         self.cache = AnswerCache()
         self.pause = PauseState()
@@ -859,6 +883,8 @@ class FimeAI(commands.Cog):
         self._pause_notice_at: Dict[int, float] = {}
         self._seen_message_ids = deque(maxlen=5000)
         self._seen_message_id_set = set()
+        self._reaction_seen = deque(maxlen=5000)
+        self._reaction_seen_set = set()
 
         override = load_model_override()
         if override:
@@ -1183,20 +1209,24 @@ class FimeAI(commands.Cog):
         return f"{guild.id}:{channel.id}:{normalize_arabic(content)}"
 
     async def ask_ai(self, guild: discord.Guild, user: discord.abc.User, channel: Any, content: str) -> str:
-        async with self.user_locks[(guild.id, user.id)]:
+        # Snapshot memory quickly, but never hold the per-user lock while waiting on Gemini.
+        # That allows several messages from the same member to be processed concurrently.
+        lock = self.user_locks[(guild.id, user.id)]
+        async with lock:
             had_memory = bool(self.memory.get(guild.id, user.id))
             messages = self.build_messages(guild, user, channel, content)
-            answer = await self._generate(messages, MAX_OUTPUT_TOKENS)
 
-            if LEAK_RE.search(answer):
-                answer = LEAK_REPLY
-            answer = self.normalize_channel_mentions(guild, answer)
+        answer = await self._generate(messages, MAX_OUTPUT_TOKENS)
+        if LEAK_RE.search(answer):
+            answer = LEAK_REPLY
+        answer = self.normalize_channel_mentions(guild, answer)
 
+        async with lock:
             self.memory.add(guild.id, user.id, "user", content)
             self.memory.add(guild.id, user.id, "assistant", answer)
-            if not had_memory and answer != LEAK_REPLY:
-                self.cache.set(self._cache_key(guild, channel, content), answer)
-            return answer
+        if not had_memory and answer != LEAK_REPLY:
+            self.cache.set(self._cache_key(guild, channel, content), answer)
+        return answer
 
     # -----------------------------------------------------
     # SEND
@@ -1235,9 +1265,37 @@ class FimeAI(commands.Cog):
             clean = re.sub(rf"<@!?{self.bot.user.id}>", "", clean)
         return clean.strip()
 
+    async def _react_to_member_message(self, message: discord.Message):
+        """React independently of AI processing so the reaction never delays a reply."""
+        raw = self.reactions.get(message.guild.id)
+        if not raw:
+            return
+        try:
+            # Unicode emoji or custom emoji markup, including animated custom emoji.
+            emoji = discord.PartialEmoji.from_str(raw) if raw.startswith("<") and raw.endswith(">") else raw
+            await message.add_reaction(emoji)
+        except (discord.Forbidden, discord.NotFound) as error:
+            print(f"Fime reaction unavailable in guild={message.guild.id}: {type(error).__name__}; check Add Reactions / Use External Emojis permissions.")
+        except discord.HTTPException as error:
+            print(f"Fime reaction failed in guild={message.guild.id}: HTTP {getattr(error, 'status', '?')}")
+        except Exception as error:
+            print(f"Fime reaction error: {clean_error(error)}")
+
     @commands.Cog.listener()
     async def on_message(self, message: discord.Message):
-        if message.author.bot or not message.guild or not self.ready:
+        if message.author.bot or not message.guild:
+            return
+
+        # React to member messages in the background, independent of whether AI is enabled.
+        if message.id not in self._reaction_seen_set:
+            if len(self._reaction_seen) == self._reaction_seen.maxlen:
+                self._reaction_seen_set.discard(self._reaction_seen[0])
+            self._reaction_seen.append(message.id)
+            self._reaction_seen_set.add(message.id)
+            if self.reactions.get(message.guild.id):
+                self._spawn(self._react_to_member_message(message))
+
+        if not self.ready:
             return
 
         # Guard against accidental duplicate dispatch without suppressing the user's next message.
@@ -1278,7 +1336,10 @@ class FimeAI(commands.Cog):
 
         normalized = normalize_arabic(content)
 
-        # 1) ردود جاهزة بدون توكنز
+        # 1) ردود جاهزة بدون توكنز. السلام له رد حرفي كما طلب المالك.
+        if normalized in SALAM_WORDS:
+            await self._send_error(message, SALAM_REPLY)
+            return
         if normalized in GREET_WORDS:
             await self._send_error(message, GREET_REPLY)
             return
@@ -1322,10 +1383,6 @@ class FimeAI(commands.Cog):
     async def process_message(self, message: discord.Message, content: str):
         started_at = time.perf_counter()
         try:
-            try:
-                await message.channel.trigger_typing()
-            except Exception:
-                pass
             answer = await self.ask_ai(message.guild, message.author, message.channel, content)
             await self.send_answer(message, answer)
             print(f"Fime AI reply sent in {time.perf_counter() - started_at:.2f}s | channel={message.channel.id} | user={message.author.id}")
@@ -1505,12 +1562,44 @@ class FimeAI(commands.Cog):
         self.emojis.reset(interaction.guild.id)
         await interaction.response.send_message("✅ تم إلغاء الإيموجي.", ephemeral=True)
 
-    @fime_admin.command(name="emoji-show", description="عرض الإيموجي الحالي")
+    @fime_admin.command(name="emoji-show", description="عرض الإيموجي الحالي لنهاية الردود")
     async def fa_emoji_show(self, interaction: discord.Interaction):
         if not self._is_admin(interaction):
             return await self._deny(interaction)
         emoji = self.emojis.get(interaction.guild.id)
         await interaction.response.send_message(emoji or "لا يوجد إيموجي مخصص.", ephemeral=True)
+
+    @fime_admin.command(name="reaction-set", description="تحديد رياكشن تلقائي على رسائل الأعضاء")
+    @app_commands.describe(emoji="إيموجي عادي أو إيموجي مخصص بصيغة <:name:id> أو <a:name:id>")
+    async def fa_reaction_set(self, interaction: discord.Interaction, emoji: str):
+        if not self._is_admin(interaction):
+            return await self._deny(interaction)
+        emoji = emoji.strip()
+        if len(emoji) > 100 or not emoji:
+            return await interaction.response.send_message("❌ الإيموجي غير صالح.", ephemeral=True)
+        if emoji.startswith("<") and emoji.endswith(">"):
+            parsed = discord.PartialEmoji.from_str(emoji)
+            if parsed.id is None:
+                return await interaction.response.send_message("❌ صيغة الإيموجي المخصص غير صحيحة. استخدم <:name:id> أو <a:name:id>.", ephemeral=True)
+        self.reactions.set(interaction.guild.id, emoji)
+        await interaction.response.send_message(
+            f"✅ تم ضبط الرياكشن التلقائي على {emoji}. بيحاول فيمي يضيفه لكل رسالة عضو في هذا السيرفر.",
+            ephemeral=True,
+        )
+
+    @fime_admin.command(name="reaction-reset", description="إيقاف الرياكشن التلقائي")
+    async def fa_reaction_reset(self, interaction: discord.Interaction):
+        if not self._is_admin(interaction):
+            return await self._deny(interaction)
+        self.reactions.reset(interaction.guild.id)
+        await interaction.response.send_message("✅ تم إيقاف الرياكشن التلقائي في هذا السيرفر.", ephemeral=True)
+
+    @fime_admin.command(name="reaction-show", description="عرض الرياكشن التلقائي الحالي")
+    async def fa_reaction_show(self, interaction: discord.Interaction):
+        if not self._is_admin(interaction):
+            return await self._deny(interaction)
+        emoji = self.reactions.get(interaction.guild.id)
+        await interaction.response.send_message(emoji or "الرياكشن التلقائي متوقف.", ephemeral=True)
 
     @fime_admin.command(name="memory-clear", description="مسح ذاكرتك")
     async def fa_memory_clear(self, interaction: discord.Interaction):
