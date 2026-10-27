@@ -17,12 +17,13 @@ from typing import Awaitable, Callable, Optional
 import discord
 from discord.ext import commands
 
-DATA_FILE = Path("bot7_data.json")
+DATA_FILE = Path(__file__).resolve().parent / "bot7_data.json"
 PREFIX = "!"  # لازم يكون نفس البريفكس في bot.py
 COG_NAME = "Moderation"
 NO_MENTIONS = discord.AllowedMentions.none()
 MAX_TIMEOUT = 28 * 24 * 3600
 MASS_KICK_REASON = "طرد جماعي بأمر مالك السيرفر"
+MASS_KICK_DELAY = 0.3
 DANGEROUS_PERMS = (
     "administrator", "manage_guild", "manage_roles", "manage_channels",
     "manage_webhooks", "ban_members", "kick_members",
@@ -281,7 +282,7 @@ class ConfirmView(discord.ui.View):
 
 
 # ============================================================
-# Cog الرئيسي
+# Decorator الصلاحيات
 # ============================================================
 
 def requires(level: str):
@@ -294,6 +295,10 @@ def requires(level: str):
         return True
     return commands.check(predicate)
 
+
+# ============================================================
+# Cog الرئيسي
+# ============================================================
 
 class Moderation(commands.Cog):
     def __init__(self, bot: commands.Bot):
@@ -317,17 +322,20 @@ class Moderation(commands.Cog):
         except (OSError, json.JSONDecodeError):
             return {}
 
-    def _write(self) -> None:
+    @staticmethod
+    def _write_text(payload: str) -> None:
         tmp = DATA_FILE.with_suffix(".tmp")
         try:
-            tmp.write_text(json.dumps(self.db, ensure_ascii=False, indent=2), encoding="utf-8")
+            tmp.write_text(payload, encoding="utf-8")
             tmp.replace(DATA_FILE)
         except OSError as exc:
             print(f"[BOT7 DB ERROR] {exc}")
 
     async def persist(self) -> None:
+        # نأخذ نسخة نصية في الـ thread الرئيسي حتى ما تتغير البيانات أثناء الكتابة.
+        payload = json.dumps(self.db, ensure_ascii=False, indent=2)
         async with self.db_lock:
-            await asyncio.to_thread(self._write)
+            await asyncio.to_thread(self._write_text, payload)
 
     def cfg(self, guild_id: int) -> dict:
         cfg = self.db.setdefault(str(guild_id), {})
@@ -553,8 +561,7 @@ class Moderation(commands.Cog):
             return await self.punish(message, 3, "إغراق أحرف أو روابط", "Flood Protection")
 
         now = time.monotonic()
-        key = (guild.id, author.id)
-        history = self.msg_history[key]
+        history = self.msg_history[(guild.id, author.id)]
         media = has_media(message)
         history.append((now, text, media))
 
@@ -576,6 +583,20 @@ class Moderation(commands.Cog):
                 f"سبام صور ومرفقات: {len(media_recent)} خلال {media_cfg['window']} ثوانٍ", "Media Spam",
             )
         return False
+
+    async def find_audit_actor(self, guild, action, target_id=None):
+        if not bot_has(guild, "view_audit_log"):
+            return None
+        try:
+            async for entry in guild.audit_logs(limit=6, action=action):
+                if (discord.utils.utcnow() - entry.created_at).total_seconds() > 30:
+                    break
+                if target_id is not None and getattr(entry.target, "id", None) != target_id:
+                    continue
+                return entry.user
+        except discord.HTTPException:
+            return None
+        return None
 
     async def check_bot_join(self, bot_member: discord.Member) -> None:
         guild = bot_member.guild
@@ -633,20 +654,6 @@ class Moderation(commands.Cog):
                 await self.log(guild, "Raid Account Restricted", member, self.bot.user,
                                "تم تقييد حساب حديث مؤقتًا.")
 
-    async def find_audit_actor(self, guild, action, target_id=None):
-        if not bot_has(guild, "view_audit_log"):
-            return None
-        try:
-            async for entry in guild.audit_logs(limit=6, action=action):
-                if (discord.utils.utcnow() - entry.created_at).total_seconds() > 30:
-                    break
-                if target_id is not None and getattr(entry.target, "id", None) != target_id:
-                    continue
-                return entry.user
-        except discord.HTTPException:
-            return None
-        return None
-
     async def watch_destructive(self, guild, target_id, action, label) -> None:
         if not self.cfg(guild.id)["protection"]:
             return
@@ -686,12 +693,12 @@ class Moderation(commands.Cog):
                     await member.kick(reason=MASS_KICK_REASON)
                     kicked += 1
                 except discord.NotFound:
-                    pass
+                    pass  # غادر قبل أن نطرده
                 except discord.HTTPException:
                     failed += 1
                 if index % 25 == 0:
                     await edit_quietly(status_message, f"⏳ جاري الطرد: {index}/{total}")
-                await asyncio.sleep(0.35)
+                await asyncio.sleep(MASS_KICK_DELAY)
 
             await edit_quietly(status_message, f"✅ اكتمل الطرد الجماعي. تم طرد **{kicked}** عضو.")
             await self.log(
@@ -765,12 +772,11 @@ class Moderation(commands.Cog):
 
         channel_id = cfg.get("log_channel_id")
         channel = guild.get_channel(int(channel_id)) if channel_id else None
-        words = cfg["banned_words"]
         shortcut_lines = [
             f"• `{label}`: " + (", ".join(f"`{n}`" for n in cfg["shortcuts"].get(action, [])) or "معطّل")
             for label, action in SHORTCUT_TYPES.items()
         ]
-        esc = cfg["escalation"]
+        esc, spam, mentions = cfg["escalation"], cfg["spam"], cfg["mentions"]
         return (
             "**🛡️ إعدادات النظام**\n"
             f"الحماية التلقائية: {'✅ تعمل' if cfg['protection'] else '⏸️ متوقفة'}\n"
@@ -779,8 +785,10 @@ class Moderation(commands.Cog):
             f"رتبة الطرد: {role_mention('kick_role_id')}\n"
             f"روم اللوق: {channel.mention if isinstance(channel, discord.TextChannel) else 'غير محدد'}\n"
             f"منع روابط الدعوات: {'✅' if cfg['invite_filter'] else '❌'}\n"
-            f"الكلمات الممنوعة: {len(words)} كلمة\n"
-            f"تصعيد التحذيرات: عند {esc['warnings']} تحذيرات ← تايم اوت {duration_text(esc['timeout_min'] * 60)}\n"
+            f"الكلمات الممنوعة: {len(cfg['banned_words'])} كلمة\n"
+            f"السبام: {spam['limit']} رسائل / {spam['window']} ثانية\n"
+            f"المنشنات: حد {mentions['max']} منشن في الرسالة\n"
+            f"التصعيد: عند {esc['warnings']} تحذيرات ← تايم اوت {duration_text(esc['timeout_min'] * 60)}\n"
             f"بوتات موثوقة: {', '.join(map(str, cfg['trusted_bot_ids'])) or 'لا يوجد'}\n\n"
             "**الاختصارات (بدون !):**\n" + "\n".join(shortcut_lines) + "\n\n"
             "**التعديل بأمر `!اعداد`:**\n"
@@ -789,7 +797,9 @@ class Moderation(commands.Cog):
             "`!اعداد اختصار حظر كلمة1 كلمة2` (`-` للتعطيل)\n"
             "`!اعداد كلمة_ممنوعة كلمة` (إضافة/إزالة)\n"
             "`!اعداد منع_الدعوات` (تشغيل/إيقاف)\n"
-            "`!اعداد تصعيد 3 60` (عدد التحذيرات، المدة بالدقائق)\n"
+            "`!اعداد سبام 6 8` (عدد الرسائل والنافذة بالثواني)\n"
+            "`!اعداد منشن 5` (حد المنشنات)\n"
+            "`!اعداد تصعيد 3 60` (عدد التحذيرات والمدة بالدقائق)\n"
             "`!اعداد بوت_موثوق ID` (إضافة/إزالة)"
         )
 
@@ -848,7 +858,7 @@ class Moderation(commands.Cog):
         await ctx.send(
             "**🛡️ bot7 - الأوامر**\n"
             "**الإدارة:** `!حظر @عضو السبب` | `!طرد @عضو السبب` | `!تايم_اوت @عضو 10m السبب` | `!فك_التايم @عضو`\n"
-            "**التحذيرات:** `!تحذير @عضو السبب` | `!تحذيرات @عضو` | `!حذف_تحذيرات @عضو`\n"
+            "**التحذيرات:** `!تحذير @عضو السبب` | `!تحذيرات @عضو` | `!ازالة_تحذير @عضو رقم` | `!حذف_تحذيرات @عضو`\n"
             "**الرومات:** `!قفل_الروم` | `!فتح_الروم` | `!بطء 10` (0 للإيقاف) | `!مسح 20`\n"
             "**أخرى:** `!فك_الحظر ID` | `!معلومات @عضو`\n"
             "**الإعداد:** `!اعداد` | **الحماية:** `!مراقبة_تلقائية` (تشغيل/إيقاف مع تأكيد)\n"
@@ -857,7 +867,7 @@ class Moderation(commands.Cog):
             allowed_mentions=NO_MENTIONS,
         )
 
-    @commands.command(name="اعداد", aliases=["إعداد", "config"])
+    @commands.command(name="اعداد", aliases=["إعداد"])
     @requires("config")
     async def cmd_config(self, ctx: commands.Context, *args: str):
         guild = ctx.guild
@@ -905,16 +915,18 @@ class Moderation(commands.Cog):
             else:
                 cleaned: list[str] = []
                 for alias in raw:
-                    if alias.startswith(PREFIX) or " " in alias or alias in cleaned:
+                    if alias.startswith(PREFIX) or alias in cleaned:
                         continue
                     cleaned.append(alias)
                 if not cleaned:
-                    await ctx.send("حدد اختصارًا واحدًا على الأقل بدون مسافات.")
+                    await ctx.send("حدد اختصارًا واحدًا على الأقل.")
                     return
                 cfg["shortcuts"][action] = cleaned
             await self.persist()
             names = cfg["shortcuts"][action]
-            await ctx.send(f"تم تحديث اختصارات **{norm(args[1])}**: " + (", ".join(f"`{n}`" for n in names) or "معطّل"))
+            await ctx.send(
+                f"تم تحديث اختصارات **{norm(args[1])}**: " + (", ".join(f"`{n}`" for n in names) or "معطّل")
+            )
             return
 
         if sub == "كلمة_ممنوعة" and len(args) >= 2:
@@ -933,6 +945,27 @@ class Moderation(commands.Cog):
             cfg["invite_filter"] = not cfg["invite_filter"]
             await self.persist()
             await ctx.send("✅ منع روابط الدعوات مفعّل." if cfg["invite_filter"] else "❌ منع روابط الدعوات معطّل.")
+            return
+
+        if sub == "سبام" and len(args) >= 3 and args[1].isdigit() and args[2].isdigit():
+            limit, window = int(args[1]), int(args[2])
+            if not (2 <= limit <= 30 and 2 <= window <= 60):
+                await ctx.send("عدد الرسائل من 2 إلى 30، والنافذة من 2 إلى 60 ثانية.")
+                return
+            cfg["spam"]["limit"] = limit
+            cfg["spam"]["window"] = window
+            await self.persist()
+            await ctx.send(f"تم ضبط السبام: **{limit}** رسائل خلال **{window}** ثانية.")
+            return
+
+        if sub == "منشن" and len(args) >= 2 and args[1].isdigit():
+            value = int(args[1])
+            if not 2 <= value <= 50:
+                await ctx.send("حد المنشنات من 2 إلى 50.")
+                return
+            cfg["mentions"]["max"] = value
+            await self.persist()
+            await ctx.send(f"تم ضبط حد المنشنات على **{value}** في الرسالة الواحدة.")
             return
 
         if sub == "تصعيد" and len(args) >= 3 and args[1].isdigit() and args[2].isdigit():
@@ -1027,7 +1060,9 @@ class Moderation(commands.Cog):
 
         async def start(interaction: discord.Interaction) -> None:
             if guild.id in self.mass_kick_running:
-                await interaction.response.edit_message(content="⚠️ هناك عملية طرد جارية بالفعل.", embed=None, view=None)
+                await interaction.response.edit_message(
+                    content="⚠️ هناك عملية طرد جارية بالفعل.", embed=None, view=None,
+                )
                 return
             await interaction.response.edit_message(content="⏳ جاري الطرد...", embed=None, view=None)
             self.spawn(self.run_mass_kick(guild, ctx.author, interaction.message))
@@ -1106,6 +1141,22 @@ class Moderation(commands.Cog):
             lines.append(f"`#{index}` بواسطة {mod_text}: {str(item.get('reason', ''))[:200]}")
         await ctx.send("\n".join(lines), allowed_mentions=NO_MENTIONS)
 
+    @commands.command(name="ازالة_تحذير", aliases=["حذف_تحذير"])
+    @requires("manage")
+    async def cmd_remove_warning(self, ctx: commands.Context, member: discord.Member, number: int):
+        warnings = self.cfg(ctx.guild.id)["warnings"]
+        items = warnings.get(str(member.id), [])
+        if not 1 <= number <= len(items):
+            await ctx.send(f"رقم التحذير غير صحيح. عند {member.display_name} {len(items)} تحذير.")
+            return
+        removed = items.pop(number - 1)
+        if not items:
+            warnings.pop(str(member.id), None)
+        await self.persist()
+        await self.log(ctx.guild, "Remove Warning", member, ctx.author,
+                       f"إزالة التحذير #{number}", str(removed.get("reason", ""))[:300])
+        await ctx.send(f"تمت إزالة التحذير #{number} عن {member.mention}.", allowed_mentions=NO_MENTIONS)
+
     @commands.command(name="حذف_تحذيرات", aliases=["مسح_تحذيرات"])
     @requires("manage")
     async def cmd_clear_warnings(self, ctx: commands.Context, member: discord.Member):
@@ -1160,26 +1211,44 @@ class Moderation(commands.Cog):
             f"حتى {discord.utils.format_dt(timed, 'R')}"
             if timed and timed > discord.utils.utcnow() else "لا"
         )
+        joined = discord.utils.format_dt(member.joined_at, "D") if member.joined_at else "غير معروف"
         embed = discord.Embed(title=f"معلومات {member.display_name}", color=discord.Color.blurple())
         embed.set_thumbnail(url=member.display_avatar.url)
         embed.add_field(name="ID", value=str(member.id), inline=True)
         embed.add_field(name="الحساب أُنشئ", value=discord.utils.format_dt(member.created_at, "D"), inline=True)
-        embed.add_field(name="انضم للسيرفر", value=discord.utils.format_dt(member.joined_at, "D") if member.joined_at else "غير معروف", inline=True)
+        embed.add_field(name="انضم للسيرفر", value=joined, inline=True)
         embed.add_field(name="أعلى رتبة", value=member.top_role.mention, inline=True)
         embed.add_field(name="تحذيرات", value=str(len(items)), inline=True)
         embed.add_field(name="تايم اوت", value=timed_text, inline=True)
         await ctx.send(embed=embed, allowed_mentions=NO_MENTIONS)
 
-    @commands.command(name="طرد_الكل", aliases=["kickall"])
-    @requires("owner")
-    async def _placeholder_never_used(self, ctx: commands.Context):
-        pass
-
 
 # ============================================================
-# نقطة التحميل - تستدعيها discord.py عند load_extension("bot7")
+# نقطة التحميل
 # ============================================================
 
 async def setup(bot: commands.Bot) -> None:
-    await bot.add_cog(Moderation(bot))
-    print("✅ تم تحميل نظام bot7 كـ Cog")
+    """تستدعيها discord.py عند load_extension("bot7").
+
+    تفحص كل اسم وalias قبل التسجيل. أي تعارض مع أمر موجود في bot.py
+    أو في ملف آخر يُحذف أو يُتخطى، بدل ما يوقف تحميل الـ Cog.
+    """
+    cog = Moderation(bot)
+    taken: set[str] = set(bot.all_commands)
+    kept, skipped = [], []
+
+    for command in cog.__cog_commands__:
+        if command.name in taken:
+            skipped.append(command.name)
+            continue
+        command.aliases = [alias for alias in command.aliases if alias not in taken]
+        taken.add(command.name)
+        taken.update(command.aliases)
+        kept.append(command)
+
+    cog.__cog_commands__ = tuple(kept)
+    await bot.add_cog(cog)
+
+    if skipped:
+        print(f"[BOT7] تم تخطي أوامر متعارضة: {', '.join(skipped)}")
+    print(f"✅ تم تحميل bot7 كـ Cog ({len(kept)} أمر)")
