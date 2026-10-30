@@ -26,7 +26,6 @@ NO_MENTIONS = discord.AllowedMentions.none()
 CLOSE_DELAY = 8                 # seconds before a closed ticket channel is deleted
 TRANSCRIPT_LIMIT = 1000         # max messages included in a transcript
 MAX_CUSTOM_TYPES = 15
-MAX_ACTIVE_PER_USER = 1
 SETUP_TIMEOUT = 120
 CONFIRM_TIMEOUT = 60
 DEFAULT_PANEL_TITLE = "Support Center"
@@ -290,6 +289,7 @@ class Tickets(commands.Cog):
         self.lock = asyncio.Lock()
         self.tasks: set = set()
         self.creating: set = set()
+        self.closing: set = set()
 
     # ---------------- lifecycle ----------------
 
@@ -492,7 +492,7 @@ class Tickets(commands.Cog):
             self.creating.discard(member.id)
 
     def claim_ticket(self, guild: discord.Guild, channel, member: discord.Member) -> tuple:
-        """Returns (success, message). Changes the record in memory; caller saves."""
+        """Returns (success, message). Changes the record in memory; the caller saves."""
         cfg = self.cfg(guild.id)
         record = cfg["tickets"].get(str(channel.id))
         if record is None:
@@ -537,37 +537,48 @@ class Tickets(commands.Cog):
 
     async def close_ticket(self, channel: discord.TextChannel, closer, reason: str) -> None:
         guild = channel.guild
-        cfg = self.cfg(guild.id)
-        record = cfg["tickets"].pop(str(channel.id), None)
-        if record is None:
+        # Guard against a double close (for example two confirmations clicked quickly).
+        if channel.id in self.closing:
             return
-        await self.save()
-
-        transcript = await self.build_transcript(channel)
-        log_channel = self.log_channel(guild, cfg)
-        if log_channel is not None:
-            owner = guild.get_member(record.get("owner_id", 0))
-            embed = discord.Embed(title="🔒 Ticket Closed", color=discord.Color.red(), timestamp=discord.utils.utcnow())
-            embed.add_field(name="Ticket", value=f"#{channel.name}", inline=True)
-            embed.add_field(name="Opened by", value=owner.mention if owner else f"<@{record.get('owner_id')}>", inline=True)
-            embed.add_field(name="Type", value=type_label(cfg, record.get("type", "")), inline=True)
-            embed.add_field(name="Closed by", value=closer.mention, inline=True)
-            embed.add_field(name="Reason", value=trunc(reason, 1000), inline=False)
-            file = discord.File(io.BytesIO(transcript.encode("utf-8")), filename=f"{channel.name}.txt")
-            try:
-                await log_channel.send(embed=embed, file=file, allowed_mentions=NO_MENTIONS)
-            except discord.HTTPException as error:
-                print(f"[TICKETS] Could not send transcript: {error}")
-
+        self.closing.add(channel.id)
         try:
-            await channel.send(
-                f"🔒 Ticket closed by {closer.mention}. This channel will be deleted in {CLOSE_DELAY} seconds.",
-                allowed_mentions=NO_MENTIONS,
-            )
-            await asyncio.sleep(CLOSE_DELAY)
-            await channel.delete(reason=f"Ticket closed by {closer}")
-        except discord.HTTPException as error:
-            print(f"[TICKETS] Could not delete ticket channel: {error}")
+            cfg = self.cfg(guild.id)
+            record = cfg["tickets"].pop(str(channel.id), None)
+            if record is None:
+                return
+            await self.save()
+
+            transcript = await self.build_transcript(channel)
+            log_channel = self.log_channel(guild, cfg)
+            if log_channel is not None:
+                owner = guild.get_member(record.get("owner_id", 0))
+                embed = discord.Embed(title="🔒 Ticket Closed", color=discord.Color.red(), timestamp=discord.utils.utcnow())
+                embed.add_field(name="Ticket", value=f"#{channel.name}", inline=True)
+                embed.add_field(
+                    name="Opened by",
+                    value=owner.mention if owner else f"<@{record.get('owner_id')}>",
+                    inline=True,
+                )
+                embed.add_field(name="Type", value=type_label(cfg, record.get("type", "")), inline=True)
+                embed.add_field(name="Closed by", value=closer.mention, inline=True)
+                embed.add_field(name="Reason", value=trunc(reason, 1000), inline=False)
+                file = discord.File(io.BytesIO(transcript.encode("utf-8")), filename=f"{channel.name}.txt")
+                try:
+                    await log_channel.send(embed=embed, file=file, allowed_mentions=NO_MENTIONS)
+                except discord.HTTPException as error:
+                    print(f"[TICKETS] Could not send transcript: {error}")
+
+            try:
+                await channel.send(
+                    f"🔒 Ticket closed by {closer.mention}. This channel will be deleted in {CLOSE_DELAY} seconds.",
+                    allowed_mentions=NO_MENTIONS,
+                )
+                await asyncio.sleep(CLOSE_DELAY)
+                await channel.delete(reason=f"Ticket closed by {closer}")
+            except discord.HTTPException as error:
+                print(f"[TICKETS] Could not delete ticket channel: {error}")
+        finally:
+            self.closing.discard(channel.id)
 
     # ---------------- listeners ----------------
 
@@ -788,7 +799,10 @@ class Tickets(commands.Cog):
             None,
         )
         if match is None:
-            await ctx.send("❌ No custom ticket type matches that name. Default types can only be disabled in `!ticket setup`.")
+            await ctx.send(
+                "❌ No custom ticket type matches that name. "
+                "Default types can only be disabled in `!ticket setup`."
+            )
             return
         cfg["custom_types"] = [item for item in cfg["custom_types"] if item["key"] != match["key"]]
         cfg["enabled_types"] = [key for key in cfg["enabled_types"] if key != match["key"]]
@@ -823,10 +837,8 @@ class Tickets(commands.Cog):
     @staff_only()
     async def ticket_claim(self, ctx: commands.Context):
         ok, text = self.claim_ticket(ctx.guild, ctx.channel, ctx.author)
-        if not ok:
-            await ctx.send(text, allowed_mentions=NO_MENTIONS)
-            return
-        await self.save()
+        if ok:
+            await self.save()
         await ctx.send(text, allowed_mentions=NO_MENTIONS)
 
     @ticket.command(name="add")
@@ -880,14 +892,20 @@ class Tickets(commands.Cog):
 async def setup(bot: commands.Bot) -> None:
     """Called by discord.py on load_extension("bot7").
 
-    If a command name or alias already exists in bot.py or another cog, it is skipped
-    instead of stopping the cog from loading.
+    Only top-level commands are checked against existing names. Subcommands
+    (for example `ticket setup`) live under the `ticket` group, so they never
+    conflict with a command of the same name elsewhere. Conflicting top-level
+    commands are skipped instead of stopping the cog from loading.
     """
     cog = Tickets(bot)
     taken: set = set(bot.all_commands)
     kept, skipped = [], []
 
     for command in cog.__cog_commands__:
+        if command.parent is not None:
+            # Subcommand: keep it; discord.py attaches it to its group.
+            kept.append(command)
+            continue
         if command.name in taken:
             skipped.append(command.name)
             continue
@@ -900,5 +918,6 @@ async def setup(bot: commands.Bot) -> None:
     await bot.add_cog(cog)
 
     if skipped:
-        print(f"[TICKETS] Skipped conflicting commands: {', '.join(skipped)}")
-    print(f"✅ Ticket system loaded ({len(kept)} commands)")
+        print(f"[TICKETS] Skipped conflicting top-level commands: {', '.join(skipped)}")
+    top_level = sum(1 for command in kept if command.parent is None)
+    print(f"✅ Ticket system loaded ({top_level} top-level commands, {len(kept) - top_level} subcommands)")
