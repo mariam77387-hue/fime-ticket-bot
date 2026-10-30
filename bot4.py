@@ -1,12 +1,12 @@
 # ============================================================
-# Team Fime — bot4.py
-# Game Search Cog
-# Version: 8.0
+# Team Fime - bot4.py
+# Game Search Cog (English)
+# Version: 8.1
 # ============================================================
 #
-# الملف يعمل كـ extension:  await bot.load_extension("bot4")
-# المتطلبات: discord.py 2.x و aiohttp
-# اختياري: RSCRIPTS_API_KEY في Environment لتفعيل RScripts API v1
+# Load with:  await bot.load_extension("bot4")
+# Requires:   discord.py 2.x, aiohttp
+# Optional:   RSCRIPTS_API_KEY environment variable enables the RScripts API v1
 
 import asyncio
 import difflib
@@ -36,21 +36,22 @@ SEARCH_ROOMS_FILE = "bot4_search_rooms.json"
 SEARCH_HELP_ROOMS_FILE = "bot4_search_help_rooms.json"
 
 RSCRIPTS_API_KEY = os.getenv("RSCRIPTS_API_KEY", "").strip()
-USER_AGENT = "Team-Fime-Search/8.0"
+USER_AGENT = "Team-Fime-Search/8.1"
 
-AUTO_SEARCH_COOLDOWN = 2            # ثواني بين بحثين لنفس العضو
-AUTO_SEARCH_CACHE_TTL = 180         # ثواني
+AUTO_SEARCH_COOLDOWN = 2            # seconds between searches per member
+AUTO_SEARCH_CACHE_TTL = 180         # seconds
 AUTO_SEARCH_MAX_RESULTS = 250
 AUTO_SEARCH_PAGE_SIZE = 20
 AUTO_SEARCH_MAX_PAGES = 6
-AUTO_SEARCH_MAX_QUERIES = 6         # أقصى عدد صيغ بحث لكل استعلام
-AUTO_SEARCH_TARGET = 60             # نوقف التوسع إذا وصلنا لهذا العدد من النتائج المتطابقة
-AUTO_SEARCH_DEADLINE = 9.0          # أقصى وقت لبحث كامل (ثواني)
+AUTO_SEARCH_MAX_QUERIES = 6         # max query variants per search
+AUTO_SEARCH_TARGET = 60             # stop expanding once this many matches are found
+AUTO_SEARCH_DEADLINE = 9.0          # max seconds for a full search
 HTTP_TIMEOUT_TOTAL = 6.0
 HTTP_CONCURRENCY = 8
 RELEVANCE_MIN = 0.55
-COPY_TEXT_LIMIT = 1900              # أكبر من هذا يروح كملف .lua
-DISCORD_TEXT_LIMIT = 1900
+COPY_TEXT_LIMIT = 1900              # longer code is sent as a .lua file
+SELECTION_TIMEOUT = 300             # seconds before browse menus expire
+SELECTION_EXPIRED_TEXT = "⏰ Selection time has ended. Run the search again to continue."
 
 ENABLED_SOURCES = ("scriptblox", "robloxscripts", "rscripts", "haxhell", "roscripts", "rbxscripts")
 
@@ -69,7 +70,7 @@ SOURCE_COLORS = {
     "robloxscripts": 0xE67E22,
 }
 
-# مصادر HTML احتياطية: تُستخدم مع الاستعلام الأول فقط، ونتائجها تُفلتر بالعنوان.
+# HTML fallback sources: used with the first query only, results are filtered by title.
 HTML_SOURCES = {
     "haxhell": "https://haxhell.com/?q={query}",
     "roscripts": "https://roscripts.net/?q={query}",
@@ -77,42 +78,42 @@ HTML_SOURCES = {
 }
 
 ACCESS_OPTIONS = (
-    ("all", "الكل", "🌐"),
-    ("no_key", "بدون مفتاح", "🔓"),
-    ("with_key", "بمفتاح", "🔑"),
+    ("all", "All", "🌐"),
+    ("no_key", "No key", "🔓"),
+    ("with_key", "With key", "🔑"),
 )
 
 SOURCE_CHOICES = [
-    app_commands.Choice(name="الكل", value="all"),
+    app_commands.Choice(name="All", value="all"),
     app_commands.Choice(name="ScriptBlox", value="scriptblox"),
     app_commands.Choice(name="RScripts", value="rscripts"),
     app_commands.Choice(name="RobloxScripts", value="robloxscripts"),
 ]
 
 MODE_CHOICES = [
-    app_commands.Choice(name="الكل", value="any"),
-    app_commands.Choice(name="مجاني", value="free"),
-    app_commands.Choice(name="مدفوع", value="paid"),
+    app_commands.Choice(name="Any", value="any"),
+    app_commands.Choice(name="Free", value="free"),
+    app_commands.Choice(name="Paid", value="paid"),
 ]
 
 SORT_CHOICES = [
-    app_commands.Choice(name="الأكثر تطابقًا", value="relevance"),
-    app_commands.Choice(name="المشاهدات", value="views"),
-    app_commands.Choice(name="الإعجابات", value="likes"),
-    app_commands.Choice(name="الأحدث تحديثًا", value="date"),
+    app_commands.Choice(name="Best match", value="relevance"),
+    app_commands.Choice(name="Views", value="views"),
+    app_commands.Choice(name="Likes", value="likes"),
+    app_commands.Choice(name="Latest update", value="date"),
 ]
 
 ORDER_CHOICES = [
-    app_commands.Choice(name="تنازلي", value="desc"),
-    app_commands.Choice(name="تصاعدي", value="asc"),
+    app_commands.Choice(name="Descending", value="desc"),
+    app_commands.Choice(name="Ascending", value="asc"),
 ]
 
 FETCH_SORT_CHOICES = [
-    app_commands.Choice(name="المشاهدات", value="views"),
-    app_commands.Choice(name="الإعجابات", value="likeCount"),
-    app_commands.Choice(name="تاريخ الإنشاء", value="createdAt"),
-    app_commands.Choice(name="تاريخ التحديث", value="updatedAt"),
-    app_commands.Choice(name="عدد عدم الإعجاب", value="dislikeCount"),
+    app_commands.Choice(name="Views", value="views"),
+    app_commands.Choice(name="Likes", value="likeCount"),
+    app_commands.Choice(name="Created date", value="createdAt"),
+    app_commands.Choice(name="Updated date", value="updatedAt"),
+    app_commands.Choice(name="Dislike count", value="dislikeCount"),
 ]
 
 NO_MENTIONS = discord.AllowedMentions.none()
@@ -130,7 +131,7 @@ def _load_json_dict(path: str) -> Dict[str, Any]:
             data = json.load(file)
         return data if isinstance(data, dict) else {}
     except Exception as error:
-        print(f"⚠️ تعذر قراءة {path}: {error}")
+        print(f"Could not read {path}: {error}")
         return {}
 
 
@@ -142,7 +143,7 @@ def _save_json_dict(path: str, data: Dict[str, Any]) -> bool:
         os.replace(temp_path, path)
         return True
     except Exception as error:
-        print(f"❌ تعذر حفظ {path}: {error}")
+        print(f"Could not save {path}: {error}")
         return False
 
 
@@ -222,26 +223,26 @@ def parse_iso(value: Any) -> Optional[datetime]:
     return parsed if parsed.tzinfo else parsed.replace(tzinfo=timezone.utc)
 
 
-def format_relative_ar(value: Any) -> str:
+def format_relative(value: Any) -> str:
     parsed = parse_iso(value)
     if parsed is None:
-        return "غير معروف"
+        return "unknown"
     seconds = int((datetime.now(timezone.utc) - parsed).total_seconds())
     if seconds < 60:
-        return "الآن"
+        return "just now"
     minutes = seconds // 60
     if minutes < 60:
-        return f"قبل {minutes} دقيقة"
+        return f"{minutes} min ago"
     hours = minutes // 60
     if hours < 24:
-        return f"قبل {hours} ساعة"
+        return f"{hours} h ago"
     days = hours // 24
     if days < 30:
-        return f"قبل {days} يوم"
+        return f"{days} d ago"
     months = days // 30
     if months < 12:
-        return f"قبل {months} شهر"
-    return f"قبل {months // 12} سنة"
+        return f"{months} mo ago"
+    return f"{months // 12} y ago"
 
 
 def timestamp_of(row: Dict[str, Any]) -> float:
@@ -254,12 +255,15 @@ def timestamp_of(row: Dict[str, Any]) -> float:
 
 def empty_text(query: str, had_error: bool) -> str:
     if had_error:
-        return f"⚠️ بعض مصادر البحث ما ردت، وما لقيت نتيجة مؤكدة لـ **{truncate(query, 60)}**. جرّب بعد شوي."
-    return f"❌ ما لقيت نتائج مطابقة لـ **{truncate(query, 60)}**."
+        return (
+            f"⚠️ Some sources did not respond, and no confirmed result was found for "
+            f"**{truncate(query, 60)}**. Try again shortly."
+        )
+    return f"❌ No matching results found for **{truncate(query, 60)}**."
 
 
 # ============================================================
-# ARABIC / ENGLISH NAME NORMALIZATION
+# NAME NORMALIZATION (Arabic and English queries)
 # ============================================================
 
 _ARABIC_CHAR_RE = re.compile(r"[\u0600-\u06FF]")
@@ -300,12 +304,8 @@ def compact_game_name(text: Any) -> str:
     return normalized.replace(" ", "")
 
 
-def _word_set(words) -> frozenset:
-    return frozenset(normalize_game_name(word) for word in words)
-
-
 # ============================================================
-# ARABIC → LATIN TRANSLITERATION
+# ARABIC -> LATIN TRANSLITERATION (for Arabic queries)
 # ============================================================
 
 _AR_WORD_SOURCE = {
@@ -338,7 +338,7 @@ for _word, _english in _AR_WORD_SOURCE.items():
     if _normalized_word:
         _AR_WORD_MAP[_normalized_word] = _english
 
-# نسختان صوتيتان لأن الحروف العربية تُنطق بأكثر من طريقة (ق = g أو q، ج = j أو g ...).
+# Two phonetic variants, because Arabic letters are pronounced differently across dialects.
 _AR_LETTERS = (
     {
         "ا": "a", "ب": "b", "ت": "t", "ث": "th", "ج": "j", "ح": "h", "خ": "kh",
@@ -434,6 +434,7 @@ def phonetic_similarity(query: str, text: str) -> float:
     return best
 
 
+# Filler words removed from queries before searching.
 _NOISE_WORDS = {
     "ماب", "الماب", "سكربت", "سكريبت", "سكربتات", "اسكربت", "لعبه", "لعبة",
     "بوت", "ابحث", "بحث", "عن", "ابي", "ابغى", "ابغا", "اريد", "ابيكم", "ابيها",
@@ -445,7 +446,7 @@ _NOISE_WORDS = {
 
 @lru_cache(maxsize=512)
 def search_query_candidates(query: str) -> Tuple[str, ...]:
-    """يبني صيغ بحث متعددة من كلام العضو، حتى لو أضاف كلامًا لا علاقة له باسم الماب."""
+    """Builds several search variants from the member's text, even if it contains filler words."""
     query = clean_text(query)
     if not query:
         return ()
@@ -461,7 +462,7 @@ def search_query_candidates(query: str) -> Tuple[str, ...]:
         seen.add(key)
         output.append(value)
 
-    # الأصل أولًا: إذا كتب العضو اسم الماب وحده، تبقى الدقة كما هي.
+    # The original query comes first, so exact names stay precise.
     add(query)
 
     tokens = normalize_game_name(query).split()
@@ -587,8 +588,10 @@ def script_needs_key(row: Dict[str, Any]) -> bool:
         if not isinstance(value, str) or not value.strip():
             continue
         text = normalize_game_name(value)
+        # "بدون مفتاح" = "without key" (Arabic text used by some sources)
         if _NO_KEY_TEXT_RE.search(text) or "بدون مفتاح" in text:
             continue
+        # "مفتاح" = "key", "كي سيستم" = "key system" (Arabic text used by some sources)
         if _KEY_TEXT_RE.search(text) or "مفتاح" in text or "كي سيستم" in text:
             return True
     return False
@@ -627,7 +630,7 @@ def row_key(row: Dict[str, Any]) -> str:
 
 
 def get_static_image_url(*candidates) -> Optional[str]:
-    """يرجع أول صورة صالحة (http/https)، ويستبعد GIF و Tenor و Giphy."""
+    """Returns the first valid http(s) image, skipping GIF, Tenor and Giphy."""
     for candidate in candidates:
         if not isinstance(candidate, str):
             continue
@@ -643,14 +646,38 @@ def get_static_image_url(*candidates) -> Optional[str]:
     return None
 
 
+def _game_name_of(row: Dict[str, Any]) -> str:
+    for field in ("gameName", "game_name", "gameTitle", "placeName", "experienceName"):
+        value = row.get(field)
+        if isinstance(value, str) and value.strip():
+            return value.strip()
+
+    game = row.get("game")
+    if isinstance(game, dict):
+        for field in ("name", "title", "displayName", "gameName"):
+            value = game.get(field)
+            if isinstance(value, str) and value.strip():
+                return value.strip()
+    elif isinstance(game, str) and game.strip():
+        return game.strip()
+
+    nested = row.get("experience") or row.get("place")
+    if isinstance(nested, dict):
+        for field in ("name", "title", "displayName"):
+            value = nested.get(field)
+            if isinstance(value, str) and value.strip():
+                return value.strip()
+    return ""
+
+
 def _normalize_row(row: Dict[str, Any], source: str) -> Dict[str, Any]:
-    """يوحّد شكل النتيجة من أي مصدر. الحقول الأصلية تبقى كما هي."""
+    """Gives every source the same result shape. Original fields are kept."""
     item = dict(row)
     game = item.get("game") if isinstance(item.get("game"), dict) else {}
 
     slug = clean_text(item.get("slug"))
     script_id = clean_text(item.get("_id") or item.get("id") or item.get("scriptId"))
-    title = clean_text(item.get("title") or item.get("name")) or "بدون عنوان"
+    title = clean_text(item.get("title") or item.get("name")) or "Untitled"
 
     code = item.get("script")
     code = code.strip() if isinstance(code, str) else ""
@@ -699,30 +726,6 @@ def _normalize_row(row: Dict[str, Any], source: str) -> Dict[str, Any]:
         ),
     })
     return item
-
-
-def _game_name_of(row: Dict[str, Any]) -> str:
-    for field in ("gameName", "game_name", "gameTitle", "placeName", "experienceName"):
-        value = row.get(field)
-        if isinstance(value, str) and value.strip():
-            return value.strip()
-
-    game = row.get("game")
-    if isinstance(game, dict):
-        for field in ("name", "title", "displayName", "gameName"):
-            value = game.get(field)
-            if isinstance(value, str) and value.strip():
-                return value.strip()
-    elif isinstance(game, str) and game.strip():
-        return game.strip()
-
-    nested = row.get("experience") or row.get("place")
-    if isinstance(nested, dict):
-        for field in ("name", "title", "displayName"):
-            value = nested.get(field)
-            if isinstance(value, str) and value.strip():
-                return value.strip()
-    return ""
 
 
 # ============================================================
@@ -778,7 +781,7 @@ def apply_filters(rows: List[Dict[str, Any]], filters: Dict[str, Any], query: st
 # ============================================================
 
 class HttpClient:
-    """عميل HTTP مشترك: جلسة واحدة، حد للتزامن، ومهلة لكل طلب."""
+    """Shared HTTP client: one session, a concurrency limit, and a timeout per request."""
 
     def __init__(self):
         self._session: Optional[aiohttp.ClientSession] = None
@@ -796,7 +799,7 @@ class HttpClient:
 
     async def get_json(self, url: str, *, params: Optional[Dict[str, Any]] = None,
                        headers: Optional[Dict[str, str]] = None) -> Tuple[Any, bool]:
-        """يرجع (البيانات, هل_فيه_خطأ_شبكة_أو_خادم)."""
+        """Returns (data, had_network_or_server_error)."""
         session = self._ensure()
         async with self._sem:
             try:
@@ -809,7 +812,7 @@ class HttpClient:
             except (asyncio.TimeoutError, aiohttp.ClientError):
                 return None, True
             except Exception as error:
-                print(f"⚠️ HTTP JSON error ({url}): {error}")
+                print(f"HTTP JSON error ({url}): {error}")
                 return None, True
 
     async def get_text(self, url: str) -> Tuple[str, bool]:
@@ -823,7 +826,7 @@ class HttpClient:
             except (asyncio.TimeoutError, aiohttp.ClientError):
                 return "", True
             except Exception as error:
-                print(f"⚠️ HTTP text error ({url}): {error}")
+                print(f"HTTP text error ({url}): {error}")
                 return "", True
 
     async def close(self) -> None:
@@ -876,7 +879,7 @@ async def _src_rscripts(http: HttpClient, query: str, page: int):
         )
         items = rows_from(data, ("data", "scripts"))
     else:
-        # بدون مفتاح نستخدم الـ API العام، وإلا ما يرجع شيء.
+        # Without a key, use the public API.
         data, error = await http.get_json(
             "https://rscripts.net/api/v2/scripts",
             params={"q": query, "page": page},
@@ -886,7 +889,7 @@ async def _src_rscripts(http: HttpClient, query: str, page: int):
 
 
 async def _src_html(http: HttpClient, source: str, query: str):
-    """مصدر HTML احتياطي: يلتقط روابط نفس الموقع فقط."""
+    """HTML fallback source: only keeps links from the same site."""
     url = HTML_SOURCES[source].format(query=urllib.parse.quote_plus(query))
     html, error = await http.get_text(url)
     if not html:
@@ -921,7 +924,7 @@ PAGED_SOURCES = {
 
 
 async def _fetch_pages(http: HttpClient, fetch, query: str, page_size: int, deadline: float):
-    """يسحب الصفحات بدفعات من صفحتين. يتوقف إذا الصفحة ما اكتملت أو انتهى الوقت."""
+    """Fetches pages in batches of two. Stops when a page is not full or time runs out."""
     loop = asyncio.get_running_loop()
     collected: List[Dict[str, Any]] = []
     had_error = False
@@ -952,7 +955,7 @@ async def _fetch_pages(http: HttpClient, fetch, query: str, page_size: int, dead
 # ============================================================
 
 async def resolve_copy_text(http: HttpClient, row: Dict[str, Any]) -> str:
-    """يرجع نص الكود الجاهز للنسخ (بدون أي تنسيق)."""
+    """Returns the ready-to-copy script text, with no formatting."""
     code = clean_text(row.get("_code"))
 
     if not code and row.get("_fime_api") == "scriptblox" and row.get("_slug"):
@@ -975,7 +978,7 @@ async def resolve_copy_text(http: HttpClient, row: Dict[str, Any]) -> str:
 
 
 async def send_copy_text(followup, text: str, title: str) -> None:
-    """يرسل النص خامًا بدون ``` . إذا كان طويلًا يرسله كملف .lua."""
+    """Sends the raw script with no code fences. Long scripts are sent as a .lua file."""
     if len(text) <= COPY_TEXT_LIMIT:
         await followup.send(text, ephemeral=True, allowed_mentions=NO_MENTIONS)
         return
@@ -983,7 +986,7 @@ async def send_copy_text(followup, text: str, title: str) -> None:
     safe_name = re.sub(r"[^\w\-]+", "_", clean_text(title)).strip("_")[:40] or "script"
     file = discord.File(io.BytesIO(text.encode("utf-8")), filename=f"{safe_name}.lua")
     await followup.send(
-        "📜 الكود طويل، أرفقته كملف.",
+        "📜 The script is long, so it is attached as a file.",
         file=file,
         ephemeral=True,
         allowed_mentions=NO_MENTIONS,
@@ -997,7 +1000,7 @@ async def send_copy_text(followup, text: str, title: str) -> None:
 def build_script_embed(row: Dict[str, Any], index: int, total: int) -> discord.Embed:
     source = row.get("_fime_api", "")
     embed = discord.Embed(
-        title=truncate(f"📜 {row.get('title') or 'بدون عنوان'}", 250),
+        title=truncate(f"📜 {row.get('title') or 'Untitled'}", 250),
         color=SOURCE_COLORS.get(source, 0x206694),
     )
 
@@ -1005,58 +1008,59 @@ def build_script_embed(row: Dict[str, Any], index: int, total: int) -> discord.E
     if page_url:
         embed.url = page_url
 
-    game = clean_text(row.get("gameName"), "لعبة غير معروفة")
+    game = clean_text(row.get("gameName"), "Unknown game")
     place_id = to_int(row.get("_place_id"))
     game_value = (
         f"[{truncate(game, 80)}](https://www.roblox.com/games/{place_id})"
         if place_id
         else truncate(game, 80)
     )
-    embed.add_field(name="🎮 الماب", value=game_value, inline=False)
+    embed.add_field(name="🎮 Game", value=game_value, inline=False)
 
     if source == "scriptblox":
-        embed.add_field(name="✅ التحقق", value="Verified" if _is_verified(row) else "غير موثق", inline=True)
-        embed.add_field(name="💲 النوع", value="مدفوع" if _is_paid(row) else "مجاني", inline=True)
-        embed.add_field(name="🌐 يونيفيرسال", value="نعم" if _is_universal(row) else "لا", inline=True)
-        embed.add_field(name="🩹 الحالة", value="❌ متضرر" if _is_patched(row) else "✅ يعمل", inline=True)
+        embed.add_field(name="✅ Verified", value="Yes" if _is_verified(row) else "No", inline=True)
+        embed.add_field(name="💲 Type", value="Paid" if _is_paid(row) else "Free", inline=True)
+        embed.add_field(name="🌐 Universal", value="Yes" if _is_universal(row) else "No", inline=True)
+        embed.add_field(name="🩹 Status", value="❌ Patched" if _is_patched(row) else "✅ Working", inline=True)
     elif source == "rscripts":
-        embed.add_field(name="📱 الجوال", value="✅ يدعم" if _is_mobile(row) else "❌ لا يدعم", inline=True)
-        embed.add_field(name="✅ التحقق", value="Verified" if _is_verified(row) else "غير موثق", inline=True)
-        embed.add_field(name="💲 النوع", value="مدفوع" if _is_paid(row) else "مجاني", inline=True)
+        embed.add_field(name="📱 Mobile", value="✅ Supported" if _is_mobile(row) else "❌ Not supported", inline=True)
+        embed.add_field(name="✅ Verified", value="Yes" if _is_verified(row) else "No", inline=True)
+        embed.add_field(name="💲 Type", value="Paid" if _is_paid(row) else "Free", inline=True)
 
-    embed.add_field(name="👁️ المشاهدات", value=f"{to_int(row.get('views')):,}", inline=True)
-    embed.add_field(name="👍 الإعجابات", value=f"{to_int(row.get('likes')):,}", inline=True)
+    embed.add_field(name="👁️ Views", value=f"{to_int(row.get('views')):,}", inline=True)
+    embed.add_field(name="👍 Likes", value=f"{to_int(row.get('likes')):,}", inline=True)
 
-    key_text = "🔑 يحتاج مفتاح" if script_needs_key(row) else "🔓 بدون مفتاح"
+    needs_key = script_needs_key(row)
+    key_text = "🔑 Key required" if needs_key else "🔓 No key"
     key_link = clean_text(row.get("keyLink"))
-    if key_link.startswith(("http://", "https://")) and script_needs_key(row):
-        key_text = f"[🔑 يحتاج مفتاح]({key_link})"
-    embed.add_field(name="🔐 الوصول", value=key_text, inline=True)
+    if key_link.startswith(("http://", "https://")) and needs_key:
+        key_text = f"[🔑 Key required]({key_link})"
+    embed.add_field(name="🔐 Access", value=key_text, inline=True)
 
     links = []
     if page_url:
-        links.append(f"[فتح الصفحة]({page_url})")
+        links.append(f"[Open page]({page_url})")
     if row.get("_raw_url"):
-        links.append(f"[الكود الخام]({row['_raw_url']})")
-    embed.add_field(name="🔗 الروابط", value=" • ".join(links) or "—", inline=False)
+        links.append(f"[Raw code]({row['_raw_url']})")
+    embed.add_field(name="🔗 Links", value=" • ".join(links) or "—", inline=False)
 
     updated = row.get("updatedAt") or row.get("lastUpdated") or row.get("createdAt")
     if updated:
-        embed.add_field(name="🕒 آخر تحديث", value=format_relative_ar(updated), inline=True)
+        embed.add_field(name="🕒 Last updated", value=format_relative(updated), inline=True)
 
     code = clean_text(row.get("_code"))
     if code:
-        embed.add_field(name="📜 معاينة الكود", value=f"```\n{truncate(code, 380)}\n```", inline=False)
+        embed.add_field(name="📜 Code preview", value=f"```\n{truncate(code, 380)}\n```", inline=False)
 
     user = row.get("user") if isinstance(row.get("user"), dict) else {}
     creator = clean_text(user.get("username"))
     if creator:
-        embed.set_author(name=truncate(f"بواسطة {creator}", 250))
+        embed.set_author(name=truncate(f"by {creator}", 250))
 
     if row.get("_image"):
         embed.set_image(url=row["_image"])
 
-    embed.set_footer(text=f"{SOURCE_NAMES.get(source, 'مصدر خارجي')} • {index}/{total} • Team Fime")
+    embed.set_footer(text=f"{SOURCE_NAMES.get(source, 'External source')} • {index}/{total} • Team Fime")
     return embed
 
 
@@ -1065,7 +1069,7 @@ def build_script_embed(row: Dict[str, Any], index: int, total: int) -> discord.E
 # ============================================================
 
 class _BaseView(discord.ui.View):
-    """أساس مشترك: إضافة أزرار، وتحقق أن صاحب الأمر فقط يتصفح، وإزالة الواجهة عند الانتهاء."""
+    """Shared base: adds buttons, restricts browsing to the requester, and expires cleanly."""
 
     def __init__(self, requester_id: int, timeout: float):
         super().__init__(timeout=timeout)
@@ -1088,7 +1092,7 @@ class _BaseView(discord.ui.View):
         if interaction.user.id == self.requester_id:
             return True
         await interaction.response.send_message(
-            "🔒 هذي النتائج لصاحب البحث فقط. ابحث بنفسك عشان تتصفح.",
+            "🔒 These results belong to the person who searched. Run your own search to browse.",
             ephemeral=True,
         )
         return False
@@ -1097,17 +1101,17 @@ class _BaseView(discord.ui.View):
         self.clear_items()
         if self.message is not None:
             try:
-                await self.message.edit(view=None)
+                await self.message.edit(content=SELECTION_EXPIRED_TEXT, view=None)
             except Exception:
                 pass
 
 
 class ScriptBrowserView(_BaseView):
-    """تصفح النتائج: نتيجة في كل صفحة، فلتر الوصول، زر نسخ، وروابط."""
+    """Browse results: one result per page, access filter, results menu, copy, and links."""
 
     def __init__(self, http: HttpClient, requester_id: int, rows: List[Dict[str, Any]],
                  query: str, elapsed: Optional[float] = None):
-        super().__init__(requester_id, timeout=300)
+        super().__init__(requester_id, timeout=SELECTION_TIMEOUT)
         self.http = http
         self.query = query
         self.rows = list(rows)
@@ -1133,22 +1137,38 @@ class ScriptBrowserView(_BaseView):
 
     def header(self) -> str:
         visible = self.visible_rows()
-        text = f"✅ **{len(self.rows)} نتيجة** لـ **{truncate(self.query, 60)}**"
+        text = f"✅ **{len(self.rows)} result(s)** for **{truncate(self.query, 60)}**"
         if len(visible) != len(self.rows):
-            text += f" • المعروض: {len(visible)}"
+            text += f" • showing: {len(visible)}"
         if self.elapsed is not None:
             text += f" • ⚡ {self.elapsed:.1f}s"
-        return text + "\nتصفح بالأسهم، وانسخ الكود من زر **نسخ**."
+        return text + "\nBrowse with the arrows or the menu, and copy the script with **Copy**."
 
     def build_embed(self) -> discord.Embed:
         row = self.current()
         if row is None:
             return discord.Embed(
-                title="لا توجد نتائج بهذا الفلتر",
-                description="جرّب فلترًا آخر.",
+                title="No results with this filter",
+                description="Try a different filter.",
                 color=0x206694,
             )
         return build_script_embed(row, self.index + 1, len(self.visible_rows()))
+
+    def _jump_options(self, visible: List[Dict[str, Any]]) -> List[discord.SelectOption]:
+        total = len(visible)
+        size = min(25, total)
+        start = max(0, min(self.index - size // 2, total - size))
+        options = []
+        for position in range(start, start + size):
+            row = visible[position]
+            title = clean_text(row.get("title"), "Untitled")
+            options.append(discord.SelectOption(
+                label=truncate(f"{position + 1}. {title}", 100),
+                value=str(position),
+                description=truncate(SOURCE_NAMES.get(row.get("_fime_api", ""), "External source"), 100),
+                default=(position == self.index),
+            ))
+        return options
 
     def _rebuild(self) -> None:
         visible = self.visible_rows()
@@ -1160,8 +1180,8 @@ class ScriptBrowserView(_BaseView):
 
         self.clear_items()
 
-        select = discord.ui.Select(
-            placeholder="فلترة حسب الوصول",
+        access_select = discord.ui.Select(
+            placeholder="Filter by access",
             min_values=1,
             max_values=1,
             options=[
@@ -1170,32 +1190,43 @@ class ScriptBrowserView(_BaseView):
             ],
             row=0,
         )
-        select.callback = self._on_access
-        self.add_item(select)
+        access_select.callback = self._on_access
+        self.add_item(access_select)
 
-        self._add_button("◀️", self._prev, row=1, disabled=(not visible or self.index <= 0))
+        if len(visible) > 1:
+            jump_select = discord.ui.Select(
+                placeholder="Jump to a result",
+                min_values=1,
+                max_values=1,
+                options=self._jump_options(visible),
+                row=1,
+            )
+            jump_select.callback = self._on_jump
+            self.add_item(jump_select)
+
+        self._add_button("◀️", self._prev, row=2, disabled=(not visible or self.index <= 0))
         self.add_item(discord.ui.Button(
             label=f"{self.index + 1}/{len(visible)}" if visible else "0/0",
             style=discord.ButtonStyle.secondary,
             disabled=True,
-            row=1,
+            row=2,
         ))
-        self._add_button("▶️", self._next, row=1, disabled=(not visible or self.index >= len(visible) - 1))
+        self._add_button("▶️", self._next, row=2, disabled=(not visible or self.index >= len(visible) - 1))
         self._add_button(
-            "نسخ", self._copy, row=1, disabled=(row is None),
+            "Copy", self._copy, row=2, disabled=(row is None),
             style=discord.ButtonStyle.success, emoji="📋",
         )
 
         if row:
             if row.get("_page_url"):
                 self.add_item(discord.ui.Button(
-                    label="فتح الصفحة", url=row["_page_url"],
-                    style=discord.ButtonStyle.link, row=2,
+                    label="Open page", url=row["_page_url"],
+                    style=discord.ButtonStyle.link, row=3,
                 ))
             if row.get("_raw_url"):
                 self.add_item(discord.ui.Button(
-                    label="الكود الخام", url=row["_raw_url"],
-                    style=discord.ButtonStyle.link, row=2,
+                    label="Raw code", url=row["_raw_url"],
+                    style=discord.ButtonStyle.link, row=3,
                 ))
 
     # ---- callbacks ----
@@ -1206,6 +1237,16 @@ class ScriptBrowserView(_BaseView):
         values = interaction.data.get("values") or ["all"]
         self.access = values[0]
         self.index = 0
+        self._rebuild()
+        await interaction.response.edit_message(content=self.header(), embed=self.build_embed(), view=self)
+
+    async def _on_jump(self, interaction: discord.Interaction):
+        if not await self._check_owner(interaction):
+            return
+        try:
+            self.index = int(interaction.data["values"][0])
+        except (KeyError, IndexError, TypeError, ValueError):
+            pass
         self._rebuild()
         await interaction.response.edit_message(content=self.header(), embed=self.build_embed(), view=self)
 
@@ -1223,24 +1264,24 @@ class ScriptBrowserView(_BaseView):
         await self._move(interaction, 1)
 
     async def _copy(self, interaction: discord.Interaction):
-        # النسخ متاح لأي عضو، والرسالة مخفية له فقط.
+        # Anyone can copy. The result is only visible to the person who clicked.
         row = self.current()
         if row is None:
-            await interaction.response.send_message("❌ ما فيه نتيجة حاليًا.", ephemeral=True)
+            await interaction.response.send_message("❌ There is no result right now.", ephemeral=True)
             return
         await interaction.response.defer(ephemeral=True, thinking=True)
         text = await resolve_copy_text(self.http, row)
         if not text:
-            await interaction.followup.send("❌ ما قدرت أجيب الكود من المصدر.", ephemeral=True)
+            await interaction.followup.send("❌ Could not fetch the code from the source.", ephemeral=True)
             return
         await send_copy_text(interaction.followup, text, row.get("title", "script"))
 
 
 class PagerView(_BaseView):
-    """تصفح صفحات Embed (مثل قائمة الإكسبلويترات)."""
+    """Page through embeds (for example the executor list)."""
 
     def __init__(self, requester_id: int, total_pages: int, render):
-        super().__init__(requester_id, timeout=180)
+        super().__init__(requester_id, timeout=SELECTION_TIMEOUT)
         self.total_pages = max(1, total_pages)
         self.render = render
         self.index = 0
@@ -1283,7 +1324,7 @@ class PagerView(_BaseView):
 class SearchHelpRoomSelect(discord.ui.Select):
     def __init__(self, options: List[discord.SelectOption]):
         super().__init__(
-            placeholder="اختر الروم اللي تبي تتوجه له...",
+            placeholder="Choose the room you want to go to...",
             min_values=1,
             max_values=1,
             options=options,
@@ -1294,9 +1335,9 @@ class SearchHelpRoomSelect(discord.ui.Select):
         if interaction.guild is not None:
             channel = interaction.guild.get_channel(int(self.values[0]))
         if channel is None:
-            await interaction.response.send_message("❌ الروم المحفوظ لم يعد موجودًا.", ephemeral=True)
+            await interaction.response.send_message("❌ The saved room no longer exists.", ephemeral=True)
             return
-        await interaction.response.send_message(f"📍 توجه إلى {channel.mention}", ephemeral=True)
+        await interaction.response.send_message(f"📍 Go to {channel.mention}", ephemeral=True)
 
 
 class SearchHelpRoomsView(discord.ui.View):
@@ -1316,14 +1357,14 @@ class SearchHelpRoomsView(discord.ui.View):
 
 
 class SearchHelpButtonView(discord.ui.View):
-    """يظهر تحت رسالة "ما لقيت نتائج" إذا المالك حدد رومات مساعدة."""
+    """Shown under a "no results" message when the owner has set help rooms."""
 
     def __init__(self, guild, requester_id: int):
         super().__init__(timeout=120)
         self.guild_id = guild.id
         self.requester_id = requester_id
         button = discord.ui.Button(
-            label="توجه إلى الرومات",
+            label="Go to help rooms",
             emoji="📚",
             style=discord.ButtonStyle.primary,
         )
@@ -1333,13 +1374,13 @@ class SearchHelpButtonView(discord.ui.View):
     async def _open_rooms(self, interaction: discord.Interaction):
         ids = get_help_channel_ids(self.guild_id)
         if not ids:
-            await interaction.response.send_message("ℹ️ المالك ما حدد رومات للتوجه لها حتى الآن.", ephemeral=True)
+            await interaction.response.send_message("ℹ️ The owner has not set any help rooms yet.", ephemeral=True)
             return
         view = SearchHelpRoomsView(interaction.guild, ids)
         if not view.children:
-            await interaction.response.send_message("⚠️ الرومات المحددة لم تعد موجودة.", ephemeral=True)
+            await interaction.response.send_message("⚠️ The configured help rooms no longer exist.", ephemeral=True)
             return
-        await interaction.response.send_message("📚 **اختر الروم المناسب:**", view=view, ephemeral=True)
+        await interaction.response.send_message("📚 **Choose the right room:**", view=view, ephemeral=True)
 
 
 def no_results_view(guild, requester_id: int) -> Optional[discord.ui.View]:
@@ -1350,46 +1391,46 @@ def no_results_view(guild, requester_id: int) -> Optional[discord.ui.View]:
 
 def build_help_embed() -> discord.Embed:
     embed = discord.Embed(
-        title="🔍 Team Fime • بحث السكربتات",
+        title="🔍 Team Fime • Script Search",
         description=(
-            "ابحث عن السكربتات من ScriptBlox و RScripts و RobloxScripts.\n"
-            "اكتب اسم الماب مباشرة في روم البحث التلقائي، أو استخدم الأوامر."
+            "Search scripts from ScriptBlox, RScripts, RobloxScripts and more.\n"
+            "Type a game name directly in the auto-search room, or use the commands below."
         ),
         color=0x3498DB,
     )
     embed.add_field(
-        name="🔎 البحث",
+        name="🔎 Search",
         value=(
-            "`/search query` بحث في كل المصادر مع فلاتر\n"
-            "`!search <اسم>` بحث سريع في كل المصادر\n"
-            "اكتب اسم الماب في روم البحث التلقائي"
+            "`/search query` search all sources with filters\n"
+            "`!search <name>` quick search across all sources\n"
+            "Type a game name in the auto-search room"
         ),
         inline=False,
     )
     embed.add_field(
-        name="📚 التصفح",
+        name="📚 Browse",
         value=(
-            "`/fetch` تصفح سكربتات ScriptBlox مع فلاتر\n"
-            "`/trending` الأكثر رواجًا الآن\n"
-            "`/script id` سكربت محدد بالمعرف أو الـ slug\n"
-            "`/rscripts_fetch` تصفح RScripts\n"
-            "`/rscripts_by_user username` سكربتات صانع معين\n"
-            "`/executors` قائمة الإكسبلويترات"
+            "`/fetch` browse ScriptBlox with filters\n"
+            "`/trending` what is trending now\n"
+            "`/script id` fetch one script by ID or slug\n"
+            "`/rscripts_fetch` browse RScripts\n"
+            "`/rscripts_by_user username` scripts by one creator\n"
+            "`/executors` list executors"
         ),
         inline=False,
     )
     embed.add_field(
-        name="🛠️ الإدارة (صلاحية إدارة السيرفر)",
+        name="🛠️ Management (requires Manage Server)",
         value=(
-            "`/setscriptroom` تحديد روم البحث التلقائي\n"
-            "`/searchroom` عرض روم البحث الحالي\n"
-            "`/addsearchhelproom` / `/removesearchhelproom` رومات المساعدة\n"
-            "`/searchhelprooms` عرض رومات المساعدة\n"
-            "`!تحديد_روم` / `!الغاء_روم_البحث` / `!روم_البحث`"
+            "`/setscriptroom` set the auto-search room\n"
+            "`/searchroom` show the current auto-search room\n"
+            "`/addsearchhelproom` / `/removesearchhelproom` manage help rooms\n"
+            "`/searchhelprooms` show help rooms\n"
+            "`!setsearchroom` / `!removesearchroom` / `!searchroom`"
         ),
         inline=False,
     )
-    embed.set_footer(text="Team Fime • Game Search v8.0")
+    embed.set_footer(text="Team Fime • Script Search v8.1")
     return embed
 
 
@@ -1398,7 +1439,7 @@ def build_help_embed() -> discord.Embed:
 # ============================================================
 
 class GameSearchCog(commands.Cog):
-    """بحث السكربتات: تلقائي داخل روم محددة، وأوامر سلاش وبريفكس."""
+    """Script search: automatic search in a chosen room, plus slash and prefix commands."""
 
     def __init__(self, bot: commands.Bot):
         self.bot = bot
@@ -1453,7 +1494,7 @@ class GameSearchCog(commands.Cog):
     # -----------------------------------------------------
 
     async def search(self, query: str, sources) -> Tuple[List[Dict[str, Any]], bool]:
-        """يرجع (النتائج الخام المرتبة, هل_فيه_خطأ). الفلاتر تُطبق بعدها."""
+        """Returns (raw sorted results, had_error). Filters are applied afterwards."""
         key = f"{compact_game_name(query)}|{','.join(sorted(sources))}"
         cached = self._cache_get(key)
         if cached is not None:
@@ -1478,7 +1519,7 @@ class GameSearchCog(commands.Cog):
         had_error = False
 
         try:
-            # ندرج صيغ البحث على دفعات من اثنتين. إذا وصلنا للهدف نوقف.
+            # Query variants run in batches of two. Stop once we reach the target.
             for start in range(0, len(candidates), 2):
                 if loop.time() >= deadline:
                     break
@@ -1509,7 +1550,7 @@ class GameSearchCog(commands.Cog):
                 if len(found) >= AUTO_SEARCH_TARGET:
                     break
         except Exception as error:
-            print(f"❌ Search engine error: {error}")
+            print(f"Search engine error: {error}")
             had_error = True
 
         found.sort(key=lambda row: rank_score(row, query), reverse=True)
@@ -1531,7 +1572,7 @@ class GameSearchCog(commands.Cog):
         return [], False
 
     async def _enrich_thumbnails(self, rows: List[Dict[str, Any]]) -> None:
-        """يجيب صور الألعاب من Roblox للنتائج اللي ما عندها صورة (طلب واحد لكل دفعة)."""
+        """Fetches Roblox game icons for results without an image (one request per batch)."""
         wanted: Dict[int, List[Dict[str, Any]]] = {}
         for row in rows:
             if row.get("_image") or not row.get("_place_id"):
@@ -1559,7 +1600,7 @@ class GameSearchCog(commands.Cog):
                     for row in wanted[place_id]:
                         row["_image"] = image
         except Exception as error:
-            print(f"⚠️ Roblox thumbnail lookup skipped: {error}")
+            print(f"Roblox thumbnail lookup skipped: {error}")
 
     # -----------------------------------------------------
     # other fetchers
@@ -1610,7 +1651,7 @@ class GameSearchCog(commands.Cog):
         return _normalize_row(items[0], "rscripts") if items else None
 
     async def _fetch_rscripts_user(self, username: str) -> List[Dict[str, Any]]:
-        """يسحب عدة صفحات ثم يفلتر بالمستخدم محليًا، لأن الفلتر على السيرفر غير مضمون."""
+        """Fetches several pages, then filters by creator locally, since server-side filtering is not reliable."""
         tasks = [
             self.http.get_json(
                 "https://rscripts.net/api/v2/scripts",
@@ -1680,14 +1721,14 @@ class GameSearchCog(commands.Cog):
 
     async def _run_message_search(self, message: discord.Message, query: str, sources, filters: Dict[str, Any]):
         started = time.perf_counter()
-        status = await message.reply("🔎 جاري البحث...", mention_author=False)
+        status = await message.reply("🔎 Searching...", mention_author=False)
 
         rows, had_error = await self.search(query, sources)
         rows = apply_filters(rows, filters, query)
         elapsed = time.perf_counter() - started
 
         if not rows:
-            sent = await self._edit_or_send(
+            await self._edit_or_send(
                 status,
                 empty_text(query, had_error),
                 None,
@@ -1700,7 +1741,7 @@ class GameSearchCog(commands.Cog):
         view.message = sent
 
     # -----------------------------------------------------
-    # listener: بحث تلقائي داخل روم البحث
+    # listener: automatic search in the search room
     # -----------------------------------------------------
 
     @commands.Cog.listener()
@@ -1723,9 +1764,9 @@ class GameSearchCog(commands.Cog):
         try:
             await self._run_message_search(message, query, ENABLED_SOURCES, {})
         except Exception as error:
-            print(f"❌ Automatic search error: {error}")
+            print(f"Automatic search error: {error}")
             try:
-                await message.reply("❌ صار خطأ أثناء البحث، حاول مرة ثانية.", mention_author=False)
+                await message.reply("❌ Something went wrong during the search. Please try again.", mention_author=False)
             except Exception:
                 pass
 
@@ -1744,44 +1785,44 @@ class GameSearchCog(commands.Cog):
             await ctx.send(embed=build_help_embed())
             return
         if self._on_cooldown(ctx.author.id, ctx.guild.id):
-            await ctx.reply("⏳ خفف شوي، جرب بعد ثواني.", mention_author=False)
+            await ctx.reply("⏳ Slow down a bit and try again in a few seconds.", mention_author=False)
             return
         await self._run_message_search(ctx.message, query, ENABLED_SOURCES, {})
 
-    @commands.command(name="تحديد_روم")
+    @commands.command(name="setsearchroom")
     @commands.has_permissions(manage_guild=True)
     async def prefix_set_search_room(self, ctx: commands.Context):
         search_rooms[str(ctx.guild.id)] = str(ctx.channel.id)
         save_search_rooms()
         await ctx.send(
-            "✅ تم تحديد هذا الروم كروم البحث التلقائي.\n"
-            "من الآن أي عضو يكتب اسم ماب هنا، البوت يبحث عنه تلقائيًا."
+            "✅ This room is now the auto-search room.\n"
+            "Any member who types a game name here will get automatic results."
         )
 
-    @commands.command(name="روم_البحث")
+    @commands.command(name="searchroom")
     async def prefix_show_search_room(self, ctx: commands.Context):
         channel_id = search_rooms.get(str(ctx.guild.id))
         if not channel_id:
-            await ctx.send("❌ ما تم تحديد روم للبحث التلقائي في هذا السيرفر.")
+            await ctx.send("❌ No auto-search room is set in this server.")
             return
         channel = ctx.guild.get_channel(int(channel_id))
         if not channel:
-            await ctx.send("⚠️ روم البحث المحفوظ لم يعد موجودًا.")
+            await ctx.send("⚠️ The saved search room no longer exists.")
             return
-        await ctx.send(f"🔎 روم البحث التلقائي الحالي: {channel.mention}")
+        await ctx.send(f"🔎 Current auto-search room: {channel.mention}")
 
-    @commands.command(name="الغاء_روم_البحث")
+    @commands.command(name="removesearchroom")
     @commands.has_permissions(manage_guild=True)
     async def prefix_remove_search_room(self, ctx: commands.Context):
         guild_id = str(ctx.guild.id)
         if guild_id in search_rooms:
             del search_rooms[guild_id]
             save_search_rooms()
-            await ctx.send("✅ تم إلغاء روم البحث التلقائي.")
+            await ctx.send("✅ The auto-search room has been removed.")
         else:
-            await ctx.send("ℹ️ ما فيه روم بحث محدد أصلًا.")
+            await ctx.send("ℹ️ No auto-search room is set.")
 
-    @commands.command(name="اضافة_روم_مساعدة")
+    @commands.command(name="addhelproom")
     @commands.has_permissions(manage_guild=True)
     async def prefix_add_help_room(self, ctx: commands.Context, channel: Optional[discord.TextChannel] = None):
         channel = channel or ctx.channel
@@ -1789,37 +1830,37 @@ class GameSearchCog(commands.Cog):
         if str(channel.id) not in ids:
             ids.append(str(channel.id))
         set_help_channel_ids(ctx.guild.id, ids)
-        await ctx.send(f"✅ تمت إضافة {channel.mention} لقائمة رومات المساعدة.")
+        await ctx.send(f"✅ Added {channel.mention} to the help rooms.")
 
-    @commands.command(name="حذف_روم_مساعدة")
+    @commands.command(name="removehelproom")
     @commands.has_permissions(manage_guild=True)
     async def prefix_remove_help_room(self, ctx: commands.Context, channel: Optional[discord.TextChannel] = None):
         channel = channel or ctx.channel
         ids = [item for item in get_help_channel_ids(ctx.guild.id) if item != str(channel.id)]
         set_help_channel_ids(ctx.guild.id, ids)
-        await ctx.send(f"🗑️ تمت إزالة {channel.mention} من القائمة.")
+        await ctx.send(f"🗑️ Removed {channel.mention} from the help rooms.")
 
     # =====================================================
-    # SLASH: عام
+    # SLASH: general
     # =====================================================
 
-    @app_commands.command(name="bothelp", description="عرض مساعدة بوت البحث")
+    @app_commands.command(name="bothelp", description="Show search bot help")
     async def slash_help(self, interaction: discord.Interaction):
         await interaction.response.send_message(embed=build_help_embed(), ephemeral=True)
 
-    @app_commands.command(name="search", description="البحث عن سكربتات من المصادر المتاحة")
+    @app_commands.command(name="search", description="Search scripts across all available sources")
     @app_commands.guild_only()
     @app_commands.describe(
-        query="اسم الماب أو السكربت",
-        source="المصدر",
-        mode="مجاني أو مدفوع",
-        verified="موثق فقط (true) أو غير موثق (false)",
-        patched="حسب حالة التحديث",
-        key_system="مع مفتاح (true) أو بدون (false)",
-        universal="يونيفيرسال فقط",
-        mobile_only="يعمل على الجوال فقط",
-        sort_by="طريقة الترتيب",
-        sort_order="الاتجاه",
+        query="Game or script name",
+        source="Source to search",
+        mode="Free or paid",
+        verified="Verified only (true) or unverified (false)",
+        patched="Filter by update status",
+        key_system="Requires key (true) or no key (false)",
+        universal="Universal scripts only",
+        mobile_only="Mobile-ready only",
+        sort_by="Sort order",
+        sort_order="Direction",
     )
     @app_commands.choices(source=SOURCE_CHOICES, mode=MODE_CHOICES, sort_by=SORT_CHOICES, sort_order=ORDER_CHOICES)
     async def slash_search(
@@ -1838,10 +1879,10 @@ class GameSearchCog(commands.Cog):
     ):
         query = clean_text(query)
         if len(query) < 2:
-            await interaction.response.send_message("❌ اكتب اسم أطول شوي.", ephemeral=True)
+            await interaction.response.send_message("❌ Please enter a longer name.", ephemeral=True)
             return
         if self._on_cooldown(interaction.user.id, interaction.guild_id or 0):
-            await interaction.response.send_message("⏳ خفف شوي، جرب بعد ثواني.", ephemeral=True)
+            await interaction.response.send_message("⏳ Slow down a bit and try again in a few seconds.", ephemeral=True)
             return
 
         await interaction.response.defer()
@@ -1862,19 +1903,19 @@ class GameSearchCog(commands.Cog):
         rows = apply_filters(rows, filters, query)
         await self._send_rows_via_interaction(interaction, rows, query, had_error)
 
-    @app_commands.command(name="fetch", description="تصفح سكربتات ScriptBlox مع فلاتر")
+    @app_commands.command(name="fetch", description="Browse ScriptBlox scripts with filters")
     @app_commands.guild_only()
     @app_commands.describe(
-        mode="مجاني أو مدفوع",
-        verified="موثق فقط",
-        patched="حسب حالة التحديث",
-        key_system="مع مفتاح أو بدون",
-        universal="يونيفيرسال فقط",
-        sort_by="الترتيب",
-        sort_order="الاتجاه",
-        owner="اسم صانع السكربت",
-        place_id="معرف مكان اللعب (Place ID)",
-        max_results="عدد النتائج (1-20)",
+        mode="Free or paid",
+        verified="Verified only",
+        patched="Filter by update status",
+        key_system="Requires key or not",
+        universal="Universal scripts only",
+        sort_by="Sort by",
+        sort_order="Direction",
+        owner="Script creator name",
+        place_id="Roblox Place ID",
+        max_results="Number of results (1-20)",
     )
     @app_commands.choices(mode=MODE_CHOICES, sort_by=FETCH_SORT_CHOICES, sort_order=ORDER_CHOICES)
     async def slash_fetch(
@@ -1913,9 +1954,9 @@ class GameSearchCog(commands.Cog):
         rows = [_normalize_row(item, "scriptblox") for item in rows_from(data, ("result", "scripts"))]
         await self._send_rows_via_interaction(interaction, rows, owner or place_id or "ScriptBlox", error)
 
-    @app_commands.command(name="trending", description="أكثر السكربتات رواجًا الآن")
+    @app_commands.command(name="trending", description="Scripts that are trending now")
     @app_commands.guild_only()
-    @app_commands.describe(api="المصدر")
+    @app_commands.describe(api="Source")
     @app_commands.choices(api=[
         app_commands.Choice(name="ScriptBlox", value="scriptblox"),
         app_commands.Choice(name="RScripts", value="rscripts"),
@@ -1923,11 +1964,11 @@ class GameSearchCog(commands.Cog):
     async def slash_trending(self, interaction: discord.Interaction, api: str = "scriptblox"):
         await interaction.response.defer()
         rows, error = await self._fetch_trending(api)
-        await self._send_rows_via_interaction(interaction, rows, "الرائج الآن", error)
+        await self._send_rows_via_interaction(interaction, rows, "Trending now", error)
 
-    @app_commands.command(name="script", description="جلب سكربت محدد بالمعرف أو الـ slug")
+    @app_commands.command(name="script", description="Fetch one script by ID or slug")
     @app_commands.guild_only()
-    @app_commands.describe(script_id="معرف السكربت أو الـ slug", api="المصدر")
+    @app_commands.describe(script_id="Script ID or slug", api="Source")
     @app_commands.choices(api=[
         app_commands.Choice(name="ScriptBlox", value="scriptblox"),
         app_commands.Choice(name="RScripts", value="rscripts"),
@@ -1936,11 +1977,11 @@ class GameSearchCog(commands.Cog):
         await interaction.response.defer()
         row = await self._fetch_one(api, clean_text(script_id))
         if row is None:
-            await interaction.followup.send("❌ ما لقيت السكربت بهذا المعرف.", ephemeral=True)
+            await interaction.followup.send("❌ No script found with that ID.", ephemeral=True)
             return
         await self._send_rows_via_interaction(interaction, [row], row.get("title", script_id))
 
-    @app_commands.command(name="executors", description="قائمة الإكسبلويترات المتاحة")
+    @app_commands.command(name="executors", description="List available executors")
     @app_commands.guild_only()
     async def slash_executors(self, interaction: discord.Interaction):
         await interaction.response.defer()
@@ -1948,7 +1989,7 @@ class GameSearchCog(commands.Cog):
         data, error = await self.http.get_json("https://scriptblox.com/api/executor/list")
         executors = [item for item in data if isinstance(item, dict)] if isinstance(data, list) else []
         if not executors:
-            text = "❌ ما قدرت أجيب قائمة الإكسبلويترات الحين." if error else "ما فيه إكسبلويترات مسجلة حاليًا."
+            text = "❌ Could not fetch the executor list right now." if error else "No executors are listed right now."
             await interaction.followup.send(text, ephemeral=True)
             return
 
@@ -1957,24 +1998,24 @@ class GameSearchCog(commands.Cog):
 
         def render(index: int) -> discord.Embed:
             embed = discord.Embed(
-                title="🎮 الإكسبلويترات المتاحة",
-                description=f"المصدر: ScriptBlox • الصفحة {index + 1}/{total_pages}",
+                title="🎮 Available Executors",
+                description=f"Source: ScriptBlox • Page {index + 1}/{total_pages}",
                 color=0x206694,
             )
             for item in executors[index * per_page:(index + 1) * per_page]:
                 lines = [
-                    f"**المنصة:** {clean_text(item.get('platform'), '—')}",
-                    f"**النوع:** {clean_text(item.get('type'), '—')}",
-                    f"**الحالة:** {'❌ متضرر' if item.get('patched') else '✅ يعمل'}",
-                    f"**الإصدار:** {clean_text(item.get('version'), '—')}",
+                    f"**Platform:** {clean_text(item.get('platform'), '—')}",
+                    f"**Type:** {clean_text(item.get('type'), '—')}",
+                    f"**Status:** {'❌ Patched' if item.get('patched') else '✅ Working'}",
+                    f"**Version:** {clean_text(item.get('version'), '—')}",
                 ]
                 links = []
                 website = clean_text(item.get("website"))
                 discord_link = clean_text(item.get("discord"))
                 if website.startswith(("http://", "https://")):
-                    links.append(f"[الموقع]({website})")
+                    links.append(f"[Website]({website})")
                 if discord_link.startswith(("http://", "https://")):
-                    links.append(f"[ديسكورد]({discord_link})")
+                    links.append(f"[Discord]({discord_link})")
                 if links:
                     lines.append(" • ".join(links))
                 embed.add_field(
@@ -1992,16 +2033,16 @@ class GameSearchCog(commands.Cog):
         message = await interaction.followup.send(**kwargs)
         view.message = message
 
-    @app_commands.command(name="rscripts_fetch", description="تصفح RScripts مع فلاتر")
+    @app_commands.command(name="rscripts_fetch", description="Browse RScripts with filters")
     @app_commands.guild_only()
     @app_commands.describe(
-        verified_only="موثق فقط",
-        no_key_system="بدون نظام مفتاح فقط",
-        mobile_only="يعمل على الجوال فقط",
-        unpatched="غير متضرر فقط",
-        order_by="الترتيب حسب (createdAt, updatedAt, views, name)",
-        sort="الاتجاه (asc أو desc)",
-        max_results="عدد النتائج (1-20)",
+        verified_only="Verified only",
+        no_key_system="No key system only",
+        mobile_only="Mobile-ready only",
+        unpatched="Not patched only",
+        order_by="Sort by (createdAt, updatedAt, views, name)",
+        sort="Direction (asc or desc)",
+        max_results="Number of results (1-20)",
     )
     async def slash_rscripts_fetch(
         self,
@@ -2034,47 +2075,47 @@ class GameSearchCog(commands.Cog):
         rows = [_normalize_row(item, "rscripts") for item in rows_from(data, ("scripts",))][:max_results]
         await self._send_rows_via_interaction(interaction, rows, "RScripts", error)
 
-    @app_commands.command(name="rscripts_by_user", description="سكربتات صانع معين في RScripts")
+    @app_commands.command(name="rscripts_by_user", description="Scripts by one creator on RScripts")
     @app_commands.guild_only()
-    @app_commands.describe(username="اسم الصانع")
+    @app_commands.describe(username="Creator name")
     async def slash_rscripts_by_user(self, interaction: discord.Interaction, username: str):
         await interaction.response.defer()
         username = clean_text(username)
         rows = await self._fetch_rscripts_user(username)
-        await self._send_rows_via_interaction(interaction, rows, f"سكربتات {username}")
+        await self._send_rows_via_interaction(interaction, rows, f"scripts by {username}")
 
     # =====================================================
-    # SLASH: روم البحث ورومات المساعدة (صلاحية إدارة السيرفر)
+    # SLASH: search room and help rooms (requires Manage Server)
     # =====================================================
 
-    @app_commands.command(name="setscriptroom", description="تحديد روم البحث التلقائي")
+    @app_commands.command(name="setscriptroom", description="Set the auto-search room")
     @app_commands.guild_only()
-    @app_commands.describe(channel="الروم اللي يصير فيه البحث التلقائي")
+    @app_commands.describe(channel="Room where automatic search runs")
     @app_commands.checks.has_permissions(manage_guild=True)
     async def slash_set_search_room(self, interaction: discord.Interaction, channel: discord.TextChannel):
         search_rooms[str(interaction.guild.id)] = str(channel.id)
         save_search_rooms()
         await interaction.response.send_message(
-            f"✅ تم تحديد {channel.mention} كروم البحث التلقائي.\n"
-            "🔎 العضو يكتب اسم الماب (عربي أو إنجليزي) والبوت يبحث له فورًا."
+            f"✅ {channel.mention} is now the auto-search room.\n"
+            "🔎 Members type a game name (Arabic or English) and the bot searches instantly."
         )
 
-    @app_commands.command(name="searchroom", description="عرض روم البحث التلقائي")
+    @app_commands.command(name="searchroom", description="Show the auto-search room")
     @app_commands.guild_only()
     async def slash_show_search_room(self, interaction: discord.Interaction):
         channel_id = search_rooms.get(str(interaction.guild.id))
         if not channel_id:
-            await interaction.response.send_message("❌ ما تم تحديد روم للبحث التلقائي.", ephemeral=True)
+            await interaction.response.send_message("❌ No auto-search room is set.", ephemeral=True)
             return
         channel = interaction.guild.get_channel(int(channel_id))
         if not channel:
-            await interaction.response.send_message("⚠️ روم البحث المحفوظ لم يعد موجودًا.", ephemeral=True)
+            await interaction.response.send_message("⚠️ The saved search room no longer exists.", ephemeral=True)
             return
-        await interaction.response.send_message(f"🔎 روم البحث التلقائي الحالي: {channel.mention}")
+        await interaction.response.send_message(f"🔎 Current auto-search room: {channel.mention}")
 
-    @app_commands.command(name="addsearchhelproom", description="إضافة روم يظهر للعضو إذا ما لقى نتيجة")
+    @app_commands.command(name="addsearchhelproom", description="Add a room shown when no results are found")
     @app_commands.guild_only()
-    @app_commands.describe(channel="الروم اللي تبي تضيفه")
+    @app_commands.describe(channel="Room to add")
     @app_commands.checks.has_permissions(manage_guild=True)
     async def slash_add_help_room(self, interaction: discord.Interaction, channel: discord.TextChannel):
         ids = get_help_channel_ids(interaction.guild.id)
@@ -2082,19 +2123,19 @@ class GameSearchCog(commands.Cog):
             ids.append(str(channel.id))
         set_help_channel_ids(interaction.guild.id, ids)
         await interaction.response.send_message(
-            f"✅ تمت إضافة {channel.mention} لقائمة رومات المساعدة.", ephemeral=True
+            f"✅ Added {channel.mention} to the help rooms.", ephemeral=True
         )
 
-    @app_commands.command(name="removesearchhelproom", description="إزالة روم من رومات المساعدة")
+    @app_commands.command(name="removesearchhelproom", description="Remove a help room")
     @app_commands.guild_only()
-    @app_commands.describe(channel="الروم اللي تبي تزيله")
+    @app_commands.describe(channel="Room to remove")
     @app_commands.checks.has_permissions(manage_guild=True)
     async def slash_remove_help_room(self, interaction: discord.Interaction, channel: discord.TextChannel):
         ids = [item for item in get_help_channel_ids(interaction.guild.id) if item != str(channel.id)]
         set_help_channel_ids(interaction.guild.id, ids)
-        await interaction.response.send_message(f"🗑️ تمت إزالة {channel.mention} من القائمة.", ephemeral=True)
+        await interaction.response.send_message(f"🗑️ Removed {channel.mention} from the help rooms.", ephemeral=True)
 
-    @app_commands.command(name="searchhelprooms", description="عرض رومات المساعدة المحددة")
+    @app_commands.command(name="searchhelprooms", description="Show configured help rooms")
     @app_commands.guild_only()
     async def slash_show_help_rooms(self, interaction: discord.Interaction):
         mentions = []
@@ -2102,8 +2143,8 @@ class GameSearchCog(commands.Cog):
             channel = interaction.guild.get_channel(int(channel_id))
             if channel:
                 mentions.append(channel.mention)
-        text = ", ".join(mentions) if mentions else "لا توجد رومات محددة."
-        await interaction.response.send_message(f"📚 **رومات المساعدة:**\n{text}", ephemeral=True)
+        text = ", ".join(mentions) if mentions else "No help rooms are set."
+        await interaction.response.send_message(f"📚 **Help rooms:**\n{text}", ephemeral=True)
 
 
 # ============================================================
@@ -2112,4 +2153,4 @@ class GameSearchCog(commands.Cog):
 
 async def setup(bot: commands.Bot):
     await bot.add_cog(GameSearchCog(bot))
-    print("✅ Game search cog loaded (bot4 v8.0).")
+    print("✅ Game search cog loaded (bot4 v8.1).")
