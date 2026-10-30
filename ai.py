@@ -1,6 +1,7 @@
 # -*- coding: utf-8 -*-
 """
-Fime AI - AI assistant cog for the Team Fime Discord server (English code, bilingual replies).
+Fime AI - AI assistant cog for the Team Fime Discord server.
+Code is in English. Replies follow the language mode set per server: auto, ar, or en.
 
 Provider: Google Gemini API. The key is read from AI_API_KEY.
 
@@ -9,25 +10,24 @@ Required bot intents:
     intents.message_content = True
 
 Environment variables:
-    AI_API_KEY                    Google Gemini API key                              [required]
-    AI_MODEL                      default gemini-3.5-flash-lite                      [optional]
+    AI_API_KEY                    Google Gemini API key                                [required]
+    AI_MODEL                      default gemini-3.5-flash-lite                        [optional]
     FIME_OWNER_ID                 owner user ID (receives alerts, owner-only commands) [required]
-    AI_CHANNEL_ID                 AI channel ID                                      [optional]
-    AI_DEFAULT_LANGUAGE           auto | ar | en, default auto                       [optional]
-    AI_THINKING_LEVEL             minimal (default), low, medium, high               [optional]
-    AI_MAX_OUTPUT_TOKENS          default 350, max 500                               [optional]
-    AI_USER_COOLDOWN              default 0 (messages are never dropped silently)    [optional]
-    AI_USER_DAILY_LIMIT           default 20 requests per member per day             [optional]
-    AI_GLOBAL_DAILY_LIMIT         default 300 requests per day for the bot           [optional]
-    AI_GLOBAL_DAILY_TOKEN_LIMIT   default 0 (no limit)                               [optional]
-    AI_PRICE_INPUT_PER_M          default 0.20 USD per million input tokens          [optional]
-    AI_PRICE_OUTPUT_PER_M         default 1.25 USD per million output tokens         [optional]
-    AI_CACHE_TTL                  default 1200 seconds                               [optional]
-    AI_MEMORY_LIMIT               default 6 messages per member                      [optional]
-    AI_ROOM_CONTEXT_LIMIT         default 8 relevant rooms in the prompt             [optional]
-    AI_MAX_CONCURRENT_REQUESTS    default 10                                         [optional]
-    AI_MAX_RETRIES                default 0                                          [optional]
-    AI_REQUEST_TIMEOUT            default 14 seconds                                 [optional]
+    AI_CHANNEL_ID                 AI room ID                                           [optional]
+    AI_DEFAULT_LANGUAGE           auto | ar | en, default auto                         [optional]
+    AI_THINKING_LEVEL             minimal (default), low, medium, high                 [optional]
+    AI_MAX_OUTPUT_TOKENS          default 350, max 500                                 [optional]
+    AI_USER_DAILY_LIMIT           default 20 requests per member per day               [optional]
+    AI_GLOBAL_DAILY_LIMIT         default 300 requests per day for the bot             [optional]
+    AI_GLOBAL_DAILY_TOKEN_LIMIT   default 0 (no limit)                                 [optional]
+    AI_PRICE_INPUT_PER_M          default 0.20 USD per million input tokens            [optional]
+    AI_PRICE_OUTPUT_PER_M         default 1.25 USD per million output tokens           [optional]
+    AI_CACHE_TTL                  default 1200 seconds                                 [optional]
+    AI_MEMORY_LIMIT               default 6 messages per member                        [optional]
+    AI_ROOM_CONTEXT_LIMIT         default 8 relevant rooms in the prompt               [optional]
+    AI_MAX_CONCURRENT_REQUESTS    default 10 (range 5-20)                              [optional]
+    AI_MAX_RETRIES                default 0 (range 0-1)                                [optional]
+    AI_REQUEST_TIMEOUT            default 14 seconds (range 8-30)                      [optional]
 """
 
 import os
@@ -77,7 +77,6 @@ FIME_OWNER_ID = _env_int("FIME_OWNER_ID", 0)
 AI_CHANNEL_ID = _env_int("AI_CHANNEL_ID", 0)
 
 MAX_OUTPUT_TOKENS = max(128, min(_env_int("AI_MAX_OUTPUT_TOKENS", 350), 500))
-USER_COOLDOWN = max(0, _env_int("AI_USER_COOLDOWN", 0))
 USER_DAILY_LIMIT = _env_int("AI_USER_DAILY_LIMIT", 20)
 GLOBAL_DAILY_LIMIT = _env_int("AI_GLOBAL_DAILY_LIMIT", 300)
 GLOBAL_DAILY_TOKEN_LIMIT = _env_int("AI_GLOBAL_DAILY_TOKEN_LIMIT", 0)
@@ -86,6 +85,9 @@ PRICE_OUTPUT_PER_M = _env_float("AI_PRICE_OUTPUT_PER_M", 1.25)
 CACHE_TTL = _env_int("AI_CACHE_TTL", 1200)
 MEMORY_LIMIT = _env_int("AI_MEMORY_LIMIT", 6)
 ROOM_CONTEXT_LIMIT = max(3, min(_env_int("AI_ROOM_CONTEXT_LIMIT", 8), 12))
+MAX_CONCURRENT_REQUESTS = max(5, min(_env_int("AI_MAX_CONCURRENT_REQUESTS", 10), 20))
+MAX_RETRIES = max(0, min(_env_int("AI_MAX_RETRIES", 0), 1))
+REQUEST_TIMEOUT = max(8, min(_env_int("AI_REQUEST_TIMEOUT", 14), 30))
 
 
 # =========================================================
@@ -108,7 +110,7 @@ _EN_LETTER_RE = re.compile(r"[A-Za-z]")
 
 
 def detect_language(text: str) -> Optional[str]:
-    """Returns 'ar' or 'en' based on the dominant letters, or None if there are no letters."""
+    """Returns 'ar' or 'en' based on the dominant letters, or None when there are no letters."""
     arabic = len(_AR_LETTER_RE.findall(text or ""))
     latin = len(_EN_LETTER_RE.findall(text or ""))
     if arabic == 0 and latin == 0:
@@ -126,6 +128,13 @@ THINKING_LEVELS = ("minimal", "low", "medium", "high")
 _raw_thinking = _env_str("AI_THINKING_LEVEL", "minimal").lower()
 AI_THINKING_LEVEL = _raw_thinking if _raw_thinking in THINKING_LEVELS else "minimal"
 
+LEGACY_MODELS = {
+    "gemini-2.5-flash-lite": DEFAULT_MODEL,
+    "gemini-2.5-flash": DEFAULT_MODEL,
+    "gemini-2.0-flash": DEFAULT_MODEL,
+    "gemini-2.0-flash-001": DEFAULT_MODEL,
+}
+
 
 def resolve_model_name(value: str) -> Tuple[str, Optional[str]]:
     """Validates a Gemini model name without silently replacing valid IDs."""
@@ -134,14 +143,7 @@ def resolve_model_name(value: str) -> Tuple[str, Optional[str]]:
         name = name[len("models/"):]
     if not name:
         return DEFAULT_MODEL, None
-    # Automatic migration from older model names.
-    legacy_models = {
-        "gemini-2.5-flash-lite": "gemini-3.5-flash-lite",
-        "gemini-2.5-flash": "gemini-3.5-flash-lite",
-        "gemini-2.0-flash": "gemini-3.5-flash-lite",
-        "gemini-2.0-flash-001": "gemini-3.5-flash-lite",
-    }
-    name = legacy_models.get(name.lower(), name)
+    name = LEGACY_MODELS.get(name.lower(), name)
     if not re.fullmatch(r"[A-Za-z0-9._-]{3,100}", name):
         return DEFAULT_MODEL, f"Invalid Gemini model name '{name}', using '{DEFAULT_MODEL}'."
     if not name.lower().startswith("gemini-"):
@@ -156,9 +158,7 @@ ENV_MODEL, ENV_MODEL_NOTE = resolve_model_name(ENV_MODEL_RAW)
 def build_model_candidates(primary: str) -> List[str]:
     candidates = [primary]
     for model in FALLBACK_MODELS:
-        if model not in candidates and model not in (
-            "gemini-1.5-flash", "gemini-2.5-flash-lite", "gemini-2.0-flash", "gemini-2.0-flash-001",
-        ):
+        if model not in candidates and model not in LEGACY_MODELS:
             candidates.append(model)
     return candidates
 
@@ -214,10 +214,6 @@ TEXTS: Dict[str, Dict[str, str]] = {
     "limit_tokens": {
         "ar": "فيمي وصل للحد اليومي للاستخدام، جرب بكرة.",
         "en": "Fime has reached its daily usage limit. Try again tomorrow.",
-    },
-    "name_hello": {
-        "ar": "هلا {name}! وش تبي؟",
-        "en": "Hi {name}! What can I help you with?",
     },
 }
 
@@ -355,8 +351,8 @@ class AIError(Exception):
 
     def __init__(self, detail: str, key: str = "generic_error", kind: str = ""):
         super().__init__(detail)
-        self.key = key      # TEXTS key to show the member
-        self.kind = kind    # billing / auth / quota / rate or empty
+        self.key = key      # TEXTS key shown to the member
+        self.kind = kind    # billing / auth / quota / rate, or empty
 
 
 # =========================================================
@@ -1002,14 +998,15 @@ class FimeAI(commands.Cog):
         print(
             f"Fime AI provider: Google Gemini; AI_MODEL={ENV_MODEL_RAW or DEFAULT_MODEL}; "
             f"active model={self.active_model} ({self.model_source}); "
-            f"default language={DEFAULT_LANGUAGE_MODE}; timeout={_env_int('AI_REQUEST_TIMEOUT', 14)}s; "
-            f"max_tokens={MAX_OUTPUT_TOKENS}"
+            f"default language={DEFAULT_LANGUAGE_MODE}; timeout={REQUEST_TIMEOUT}s; "
+            f"max_tokens={MAX_OUTPUT_TOKENS}; concurrency={MAX_CONCURRENT_REQUESTS}"
         )
 
     def _get_session(self) -> aiohttp.ClientSession:
         if self.session is None or self.session.closed:
-            timeout_seconds = max(8, min(_env_int("AI_REQUEST_TIMEOUT", 14), 30))
-            self.session = aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=timeout_seconds, connect=5))
+            self.session = aiohttp.ClientSession(
+                timeout=aiohttp.ClientTimeout(total=REQUEST_TIMEOUT, connect=5)
+            )
         return self.session
 
     def _auth_headers(self) -> Dict[str, str]:
@@ -1256,6 +1253,7 @@ class FimeAI(commands.Cog):
                         status, body = status2, body2
                         code, message = gemini_error(body)
                         last_error = f"HTTP {status} | {code} {message}".strip()
+                        error_text = f"{code} {message}".lower()
                     except (asyncio.TimeoutError, aiohttp.ClientError):
                         pass
 
@@ -1348,9 +1346,8 @@ class FimeAI(commands.Cog):
         return text.rstrip() + " " + emoji
 
     async def send_answer(self, message: discord.Message, answer: str, lang: str):
-        text = self.add_fime_emoji(message.guild.id, clean_text(answer)) or (
-            "No text reply was received." if lang == LANG_EN else "ما وصلني رد نصي."
-        )
+        fallback = "No text reply was received." if lang == LANG_EN else "ما وصلني رد نصي."
+        text = self.add_fime_emoji(message.guild.id, clean_text(answer)) or fallback
         for index, chunk in enumerate(split_for_discord(text, DISCORD_LIMIT)):
             if index == 0:
                 try:
@@ -1565,11 +1562,7 @@ class FimeAI(commands.Cog):
         embed.add_field(name="Status", value=state, inline=True)
         embed.add_field(name="Language", value=LANG_MODE_LABELS[mode], inline=True)
         embed.add_field(name="Memory", value=f"{MEMORY_LIMIT} messages per member", inline=True)
-        embed.add_field(
-            name="Limits",
-            value=f"{USER_DAILY_LIMIT} requests per member per day",
-            inline=False,
-        )
+        embed.add_field(name="Limits", value=f"{USER_DAILY_LIMIT} requests per member per day", inline=False)
 
         if self._is_owner(interaction):
             if self.is_paused():
