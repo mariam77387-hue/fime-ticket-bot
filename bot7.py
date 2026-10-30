@@ -1,311 +1,311 @@
 # -*- coding: utf-8 -*-
 """
-bot7.py - نظام إدارة وحماية موحّد على هيئة Cog.
-يُحمَّل من bot.py عبر:  await bot.load_extension("bot7")
+bot7.py - Ticket system (Discord Cog, English).
+
+Load from bot.py with:  await bot.load_extension("bot7")
+
+Persistent: panels and ticket controls keep working after the bot restarts,
+because views are registered on load and all ticket data is saved to disk.
 """
 
 import asyncio
-import copy
+import io
 import json
 import re
-import time
-from collections import defaultdict, deque
-from datetime import timedelta
+import uuid
 from pathlib import Path
-from typing import Awaitable, Callable, Optional
+from typing import Dict, List, Optional
 
 import discord
 from discord.ext import commands
 
-DATA_FILE = Path(__file__).resolve().parent / "bot7_data.json"
-PREFIX = "!"  # لازم يكون نفس البريفكس في bot.py
-COG_NAME = "Moderation"
+DATA_FILE = Path(__file__).resolve().parent / "bot7_tickets.json"
+COG_NAME = "Tickets"
 NO_MENTIONS = discord.AllowedMentions.none()
-MAX_TIMEOUT = 28 * 24 * 3600
-MASS_KICK_REASON = "طرد جماعي بأمر مالك السيرفر"
-MASS_KICK_DELAY = 0.3
 
-# IDs لها صلاحية المالك في كل السيرفرات (تتجاوز أي إعداد).
-OWNER_OVERRIDE_IDS = {1564568769295159337}
-# اسم الرتبة التي تعطي صلاحية المالك إذا ما تم تحديد رتبة بالـ ID.
-DEFAULT_OWNER_ROLE_NAME = "سيرفر"
-
-DANGEROUS_PERMS = (
-    "administrator", "manage_guild", "manage_roles", "manage_channels",
-    "manage_webhooks", "ban_members", "kick_members",
+CLOSE_DELAY = 8                 # seconds before a closed ticket channel is deleted
+TRANSCRIPT_LIMIT = 1000         # max messages included in a transcript
+MAX_CUSTOM_TYPES = 15
+MAX_ACTIVE_PER_USER = 1
+SETUP_TIMEOUT = 120
+CONFIRM_TIMEOUT = 60
+DEFAULT_PANEL_TITLE = "Support Center"
+DEFAULT_PANEL_TEXT = (
+    "Choose the option that best matches your request from the menu below. "
+    "A private ticket will be opened for you."
 )
-IMAGE_EXT = {".png", ".jpg", ".jpeg", ".gif", ".webp", ".bmp", ".avif"}
-URL_RE = re.compile(r"https?://\S+|www\.\S+", re.IGNORECASE)
-INVITE_RE = re.compile(r"(discord\.gg|discord(?:app)?\.com/invite)/\S+", re.IGNORECASE)
-REPEAT_RE = re.compile(r"(.)\1{24,}", re.DOTALL)
 
-DEFAULTS = {
-    "protection": False,
-    "trusted_bot_ids": [],
-    "admin_role_id": None,
-    "ban_role_id": None,
-    "kick_role_id": None,
-    "owner_role_id": None,
-    "extra_owner_ids": [],
-    "log_channel_id": None,
-    "invite_filter": True,
-    "banned_words": [],
-    "spam": {"limit": 6, "window": 8, "timeout_min": 10},
-    "mentions": {"max": 5, "timeout_min": 5},
-    "media": {"limit": 4, "window": 10, "timeout_min": 5},
-    "escalation": {"warnings": 3, "timeout_min": 60},
-    "shortcuts": {
-        "ban": ["حظر"], "kick": ["طرد"], "clear": ["مسح"],
-        "warn": ["تحذير"], "timeout": ["تايم_اوت"],
-    },
-    "warnings": {},
+DEFAULT_TYPES: Dict[str, Dict[str, str]] = {
+    "support": {"label": "General Support", "emoji": "🛠️", "description": "Questions, help, or account issues."},
+    "report": {"label": "Report a Member", "emoji": "🚨", "description": "Report rule breaking or misconduct."},
+    "partnership": {"label": "Partnership", "emoji": "🤝", "description": "Partnership and collaboration requests."},
+    "purchase": {"label": "Purchase", "emoji": "🛒", "description": "Orders, payments, and product questions."},
+    "appeal": {"label": "Appeal", "emoji": "⚖️", "description": "Appeal a warning, mute, or ban."},
+    "bug": {"label": "Bug Report", "emoji": "🐞", "description": "Report a bug or a broken feature."},
+    "other": {"label": "Other", "emoji": "📩", "description": "Anything that does not fit the options above."},
 }
-
-SHORTCUT_TYPES = {
-    "حظر": "ban", "طرد": "kick", "مسح": "clear",
-    "تحذير": "warn", "تايم_اوت": "timeout",
-}
-SHORTCUT_LEVEL = {"ban": "ban", "kick": "kick", "clear": "manage", "warn": "manage", "timeout": "manage"}
-ROLE_SLOTS = {
-    "ادارة": "admin_role_id", "حظر": "ban_role_id",
-    "طرد": "kick_role_id", "مالك": "owner_role_id",
-}
-LEVEL_ROLE = {"manage": "admin_role_id", "ban": "ban_role_id", "kick": "kick_role_id"}
-LEVEL_MSG = {
-    "owner": "هذا الأمر لمالك السيرفر فقط.",
-    "config": "هذا الأمر لمالك السيرفر أو من يملك Administrator.",
-    "manage": "ما عندك رتبة الإدارة المسموح لها بهذا الأمر.",
-    "ban": "ما عندك رتبة الحظر المسموح لها بهذا الأمر.",
-    "kick": "ما عندك رتبة الطرد المسموح لها بهذا الأمر.",
-}
-UNITS = {
-    "s": 1, "ث": 1, "ثانية": 1,
-    "m": 60, "د": 60, "دقيقة": 60,
-    "h": 3600, "س": 3600, "ساعة": 3600,
-    "d": 86400, "ي": 86400, "يوم": 86400,
-}
+DEFAULT_ENABLED = ["support", "report", "partnership", "purchase", "appeal", "other"]
 
 
 # ============================================================
-# أدوات مساعدة عامة
+# Helpers
 # ============================================================
 
-def norm(text: str) -> str:
-    return " ".join(text.strip().casefold().split())
+def default_config() -> dict:
+    return {
+        "enabled_types": list(DEFAULT_ENABLED),
+        "custom_types": [],
+        "staff_role_id": None,
+        "category_id": None,
+        "log_channel_id": None,
+        "panel_title": DEFAULT_PANEL_TITLE,
+        "panel_text": DEFAULT_PANEL_TEXT,
+        "counter": 0,
+        "tickets": {},
+    }
 
 
-def clean_reason(text: str) -> str:
-    text = text.strip()
-    return text[:450] if text else "بدون سبب"
+def trunc(text, limit: int) -> str:
+    text = str(text or "").strip()
+    return text if len(text) <= limit else text[: limit - 1] + "…"
 
 
-def has_role(member: discord.Member, role_id) -> bool:
-    return bool(role_id) and any(role.id == int(role_id) for role in member.roles)
+def catalog(cfg: dict) -> Dict[str, dict]:
+    """All ticket types: defaults plus custom ones, keyed by their key."""
+    items = {key: {"key": key, **value} for key, value in DEFAULT_TYPES.items()}
+    for custom in cfg.get("custom_types", []):
+        items[custom["key"]] = custom
+    return items
 
 
-def bot_has(guild: discord.Guild, perm: str) -> bool:
-    me = guild.me
-    return bool(me and getattr(me.guild_permissions, perm, False))
+def enabled_types(cfg: dict) -> List[dict]:
+    items = catalog(cfg)
+    return [items[key] for key in cfg.get("enabled_types", []) if key in items]
 
 
-def can_moderate(guild: discord.Guild, target: discord.Member) -> tuple[bool, str]:
-    me = guild.me
-    if me is None:
-        return False, "ما قدرت أحدد رتبة البوت."
-    if target.id == guild.owner_id:
-        return False, "ما أقدر أعاقب مالك السيرفر."
-    if target.id == me.id:
-        return False, "ما أقدر أعاقب نفسي."
-    if target.top_role >= me.top_role:
-        return False, "رتبة العضو أعلى أو مساوية لرتبة البوت. ارفع رتبة البوت."
-    return True, ""
+def type_label(cfg: dict, key: str) -> str:
+    item = catalog(cfg).get(key)
+    return item["label"] if item else "Unknown"
 
 
-def parse_duration(token: str) -> Optional[int]:
-    token = token.strip().lower()
-    if token.isdigit():
-        minutes = int(token)
-        return minutes * 60 if minutes > 0 else None
-    match = re.fullmatch(r"(\d+)\s*(\S+)", token)
-    if not match:
+def emoji_of(value) -> Optional[discord.PartialEmoji]:
+    if not value:
         return None
-    unit = UNITS.get(match.group(2))
-    number = int(match.group(1))
-    if unit is None or number <= 0:
+    try:
+        return discord.PartialEmoji.from_str(str(value))
+    except Exception:
         return None
-    seconds = number * unit
-    return seconds if seconds <= MAX_TIMEOUT else None
 
 
-def duration_text(seconds: int) -> str:
-    for size, name in ((86400, "يوم"), (3600, "ساعة"), (60, "دقيقة")):
-        if seconds % size == 0:
-            return f"{seconds // size} {name}"
-    return f"{seconds} ثانية"
+def slug(name: str) -> str:
+    cleaned = re.sub(r"[^a-z0-9]+", "-", name.lower()).strip("-")[:20]
+    return cleaned or "member"
 
 
-def mention_count(message: discord.Message) -> int:
-    count = len(message.mentions) + len(message.role_mentions)
-    return count + (1 if message.mention_everyone else 0)
-
-
-def has_media(message: discord.Message) -> bool:
-    if message.stickers:
-        return True
-    for attachment in message.attachments:
-        if (attachment.content_type or "").startswith("image/"):
-            return True
-        if Path(attachment.filename).suffix.lower() in IMAGE_EXT:
-            return True
-    return False
-
-
-async def delete_quietly(message: Optional[discord.Message]) -> None:
-    if message is None:
-        return
+def _write_file(payload: str) -> None:
+    temp = DATA_FILE.with_suffix(".tmp")
     try:
-        await message.delete()
-    except discord.HTTPException:
-        pass
+        temp.write_text(payload, encoding="utf-8")
+        temp.replace(DATA_FILE)
+    except OSError as error:
+        print(f"[TICKETS] Could not save data: {error}")
 
 
-async def edit_quietly(message: Optional[discord.Message], content: str) -> None:
-    if message is None:
-        return
-    try:
-        await message.edit(content=content, embed=None, view=None)
-    except discord.HTTPException:
-        pass
-
-
-async def resolve_member(guild: discord.Guild, token: str) -> Optional[discord.Member]:
-    token = token.strip()
-    mention = re.fullmatch(r"<@!?(\d+)>", token)
-    if mention:
-        user_id = int(mention.group(1))
-    elif token.isdigit():
-        user_id = int(token)
-    else:
-        user_id = None
-
-    if user_id is not None:
-        member = guild.get_member(user_id)
-        if member is None:
-            try:
-                member = await guild.fetch_member(user_id)
-            except discord.HTTPException:
-                return None
-        return member
-
-    name = norm(token.lstrip("@"))
-    return next((m for m in guild.members if name in {norm(m.display_name), norm(m.name)}), None)
-
-
-def resolve_role(guild: discord.Guild, token: str) -> Optional[discord.Role]:
-    mention = re.fullmatch(r"<@&(\d+)>", token.strip())
-    if mention:
-        return guild.get_role(int(mention.group(1)))
-    if token.strip().isdigit():
-        return guild.get_role(int(token.strip()))
-    name = norm(token)
-    return next((r for r in guild.roles if norm(r.name) == name), None)
-
-
-# ============================================================
-# Views: زرين (تأكيد / إلغاء)
-# ============================================================
-
-class ConfirmView(discord.ui.View):
-    def __init__(
-        self,
-        cog: "Moderation",
-        author: discord.Member,
-        owner_only: bool,
-        label: str,
-        style: discord.ButtonStyle,
-        handler: Callable[[discord.Interaction], Awaitable[None]],
-    ):
-        super().__init__(timeout=60)
-        self.cog = cog
-        self.author_id = author.id
-        self.owner_only = owner_only
-        self.handler = handler
-        self.finished = False
-        self.message: Optional[discord.Message] = None
-
-        yes = discord.ui.Button(label=label, style=style, emoji="✅")
-        no = discord.ui.Button(label="إلغاء", style=discord.ButtonStyle.secondary, emoji="✖️")
-        yes.callback = self._yes
-        no.callback = self._no
-        self.add_item(yes)
-        self.add_item(no)
-
-    async def _allowed(self, interaction: discord.Interaction) -> bool:
-        member, guild = interaction.user, interaction.guild
-        if guild is None or not isinstance(member, discord.Member):
-            return False
-        if member.id != self.author_id:
-            await interaction.response.send_message("هذا التأكيد لصاحب الأمر فقط.", ephemeral=True)
-            return False
-        level = "owner" if self.owner_only else "config"
-        if not self.cog.has_level(member, guild, level):
-            await interaction.response.send_message("ما عندك صلاحية لهذا التأكيد.", ephemeral=True)
-            return False
-        return True
-
-    async def _yes(self, interaction: discord.Interaction) -> None:
-        if self.finished or not await self._allowed(interaction):
-            return
-        self.finished = True
-        self.stop()
-        await self.handler(interaction)
-
-    async def _no(self, interaction: discord.Interaction) -> None:
-        if self.finished or not await self._allowed(interaction):
-            return
-        self.finished = True
-        self.stop()
-        await interaction.response.edit_message(content="تم الإلغاء. لم يتغير شيء.", embed=None, view=None)
-
-    async def on_timeout(self) -> None:
-        if self.finished or self.message is None:
-            return
-        await edit_quietly(self.message, "انتهت مهلة التأكيد، لم يحدث شيء.")
-
-
-# ============================================================
-# Decorator الصلاحيات
-# ============================================================
-
-def requires(level: str):
+def admin_only():
+    """Owner, administrators, or members with Manage Server."""
     async def predicate(ctx: commands.Context) -> bool:
         if ctx.guild is None or not isinstance(ctx.author, discord.Member):
-            raise commands.CheckFailure("هذا الأمر داخل السيرفر فقط.")
+            raise commands.CheckFailure("This command only works inside a server.")
+        perms = ctx.author.guild_permissions
+        if perms.administrator or perms.manage_guild:
+            return True
+        raise commands.CheckFailure("You need the Manage Server permission for this command.")
+    return commands.check(predicate)
+
+
+def staff_only():
+    """Staff: the staff role, or members with Manage Channels or Administrator."""
+    async def predicate(ctx: commands.Context) -> bool:
         cog = ctx.bot.get_cog(COG_NAME)
-        if cog is None or not cog.has_level(ctx.author, ctx.guild, level):
-            raise commands.CheckFailure(LEVEL_MSG[level])
-        return True
+        if cog is None or ctx.guild is None or not isinstance(ctx.author, discord.Member):
+            raise commands.CheckFailure("This command only works inside a server.")
+        if cog.is_staff(ctx.author, cog.cfg(ctx.guild.id)):
+            return True
+        raise commands.CheckFailure("Only staff can use this command.")
     return commands.check(predicate)
 
 
 # ============================================================
-# Cog الرئيسي
+# Views
 # ============================================================
 
-class Moderation(commands.Cog):
+class ConfirmCloseView(discord.ui.View):
+    """Confirmation before closing a ticket. Works for buttons and for the !ticket close command."""
+
+    def __init__(self, cog: "Tickets", channel: discord.TextChannel, requester_id: int, reason: str):
+        super().__init__(timeout=CONFIRM_TIMEOUT)
+        self.cog = cog
+        self.channel = channel
+        self.requester_id = requester_id
+        self.reason = reason
+        self.message: Optional[discord.Message] = None
+
+    @discord.ui.button(label="Confirm close", style=discord.ButtonStyle.danger, emoji="✅")
+    async def confirm(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if interaction.user.id != self.requester_id:
+            await interaction.response.send_message(
+                "Only the person who requested the close can confirm it.", ephemeral=True
+            )
+            return
+        self.stop()
+        await interaction.response.edit_message(content="🔒 Closing the ticket...", view=None)
+        self.cog.spawn(self.cog.close_ticket(self.channel, interaction.user, self.reason))
+
+    @discord.ui.button(label="Cancel", style=discord.ButtonStyle.secondary, emoji="✖️")
+    async def cancel(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if interaction.user.id != self.requester_id:
+            await interaction.response.send_message("This confirmation is not for you.", ephemeral=True)
+            return
+        self.stop()
+        await interaction.response.edit_message(content="Cancelled. The ticket stays open.", view=None)
+
+    async def on_timeout(self):
+        if self.message is None:
+            return
+        try:
+            await self.message.edit(content="⏰ Confirmation time has ended. The ticket stays open.", view=None)
+        except discord.HTTPException:
+            pass
+
+
+class TicketControlView(discord.ui.View):
+    """Buttons inside each ticket channel. Persistent: custom IDs are registered on load."""
+
+    def __init__(self, cog: "Tickets"):
+        super().__init__(timeout=None)
+        self.cog = cog
+
+    @discord.ui.button(label="Claim", style=discord.ButtonStyle.success, emoji="🙋", custom_id="ticket:claim")
+    async def claim_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await self.cog.handle_claim_button(interaction)
+
+    @discord.ui.button(label="Close", style=discord.ButtonStyle.danger, emoji="🔒", custom_id="ticket:close")
+    async def close_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await self.cog.handle_close_button(interaction)
+
+
+class TicketPanelView(discord.ui.View):
+    """The public panel menu. Persistent: the select uses a fixed custom ID."""
+
+    def __init__(self, cog: "Tickets", options: List[discord.SelectOption]):
+        super().__init__(timeout=None)
+        self.cog = cog
+        select = discord.ui.Select(
+            custom_id="ticket:open",
+            placeholder="Select the type of ticket you need...",
+            min_values=1,
+            max_values=1,
+            options=options or [discord.SelectOption(label="Unavailable", value="none")],
+        )
+        select.callback = self._picked
+        self.add_item(select)
+
+    async def _picked(self, interaction: discord.Interaction):
+        if interaction.guild is None:
+            return
+        values = interaction.data.get("values") or []
+        if not values:
+            return
+        await self.cog.open_ticket(interaction, values[0])
+
+
+class TypeSelectView(discord.ui.View):
+    """Admin menu: choose which ticket types appear in the panel."""
+
+    def __init__(self, cog: "Tickets", guild_id: int, requester_id: int):
+        super().__init__(timeout=SETUP_TIMEOUT)
+        self.cog = cog
+        self.guild_id = guild_id
+        self.requester_id = requester_id
+        self.message: Optional[discord.Message] = None
+
+        cfg = cog.cfg(guild_id)
+        enabled = set(cfg["enabled_types"])
+        options = []
+        for key, item in catalog(cfg).items():
+            options.append(discord.SelectOption(
+                label=trunc(item["label"], 100),
+                value=key,
+                description=trunc(item.get("description", ""), 100) or None,
+                emoji=emoji_of(item.get("emoji")),
+                default=key in enabled,
+            ))
+        options = options[:25]
+
+        self.select = discord.ui.Select(
+            placeholder="Choose the ticket types shown in the panel",
+            min_values=0,
+            max_values=len(options),
+            options=options,
+        )
+        self.select.callback = self._saved
+        self.add_item(self.select)
+
+    async def _saved(self, interaction: discord.Interaction):
+        if interaction.user.id != self.requester_id:
+            await interaction.response.send_message(
+                "Only the person who opened this setup can change it.", ephemeral=True
+            )
+            return
+        cfg = self.cog.cfg(self.guild_id)
+        valid = set(catalog(cfg))
+        cfg["enabled_types"] = [value for value in self.select.values if value in valid]
+        await self.cog.save()
+        self.stop()
+        await interaction.response.edit_message(
+            content=f"✅ Saved. **{len(cfg['enabled_types'])}** ticket type(s) will appear in new panels.",
+            view=None,
+        )
+
+    async def on_timeout(self):
+        if self.message is None:
+            return
+        try:
+            await self.message.edit(
+                content="⏰ Selection time has ended. Run `!ticket setup` again to continue.",
+                view=None,
+            )
+        except discord.HTTPException:
+            pass
+
+
+# ============================================================
+# Cog
+# ============================================================
+
+class Tickets(commands.Cog):
     def __init__(self, bot: commands.Bot):
         self.bot = bot
         self.db: dict = self._load()
-        self.db_lock = asyncio.Lock()
-        self.tasks: set[asyncio.Task] = set()
-        self.msg_history: dict = defaultdict(lambda: deque(maxlen=40))
-        self.join_history: dict = defaultdict(lambda: deque(maxlen=200))
-        self.raid_until: dict[int, float] = {}
-        self.destructive: dict = defaultdict(lambda: deque(maxlen=20))
-        self.mass_kick_running: set[int] = set()
-        self.mass_kick_cancel: set[int] = set()
+        self.lock = asyncio.Lock()
+        self.tasks: set = set()
+        self.creating: set = set()
 
-    # ---------------- قاعدة البيانات ----------------
+    # ---------------- lifecycle ----------------
+
+    async def cog_load(self) -> None:
+        # Register persistent views so buttons keep working after restarts.
+        self.bot.add_view(TicketPanelView(self, [
+            discord.SelectOption(label="Unavailable", value="none"),
+        ]))
+        self.bot.add_view(TicketControlView(self))
+
+    def spawn(self, coro) -> None:
+        task = asyncio.create_task(coro)
+        self.tasks.add(task)
+        task.add_done_callback(self.tasks.discard)
+
+    # ---------------- data ----------------
 
     @staticmethod
     def _load() -> dict:
@@ -315,1003 +315,576 @@ class Moderation(commands.Cog):
         except (OSError, json.JSONDecodeError):
             return {}
 
-    @staticmethod
-    def _write_text(payload: str) -> None:
-        tmp = DATA_FILE.with_suffix(".tmp")
-        try:
-            tmp.write_text(payload, encoding="utf-8")
-            tmp.replace(DATA_FILE)
-        except OSError as exc:
-            print(f"[BOT7 DB ERROR] {exc}")
-
-    async def persist(self) -> None:
-        # نأخذ نسخة نصية في الـ thread الرئيسي حتى ما تتغير البيانات أثناء الكتابة.
+    async def save(self) -> None:
         payload = json.dumps(self.db, ensure_ascii=False, indent=2)
-        async with self.db_lock:
-            await asyncio.to_thread(self._write_text, payload)
+        async with self.lock:
+            await asyncio.to_thread(_write_file, payload)
 
     def cfg(self, guild_id: int) -> dict:
-        cfg = self.db.setdefault(str(guild_id), {})
-        for key, default in DEFAULTS.items():
-            if isinstance(default, dict):
-                section = cfg.get(key)
-                if not isinstance(section, dict):
-                    section = cfg[key] = {}
-                for sub, value in default.items():
-                    section.setdefault(sub, copy.deepcopy(value))
-            else:
-                cfg.setdefault(key, copy.deepcopy(default))
+        key = str(guild_id)
+        cfg = self.db.get(key)
+        if not isinstance(cfg, dict):
+            cfg = self.db[key] = default_config()
+        for name, value in default_config().items():
+            cfg.setdefault(name, value)
         return cfg
 
-    def spawn(self, coro) -> None:
-        task = asyncio.create_task(coro)
-        self.tasks.add(task)
-        task.add_done_callback(self.tasks.discard)
-
-    # ---------------- الصلاحيات ----------------
-
-    def is_owner_level(self, member: discord.Member, guild: discord.Guild) -> bool:
-        """المالك الحقيقي، أو ID في القائمة الثابتة، أو ID إضافي، أو رتبة المالك."""
-        if member.id == guild.owner_id or member.id in OWNER_OVERRIDE_IDS:
-            return True
-        cfg = self.cfg(guild.id)
-        if member.id in cfg["extra_owner_ids"]:
-            return True
-        if cfg.get("owner_role_id"):
-            return has_role(member, cfg["owner_role_id"])
-        owner_name = norm(DEFAULT_OWNER_ROLE_NAME)
-        return any(norm(role.name) == owner_name for role in member.roles)
-
-    def has_level(self, member: discord.Member, guild: discord.Guild, level: str) -> bool:
-        # صلاحية المالك تعطي كل الصلاحيات، وAdministrator لا يعطي صلاحية المالك.
-        if self.is_owner_level(member, guild):
-            return True
-        if level == "owner":
-            return False
-        if member.guild_permissions.administrator:
-            return True
-        if level == "config":
-            return False
-        return has_role(member, self.cfg(guild.id).get(LEVEL_ROLE[level]))
-
-    def is_privileged(self, member: discord.Member, guild: discord.Guild) -> bool:
-        return any(self.has_level(member, guild, lvl) for lvl in ("manage", "ban", "kick"))
-
-    def target_error(self, guild: discord.Guild, target: discord.Member) -> str:
-        """يرجع سبب المنع إذا ما نقدر نعاقب العضو، أو نص فارغ إذا مسموح."""
-        ok, error = can_moderate(guild, target)
-        if not ok:
-            return error
-        if self.is_owner_level(target, guild):
-            return "ما أقدر أعاقب عضو عنده صلاحية مالك السيرفر."
-        return ""
-
-    # ---------------- اللوق ----------------
-
-    async def log(self, guild, title, target, moderator, reason, extra=None) -> None:
-        channel_id = self.cfg(guild.id).get("log_channel_id")
-        channel = guild.get_channel(int(channel_id)) if channel_id else None
-        if not isinstance(channel, discord.TextChannel):
-            return
-        embed = discord.Embed(
-            title=f"🛡️ {title}",
-            description=reason[:3500],
-            color=discord.Color.blurple(),
-            timestamp=discord.utils.utcnow(),
-        )
-        if target is not None:
-            embed.add_field(name="العضو", value=f"{target.mention} (`{target.id}`)", inline=False)
-        if moderator is not None:
-            embed.add_field(name="بواسطة", value=f"{moderator.mention} (`{moderator.id}`)", inline=False)
-        if extra:
-            embed.add_field(name="تفاصيل", value=str(extra)[:1000], inline=False)
-        try:
-            await channel.send(embed=embed, allowed_mentions=NO_MENTIONS)
-        except discord.HTTPException:
-            pass
-
-    # ---------------- العمليات المشتركة ----------------
-
-    async def apply_timeout(self, member: discord.Member, seconds: int, reason: str) -> tuple[bool, str]:
-        guild = member.guild
-        if not 1 <= seconds <= MAX_TIMEOUT:
-            return False, "المدة لازم تكون بين ثانية و28 يوم."
-        if not bot_has(guild, "moderate_members"):
-            return False, "البوت يحتاج صلاحية Moderate Members."
-        error = self.target_error(guild, member)
-        if error:
-            return False, error
-        try:
-            await member.timeout(timedelta(seconds=seconds), reason=reason[:500])
-        except discord.HTTPException as exc:
-            return False, f"رفض Discord العملية: {exc}"
-        return True, ""
-
-    async def op_ban(self, guild, moderator, target, reason) -> tuple[bool, str]:
-        if not bot_has(guild, "ban_members"):
-            return False, "البوت يحتاج صلاحية Ban Members."
-        error = self.target_error(guild, target)
-        if error:
-            return False, error
-        try:
-            await target.ban(reason=reason, delete_message_seconds=0)
-        except discord.HTTPException as exc:
-            return False, f"فشل الحظر: {exc}"
-        await self.log(guild, "Ban", target, moderator, reason)
-        return True, f"تم حظر {target.mention}."
-
-    async def op_kick(self, guild, moderator, target, reason) -> tuple[bool, str]:
-        if not bot_has(guild, "kick_members"):
-            return False, "البوت يحتاج صلاحية Kick Members."
-        error = self.target_error(guild, target)
-        if error:
-            return False, error
-        try:
-            await target.kick(reason=reason)
-        except discord.HTTPException as exc:
-            return False, f"فشل الطرد: {exc}"
-        await self.log(guild, "Kick", target, moderator, reason)
-        return True, f"تم طرد {target.mention}."
-
-    async def op_timeout(self, guild, moderator, target, seconds, reason) -> tuple[bool, str]:
-        ok, error = await self.apply_timeout(target, seconds, reason)
-        if not ok:
-            return False, error
-        await self.log(guild, "Timeout", target, moderator, reason, f"المدة: {duration_text(seconds)}")
-        return True, f"تم إعطاء {target.mention} تايم اوت لمدة **{duration_text(seconds)}**."
-
-    async def op_untimeout(self, guild, moderator, target) -> tuple[bool, str]:
-        if not bot_has(guild, "moderate_members"):
-            return False, "البوت يحتاج صلاحية Moderate Members."
-        error = self.target_error(guild, target)
-        if error:
-            return False, error
-        try:
-            await target.timeout(None, reason=f"إلغاء التايم اوت بواسطة {moderator}")
-        except discord.HTTPException as exc:
-            return False, f"فشل الإلغاء: {exc}"
-        await self.log(guild, "Remove Timeout", target, moderator, "إلغاء التايم اوت")
-        return True, f"تم إلغاء التايم اوت عن {target.mention}."
-
-    async def op_warn(self, guild, moderator, target, reason) -> tuple[bool, str]:
-        cfg = self.cfg(guild.id)
-        items = cfg["warnings"].setdefault(str(target.id), [])
-        items.append({
-            "reason": reason,
-            "moderator_id": moderator.id,
-            "timestamp": discord.utils.utcnow().isoformat(),
-        })
-        await self.persist()
-        count = len(items)
-        extra = f"إجمالي التحذيرات: {count}"
-        text = f"⚠️ تم تحذير {target.mention}. عدد تحذيراته: **{count}**."
-
-        esc = cfg["escalation"]
-        if count >= esc["warnings"]:
-            minutes = max(1, int(esc["timeout_min"]))
-            ok, _ = await self.apply_timeout(target, minutes * 60, f"تصعيد تلقائي: {count} تحذيرات")
-            if ok:
-                extra += f" | تايم اوت تلقائي {duration_text(minutes * 60)}"
-                text += f" تم إعطاؤه تايم اوت **{duration_text(minutes * 60)}** بسبب التصعيد."
-
-        await self.log(guild, "Warning", target, moderator, reason, extra)
-        return True, text
-
-    async def op_clear(self, guild, channel, moderator, amount, before) -> tuple[bool, str]:
-        if not bot_has(guild, "manage_messages"):
-            return False, "البوت يحتاج صلاحية Manage Messages."
-        if not isinstance(channel, (discord.TextChannel, discord.Thread)):
-            return False, "لا يمكن المسح في هذا النوع من الرومات."
-        try:
-            deleted = await channel.purge(limit=amount, before=before)
-        except discord.HTTPException as exc:
-            return False, f"تعذر المسح: {exc}"
-        await self.log(guild, "Clear Messages", None, moderator, f"مسح {len(deleted)} رسالة من {channel.mention}")
-        return True, f"تم مسح **{len(deleted)}** رسالة."
-
-    async def op_lock(self, guild, channel: discord.TextChannel, moderator, locked: bool) -> tuple[bool, str]:
-        if not bot_has(guild, "manage_channels"):
-            return False, "البوت يحتاج صلاحية Manage Channels."
-        overwrite = channel.overwrites_for(guild.default_role)
-        overwrite.send_messages = False if locked else None
-        try:
-            await channel.set_permissions(
-                guild.default_role, overwrite=overwrite,
-                reason=f"{'قفل' if locked else 'فتح'} الروم بواسطة {moderator}",
-            )
-        except discord.HTTPException as exc:
-            return False, f"فشل التعديل: {exc}"
-        title = "Channel Locked" if locked else "Channel Unlocked"
-        await self.log(guild, title, None, moderator, f"{channel.mention}")
-        return True, ("🔒 تم قفل الروم." if locked else "🔓 تم فتح الروم.")
-
-    async def op_slowmode(self, guild, channel, moderator, seconds: int) -> tuple[bool, str]:
-        if not bot_has(guild, "manage_channels"):
-            return False, "البوت يحتاج صلاحية Manage Channels."
-        if not isinstance(channel, discord.TextChannel):
-            return False, "البطء يشتغل على الرومات النصية فقط."
-        try:
-            await channel.edit(slowmode_delay=seconds, reason=f"بواسطة {moderator}")
-        except discord.HTTPException as exc:
-            return False, f"فشل التعديل: {exc}"
-        await self.log(guild, "Slowmode", None, moderator, f"{channel.mention}: {seconds} ثانية")
-        return True, ("تم إيقاف البطء." if seconds == 0 else f"تم ضبط البطء على **{seconds}** ثانية.")
-
-    # ---------------- الحماية التلقائية ----------------
-
-    async def punish(self, message: discord.Message, minutes: int, reason: str, title: str) -> bool:
-        guild, author = message.guild, message.author
-        self.msg_history[(guild.id, author.id)].clear()
-        await delete_quietly(message)
-        ok, error = await self.apply_timeout(author, minutes * 60, f"حماية تلقائية: {reason}")
-        await self.log(guild, title, author, self.bot.user, reason, None if ok else f"تعذر التايم اوت: {error}")
-        return True
-
-    async def protect_message(self, message: discord.Message) -> bool:
-        guild, author = message.guild, message.author
-        if not isinstance(author, discord.Member) or author.bot:
-            return False
-        cfg = self.cfg(guild.id)
-        if not cfg["protection"] or self.is_privileged(author, guild):
-            return False
-
-        content = message.content or ""
-        text = norm(content)
-
-        if cfg["invite_filter"] and INVITE_RE.search(content):
-            return await self.punish(message, 10, "نشر رابط دعوة لسيرفر آخر", "Invite Filter")
-
-        for word in cfg["banned_words"]:
-            if re.search(rf"(?<!\w){re.escape(word)}(?!\w)", text):
-                return await self.punish(message, 5, "استخدام كلمة ممنوعة", "Banned Word")
-
-        mentions = mention_count(message)
-        if mentions >= max(1, cfg["mentions"]["max"]):
-            return await self.punish(
-                message, cfg["mentions"]["timeout_min"],
-                f"سبام منشنات: {mentions} منشن في رسالة واحدة", "Mention Spam",
-            )
-
-        if REPEAT_RE.search(content) or len(URL_RE.findall(content)) >= 4:
-            return await self.punish(message, 3, "إغراق أحرف أو روابط", "Flood Protection")
-
-        now = time.monotonic()
-        history = self.msg_history[(guild.id, author.id)]
-        media = has_media(message)
-        history.append((now, text, media))
-
-        spam = cfg["spam"]
-        recent = [h for h in history if now - h[0] <= spam["window"]]
-        if len(recent) >= spam["limit"]:
-            return await self.punish(
-                message, spam["timeout_min"],
-                f"سبام رسائل: {len(recent)} رسائل خلال {spam['window']} ثوانٍ", "Message Spam",
-            )
-        if text and sum(1 for h in recent if h[1] == text) >= spam["limit"]:
-            return await self.punish(message, spam["timeout_min"], "تكرار نفس الرسالة", "Duplicate Spam")
-
-        media_cfg = cfg["media"]
-        media_recent = [h for h in history if h[2] and now - h[0] <= media_cfg["window"]]
-        if len(media_recent) >= media_cfg["limit"]:
-            return await self.punish(
-                message, media_cfg["timeout_min"],
-                f"سبام صور ومرفقات: {len(media_recent)} خلال {media_cfg['window']} ثوانٍ", "Media Spam",
-            )
-        return False
-
-    async def find_audit_actor(self, guild, action, target_id=None):
-        if not bot_has(guild, "view_audit_log"):
+    def ticket_record(self, guild: discord.Guild, channel) -> Optional[dict]:
+        if guild is None or channel is None:
             return None
-        try:
-            async for entry in guild.audit_logs(limit=6, action=action):
-                if (discord.utils.utcnow() - entry.created_at).total_seconds() > 30:
-                    break
-                if target_id is not None and getattr(entry.target, "id", None) != target_id:
-                    continue
-                return entry.user
-        except discord.HTTPException:
-            return None
+        return self.cfg(guild.id)["tickets"].get(str(channel.id))
+
+    def open_ticket_for(self, guild: discord.Guild, cfg: dict, user_id: int) -> Optional[discord.TextChannel]:
+        for channel_id, record in list(cfg["tickets"].items()):
+            if record.get("owner_id") != user_id:
+                continue
+            channel = guild.get_channel(int(channel_id))
+            if channel is not None:
+                return channel
+            cfg["tickets"].pop(channel_id, None)
         return None
 
-    async def check_bot_join(self, bot_member: discord.Member) -> None:
-        guild = bot_member.guild
-        await asyncio.sleep(2)
-        member = guild.get_member(bot_member.id) or bot_member
-        cfg = self.cfg(guild.id)
-        if member.id in cfg["trusted_bot_ids"]:
-            return
-        dangerous = [p for p in DANGEROUS_PERMS if getattr(member.guild_permissions, p, False)]
-        if not dangerous:
-            return
+    # ---------------- permissions ----------------
 
-        actor = await self.find_audit_actor(guild, discord.AuditLogAction.bot_add, member.id)
-        actor_member = guild.get_member(actor.id) if actor else None
-        perms_text = "الصلاحيات: " + ", ".join(dangerous)
-
-        if actor_member is not None and self.has_level(actor_member, guild, "manage"):
-            await self.log(guild, "Privileged Bot Joined", member, actor,
-                           "انضم بوت بصلاحيات عالية بواسطة إدارة موثوقة، ولم يُطرد.", perms_text)
-            return
-
-        error = "رتبة البوت لا تسمح بطرد هذا البوت."
-        me = guild.me
-        if me and me.guild_permissions.kick_members and member.top_role < me.top_role:
-            try:
-                await member.kick(reason="بوت بصلاحيات عالية أُضيف دون إذن من الإدارة")
-                await self.log(guild, "High-Risk Bot Removed", member, actor,
-                               "تم طرد بوت بصلاحيات عالية أُضيف دون إذن.", perms_text)
-                return
-            except discord.HTTPException as exc:
-                error = str(exc)
-        await self.log(guild, "High-Risk Bot Alert", member, actor,
-                       f"رُصد بوت بصلاحيات عالية ولم يُطرد. {error}", perms_text)
-
-    async def protect_join(self, member: discord.Member) -> None:
-        guild = member.guild
-        if not self.cfg(guild.id)["protection"]:
-            return
-        if member.bot:
-            self.spawn(self.check_bot_join(member))
-            return
-
-        now = time.monotonic()
-        joins = self.join_history[guild.id]
-        joins.append(now)
-        if sum(1 for t in joins if now - t <= 20) >= 8 and self.raid_until.get(guild.id, 0) < now:
-            self.raid_until[guild.id] = now + 120
-            await self.log(guild, "Join Raid Alert", None, self.bot.user,
-                           "رُصدت موجة انضمام سريعة. تم تقييد الحسابات الحديثة لمدة دقيقتين.")
-
-        young = discord.utils.utcnow() - member.created_at < timedelta(days=3)
-        if self.raid_until.get(guild.id, 0) > now and young:
-            ok, _ = await self.apply_timeout(member, 600, "حماية موجة انضمام: حساب حديث")
-            if ok:
-                await self.log(guild, "Raid Account Restricted", member, self.bot.user,
-                               "تم تقييد حساب حديث مؤقتًا.")
-
-    async def watch_destructive(self, guild, target_id, action, label) -> None:
-        if not self.cfg(guild.id)["protection"]:
-            return
-        await asyncio.sleep(1)
-        actor = await self.find_audit_actor(guild, action, target_id)
-        if actor is None or actor.id == self.bot.user.id:
-            return
-        actor_member = guild.get_member(actor.id)
-        if actor_member is not None and self.is_owner_level(actor_member, guild):
-            return
-
-        now = time.monotonic()
-        history = self.destructive[(guild.id, actor.id, label)]
-        history.append(now)
-        while history and now - history[0] > 15:
-            history.popleft()
-        if len(history) < 3:
-            return
-        history.clear()
-
-        reason = f"مؤشر تخريب: {label} 3 مرات خلال 15 ثانية."
-        if actor_member is None:
-            await self.log(guild, "Anti-Nuke Alert", actor, self.bot.user, reason)
-            return
-        ok, error = await self.apply_timeout(actor_member, 3600, reason)
-        await self.log(guild, "Anti-Nuke Alert", actor_member, self.bot.user, reason,
-                       None if ok else f"تعذر التايم اوت: {error}")
-
-    # ---------------- الطرد الجماعي ----------------
-
-    def plan_mass_kick(self, guild: discord.Guild) -> tuple[list[discord.Member], int, int, int]:
-        """يرجع (الأهداف، البوتات المستثناة، المحمّيون بصلاحية المالك، الأعلى من البوت)."""
-        me = guild.me
-        if me is None:
-            return [], 0, 0, 0
-        targets: list[discord.Member] = []
-        bots = protected = locked = 0
-        for member in guild.members:
-            if member.bot:
-                bots += 1
-                continue
-            if member.id == me.id:
-                continue
-            if self.is_owner_level(member, guild):
-                protected += 1
-                continue
-            if member.top_role >= me.top_role:
-                locked += 1
-                continue
-            targets.append(member)
-        return targets, bots, protected, locked
-
-    async def run_mass_kick(self, guild, requester, status_message) -> None:
-        self.mass_kick_running.add(guild.id)
-        self.mass_kick_cancel.discard(guild.id)
-        try:
-            targets, bots, protected, locked = self.plan_mass_kick(guild)
-            total = len(targets)
-            kicked = failed = 0
-            cancelled = False
-
-            for index, member in enumerate(targets, 1):
-                if guild.id in self.mass_kick_cancel:
-                    cancelled = True
-                    break
-                try:
-                    await member.kick(reason=MASS_KICK_REASON)
-                    kicked += 1
-                except discord.NotFound:
-                    pass  # غادر قبل أن نطرده
-                except discord.HTTPException:
-                    failed += 1
-                if index % 25 == 0:
-                    await edit_quietly(status_message, f"⏳ جاري الطرد: {index}/{total}")
-                await asyncio.sleep(MASS_KICK_DELAY)
-
-            self.mass_kick_cancel.discard(guild.id)
-            head = "⛔ توقفت عملية الطرد" if cancelled else "✅ اكتمل الطرد الجماعي"
-            await edit_quietly(status_message, f"{head}. تم طرد **{kicked}** عضو.")
-            await self.log(
-                guild, "Mass Kick Stopped" if cancelled else "Mass Kick", None, requester,
-                f"تم طرد {kicked} عضو بأمر من {requester.mention}.",
-                f"فشل: {failed} | بوتات مستثناة: {bots} | محمّيون: {protected} | أعلى من البوت: {locked}",
-            )
-        finally:
-            self.mass_kick_running.discard(guild.id)
-
-    # ---------------- الاختصارات بدون prefix ----------------
-
-    async def handle_shortcut(self, message: discord.Message) -> bool:
-        guild, member = message.guild, message.author
-        if not isinstance(member, discord.Member):
-            return False
-
-        cfg = self.cfg(guild.id)
-        parts = message.content.split()
-        if not parts:
-            return False
-        first = norm(parts[0])
-        action = next(
-            (a for a, names in cfg["shortcuts"].items() if first in {norm(n) for n in names}),
-            None,
-        )
-        if action is None:
-            return False
-
-        level = SHORTCUT_LEVEL[action]
-        # إذا ما عنده صلاحية نتجاهل الرسالة بصمت، عشان ما نرد على كل كلمة عادية.
-        if not self.has_level(member, guild, level):
-            return False
-
-        if action == "clear":
-            if len(parts) < 2 or not parts[1].isdigit() or not 1 <= int(parts[1]) <= 100:
-                await message.channel.send("استخدمه كذا: `مسح 20` (من 1 إلى 100).", delete_after=6)
-                return True
-            _, text = await self.op_clear(guild, message.channel, member, int(parts[1]), message)
-            await delete_quietly(message)
-            await message.channel.send(text, delete_after=6, allowed_mentions=NO_MENTIONS)
+    def is_staff(self, member: discord.Member, cfg: dict) -> bool:
+        if member.guild_permissions.administrator or member.guild_permissions.manage_channels:
             return True
+        role_id = cfg.get("staff_role_id")
+        return bool(role_id and any(role.id == int(role_id) for role in member.roles))
 
-        target = await resolve_member(guild, parts[1]) if len(parts) > 1 else None
-        if target is None:
-            await message.channel.send("حدد العضو بمنشن أو ID.", delete_after=6)
-            return True
+    # ---------------- helpers ----------------
 
-        if action == "timeout":
-            seconds = parse_duration(parts[2]) if len(parts) > 2 else None
-            if seconds is None:
-                await message.channel.send("استخدمه كذا: `تايم_اوت @العضو 10m السبب`", delete_after=6)
-                return True
-            _, text = await self.op_timeout(guild, member, target, seconds, clean_reason(" ".join(parts[3:])))
-        elif action == "warn":
-            _, text = await self.op_warn(guild, member, target, clean_reason(" ".join(parts[2:])))
-        elif action == "ban":
-            _, text = await self.op_ban(guild, member, target, clean_reason(" ".join(parts[2:])))
-        else:
-            _, text = await self.op_kick(guild, member, target, clean_reason(" ".join(parts[2:])))
-
-        await delete_quietly(message)
-        await message.channel.send(text, delete_after=8, allowed_mentions=NO_MENTIONS)
-        return True
-
-    def config_text(self, guild: discord.Guild, cfg: dict) -> str:
-        def role_mention(key: str, fallback: str = "غير محددة") -> str:
-            rid = cfg.get(key)
-            role = guild.get_role(int(rid)) if rid else None
-            return role.mention if role else fallback
-
+    def log_channel(self, guild: discord.Guild, cfg: dict) -> Optional[discord.TextChannel]:
         channel_id = cfg.get("log_channel_id")
         channel = guild.get_channel(int(channel_id)) if channel_id else None
-        shortcut_lines = [
-            f"• `{label}`: " + (", ".join(f"`{n}`" for n in cfg["shortcuts"].get(action, [])) or "معطّل")
-            for label, action in SHORTCUT_TYPES.items()
+        return channel if isinstance(channel, discord.TextChannel) else None
+
+    async def build_transcript(self, channel: discord.TextChannel) -> str:
+        lines = [
+            f"Transcript of #{channel.name}",
+            f"Generated: {discord.utils.utcnow().strftime('%Y-%m-%d %H:%M:%S UTC')}",
+            "",
         ]
-        esc, spam, mentions = cfg["escalation"], cfg["spam"], cfg["mentions"]
-        extra_owners = ", ".join(map(str, cfg["extra_owner_ids"])) or "لا يوجد"
-        return (
-            "**🛡️ إعدادات النظام**\n"
-            f"الحماية التلقائية: {'✅ تعمل' if cfg['protection'] else '⏸️ متوقفة'}\n"
-            f"رتبة الإدارة: {role_mention('admin_role_id')}\n"
-            f"رتبة الحظر: {role_mention('ban_role_id')}\n"
-            f"رتبة الطرد: {role_mention('kick_role_id')}\n"
-            f"رتبة المالك: {role_mention('owner_role_id', f'بالاسم `{DEFAULT_OWNER_ROLE_NAME}`')}\n"
-            f"مالكون إضافيون (IDs): {extra_owners}\n"
-            f"روم اللوق: {channel.mention if isinstance(channel, discord.TextChannel) else 'غير محدد'}\n"
-            f"منع روابط الدعوات: {'✅' if cfg['invite_filter'] else '❌'}\n"
-            f"الكلمات الممنوعة: {len(cfg['banned_words'])} كلمة\n"
-            f"السبام: {spam['limit']} رسائل / {spam['window']} ثانية\n"
-            f"المنشنات: حد {mentions['max']} منشن في الرسالة\n"
-            f"التصعيد: عند {esc['warnings']} تحذيرات ← تايم اوت {duration_text(esc['timeout_min'] * 60)}\n"
-            f"بوتات موثوقة: {', '.join(map(str, cfg['trusted_bot_ids'])) or 'لا يوجد'}\n\n"
-            "**الاختصارات (بدون !):**\n" + "\n".join(shortcut_lines) + "\n\n"
-            "**التعديل بأمر `!اعداد`:**\n"
-            "`!اعداد رتبة ادارة @رتبة` | `!اعداد رتبة حظر @رتبة` | `!اعداد رتبة طرد @رتبة`\n"
-            "`!اعداد رتبة مالك @رتبة` (يحدد رتبة المالك بالـ ID بدل الاسم)\n"
-            "`!اعداد مالك_اضافي ID` (إضافة/إزالة مالك إضافي)\n"
-            "`!اعداد لوق #روم` (بدون روم = تعطيل)\n"
-            "`!اعداد اختصار حظر كلمة1 كلمة2` (`-` للتعطيل)\n"
-            "`!اعداد كلمة_ممنوعة كلمة` (إضافة/إزالة)\n"
-            "`!اعداد منع_الدعوات` (تشغيل/إيقاف)\n"
-            "`!اعداد سبام 6 8` (عدد الرسائل والنافذة بالثواني)\n"
-            "`!اعداد منشن 5` (حد المنشنات)\n"
-            "`!اعداد تصعيد 3 60` (عدد التحذيرات والمدة بالدقائق)\n"
-            "`!اعداد بوت_موثوق ID` (إضافة/إزالة)"
-        )
-
-    # ============================================================
-    # المستمعون
-    # ============================================================
-
-    @commands.Cog.listener()
-    async def on_message(self, message: discord.Message):
-        if message.guild is None or message.author.bot:
-            return
         try:
-            if await self.protect_message(message):
-                return
-            if not message.content.startswith(PREFIX):
-                await self.handle_shortcut(message)
-        except discord.HTTPException as exc:
-            print(f"[BOT7 MESSAGE] {exc}")
+            async for message in channel.history(limit=TRANSCRIPT_LIMIT, oldest_first=True):
+                when = message.created_at.strftime("%Y-%m-%d %H:%M:%S UTC")
+                body = message.content or ""
+                if message.embeds:
+                    body += " [embed]"
+                for attachment in message.attachments:
+                    body += f" [attachment: {attachment.url}]"
+                lines.append(f"[{when}] {message.author} ({message.author.id}): {body}")
+        except discord.HTTPException as error:
+            lines.append(f"[Transcript incomplete: {error}]")
+        return "\n".join(lines)
 
-    @commands.Cog.listener()
-    async def on_member_join(self, member: discord.Member):
-        await self.protect_join(member)
+    # ---------------- ticket lifecycle ----------------
+
+    async def open_ticket(self, interaction: discord.Interaction, type_key: str) -> None:
+        await interaction.response.defer(ephemeral=True, thinking=True)
+        guild, member = interaction.guild, interaction.user
+        cfg = self.cfg(guild.id)
+
+        ttype = catalog(cfg).get(type_key)
+        if ttype is None or type_key not in cfg["enabled_types"]:
+            await interaction.followup.send("❌ This ticket type is no longer available.", ephemeral=True)
+            return
+
+        existing = self.open_ticket_for(guild, cfg, member.id)
+        if existing is not None:
+            await interaction.followup.send(
+                f"You already have an open ticket: {existing.mention}", ephemeral=True
+            )
+            return
+
+        if member.id in self.creating:
+            await interaction.followup.send("⏳ Your ticket is being created. Please wait a moment.", ephemeral=True)
+            return
+
+        self.creating.add(member.id)
+        try:
+            cfg["counter"] = int(cfg.get("counter", 0)) + 1
+            number = cfg["counter"]
+            await self.save()
+
+            category = guild.get_channel(int(cfg["category_id"])) if cfg.get("category_id") else None
+            if not isinstance(category, discord.CategoryChannel):
+                category = None
+
+            staff_role = guild.get_role(int(cfg["staff_role_id"])) if cfg.get("staff_role_id") else None
+            overwrites = {
+                guild.default_role: discord.PermissionOverwrite(view_channel=False),
+                member: discord.PermissionOverwrite(
+                    view_channel=True, send_messages=True, read_message_history=True,
+                    attach_files=True, embed_links=True,
+                ),
+                guild.me: discord.PermissionOverwrite(
+                    view_channel=True, send_messages=True, read_message_history=True,
+                    manage_channels=True, manage_messages=True,
+                ),
+            }
+            if staff_role is not None:
+                overwrites[staff_role] = discord.PermissionOverwrite(
+                    view_channel=True, send_messages=True, read_message_history=True,
+                    attach_files=True, embed_links=True, manage_messages=True,
+                )
+
+            channel = await guild.create_text_channel(
+                name=f"ticket-{number:04d}-{slug(member.name)}",
+                category=category,
+                overwrites=overwrites,
+                topic=f"Ticket #{number:04d} | owner {member.id}",
+                reason=f"Ticket opened by {member}",
+            )
+
+            cfg["tickets"][str(channel.id)] = {
+                "owner_id": member.id,
+                "type": type_key,
+                "number": number,
+                "claimed_by": None,
+                "created_at": discord.utils.utcnow().isoformat(),
+            }
+            await self.save()
+
+            embed = discord.Embed(
+                title=f"{ttype.get('emoji', '🎫')} {ttype['label']} • Ticket #{number:04d}",
+                description=(
+                    f"Hello {member.mention}, thank you for opening a ticket.\n"
+                    "Please describe your request in detail. A staff member will reply as soon as possible."
+                ),
+                color=discord.Color.blurple(),
+                timestamp=discord.utils.utcnow(),
+            )
+            embed.add_field(name="Opened by", value=member.mention, inline=True)
+            embed.add_field(name="Type", value=ttype["label"], inline=True)
+            embed.add_field(name="Status", value="🟢 Open", inline=True)
+            embed.set_footer(text="Use the buttons below to claim or close this ticket.")
+
+            mentions = member.mention
+            if staff_role is not None:
+                mentions += f" {staff_role.mention}"
+            await channel.send(
+                content=mentions,
+                embed=embed,
+                view=TicketControlView(self),
+                allowed_mentions=discord.AllowedMentions(users=True, roles=True, everyone=False),
+            )
+
+            log_channel = self.log_channel(guild, cfg)
+            if log_channel is not None:
+                try:
+                    await log_channel.send(
+                        f"📥 Ticket {channel.mention} opened by {member.mention} ({ttype['label']}).",
+                        allowed_mentions=NO_MENTIONS,
+                    )
+                except discord.HTTPException:
+                    pass
+
+            await interaction.followup.send(f"✅ Your ticket has been created: {channel.mention}", ephemeral=True)
+        except discord.Forbidden:
+            await interaction.followup.send(
+                "❌ I don't have permission to create ticket channels. Give me Manage Channels.", ephemeral=True
+            )
+        except discord.HTTPException as error:
+            print(f"[TICKETS] Could not create ticket: {error}")
+            await interaction.followup.send("❌ Something went wrong while creating your ticket. Try again.", ephemeral=True)
+        finally:
+            self.creating.discard(member.id)
+
+    def claim_ticket(self, guild: discord.Guild, channel, member: discord.Member) -> tuple:
+        """Returns (success, message). Changes the record in memory; caller saves."""
+        cfg = self.cfg(guild.id)
+        record = cfg["tickets"].get(str(channel.id))
+        if record is None:
+            return False, "This channel is not an active ticket."
+        if not self.is_staff(member, cfg):
+            return False, "Only staff can claim tickets."
+        claimed = record.get("claimed_by")
+        if claimed == member.id:
+            return False, "You already claimed this ticket."
+        if claimed:
+            return False, f"This ticket is already claimed by <@{claimed}>."
+        record["claimed_by"] = member.id
+        return True, f"🙋 {member.mention} claimed this ticket."
+
+    async def handle_claim_button(self, interaction: discord.Interaction) -> None:
+        ok, text = self.claim_ticket(interaction.guild, interaction.channel, interaction.user)
+        if not ok:
+            await interaction.response.send_message(text, ephemeral=True)
+            return
+        await self.save()
+        await interaction.response.send_message(text, allowed_mentions=NO_MENTIONS)
+
+    async def handle_close_button(self, interaction: discord.Interaction) -> None:
+        guild, member = interaction.guild, interaction.user
+        cfg = self.cfg(guild.id)
+        record = self.ticket_record(guild, interaction.channel)
+        if record is None:
+            await interaction.response.send_message("This channel is not an active ticket.", ephemeral=True)
+            return
+        if member.id != record.get("owner_id") and not self.is_staff(member, cfg):
+            await interaction.response.send_message(
+                "Only the ticket owner or staff can close this ticket.", ephemeral=True
+            )
+            return
+        view = ConfirmCloseView(self, interaction.channel, member.id, "Closed with the close button")
+        await interaction.response.send_message(
+            "Are you sure you want to close this ticket? A transcript will be saved.",
+            view=view,
+            ephemeral=True,
+        )
+        view.message = await interaction.original_response()
+
+    async def close_ticket(self, channel: discord.TextChannel, closer, reason: str) -> None:
+        guild = channel.guild
+        cfg = self.cfg(guild.id)
+        record = cfg["tickets"].pop(str(channel.id), None)
+        if record is None:
+            return
+        await self.save()
+
+        transcript = await self.build_transcript(channel)
+        log_channel = self.log_channel(guild, cfg)
+        if log_channel is not None:
+            owner = guild.get_member(record.get("owner_id", 0))
+            embed = discord.Embed(title="🔒 Ticket Closed", color=discord.Color.red(), timestamp=discord.utils.utcnow())
+            embed.add_field(name="Ticket", value=f"#{channel.name}", inline=True)
+            embed.add_field(name="Opened by", value=owner.mention if owner else f"<@{record.get('owner_id')}>", inline=True)
+            embed.add_field(name="Type", value=type_label(cfg, record.get("type", "")), inline=True)
+            embed.add_field(name="Closed by", value=closer.mention, inline=True)
+            embed.add_field(name="Reason", value=trunc(reason, 1000), inline=False)
+            file = discord.File(io.BytesIO(transcript.encode("utf-8")), filename=f"{channel.name}.txt")
+            try:
+                await log_channel.send(embed=embed, file=file, allowed_mentions=NO_MENTIONS)
+            except discord.HTTPException as error:
+                print(f"[TICKETS] Could not send transcript: {error}")
+
+        try:
+            await channel.send(
+                f"🔒 Ticket closed by {closer.mention}. This channel will be deleted in {CLOSE_DELAY} seconds.",
+                allowed_mentions=NO_MENTIONS,
+            )
+            await asyncio.sleep(CLOSE_DELAY)
+            await channel.delete(reason=f"Ticket closed by {closer}")
+        except discord.HTTPException as error:
+            print(f"[TICKETS] Could not delete ticket channel: {error}")
+
+    # ---------------- listeners ----------------
 
     @commands.Cog.listener()
     async def on_guild_channel_delete(self, channel: discord.abc.GuildChannel):
-        self.spawn(self.watch_destructive(
-            channel.guild, channel.id, discord.AuditLogAction.channel_delete, "حذف القنوات"))
-
-    @commands.Cog.listener()
-    async def on_guild_role_delete(self, role: discord.Role):
-        self.spawn(self.watch_destructive(
-            role.guild, role.id, discord.AuditLogAction.role_delete, "حذف الرتب"))
+        if not isinstance(channel, discord.TextChannel):
+            return
+        cfg = self.cfg(channel.guild.id)
+        if cfg["tickets"].pop(str(channel.id), None) is not None:
+            await self.save()
 
     async def cog_command_error(self, ctx: commands.Context, error: commands.CommandError):
         if isinstance(error, commands.CheckFailure):
-            text = str(error) or "ما عندك صلاحية."
+            text = str(error) or "You don't have permission for this command."
         elif isinstance(error, commands.MissingRequiredArgument):
-            text = f"ناقصك `{error.param.name}`. استخدم `!مساعدة`."
+            text = f"Missing argument: `{error.param.name}`. Use `!ticket help`."
         elif isinstance(error, commands.BadArgument):
-            text = "ما قدرت أفهم المدخلات أو ما لقيت العضو/الرتبة/الروم."
+            text = "I couldn't understand that input, or I couldn't find the member, role, or channel."
         else:
             original = getattr(error, "original", error)
-            print(f"[BOT7 COMMAND] {type(original).__name__}: {original}")
-            text = "حدث خطأ غير متوقع أثناء تنفيذ الأمر."
+            print(f"[TICKETS COMMAND] {type(original).__name__}: {original}")
+            text = "An unexpected error happened while running that command."
         try:
             await ctx.send(text, delete_after=8)
         except discord.HTTPException:
             pass
 
     # ============================================================
-    # الأوامر
+    # Commands: !ticket
     # ============================================================
 
-    @commands.command(name="مساعدة", aliases=["مساعده"])
-    async def cmd_help(self, ctx: commands.Context):
-        await ctx.send(
-            "**🛡️ bot7 - الأوامر**\n"
-            "**الإدارة:** `!حظر @عضو السبب` | `!طرد @عضو السبب` | `!تايم_اوت @عضو 10m السبب` | `!فك_التايم @عضو`\n"
-            "**التحذيرات:** `!تحذير @عضو السبب` | `!تحذيرات @عضو` | `!ازالة_تحذير @عضو رقم` | `!حذف_تحذيرات @عضو`\n"
-            "**الرومات:** `!قفل_الروم` | `!فتح_الروم` | `!بطء 10` (0 للإيقاف) | `!مسح 20`\n"
-            "**أخرى:** `!فك_الحظر ID` | `!معلومات @عضو`\n"
-            "**الإعداد:** `!اعداد` | **الحماية:** `!مراقبة_تلقائية` (تشغيل/إيقاف مع تأكيد)\n"
-            "**المالك فقط:** `!طرد_الكل` (مع تأكيد بزرين) | `!ايقاف_الطرد` (يوقف الطرد الجاري)\n"
-            "الاختصارات تعمل بدون `!` بعد ضبطها من `!اعداد`.",
-            allowed_mentions=NO_MENTIONS,
+    def help_embed(self) -> discord.Embed:
+        embed = discord.Embed(
+            title="🎫 Ticket System",
+            description="Members open tickets from the panel menu. Staff manage them with these commands.",
+            color=discord.Color.blurple(),
         )
+        embed.add_field(
+            name="Administrators (Manage Server)",
+            value=(
+                "`!ticket setup` choose ticket types and view settings\n"
+                "`!ticket panel [#channel]` post the ticket panel\n"
+                "`!ticket staff @role` set the staff role\n"
+                "`!ticket category <category>` set where tickets are created\n"
+                "`!ticket logs [#channel]` set the transcript channel\n"
+                "`!ticket title <text>` set the panel title\n"
+                "`!ticket description <text>` set the panel text\n"
+                "`!ticket typeadd Label | description | emoji` add a custom type\n"
+                "`!ticket typeremove <label or key>` remove a custom type"
+            ),
+            inline=False,
+        )
+        embed.add_field(
+            name="Staff",
+            value=(
+                "`!ticket list` show open tickets\n"
+                "`!ticket claim` claim the current ticket\n"
+                "`!ticket add @member` add a member to this ticket\n"
+                "`!ticket remove @member` remove a member from this ticket\n"
+                "`!ticket close [reason]` close this ticket (with confirmation)"
+            ),
+            inline=False,
+        )
+        embed.add_field(
+            name="Members",
+            value="Pick a type from the panel menu. Use the **Close** button inside your ticket to close it.",
+            inline=False,
+        )
+        embed.set_footer(text="Team Fime • Tickets")
+        return embed
 
-    @commands.command(name="اعداد", aliases=["إعداد"])
-    @requires("config")
-    async def cmd_config(self, ctx: commands.Context, *args: str):
-        guild = ctx.guild
-        cfg = self.cfg(guild.id)
-        if not args:
-            await ctx.send(self.config_text(guild, cfg), allowed_mentions=NO_MENTIONS)
+    def status_embed(self, guild: discord.Guild, cfg: dict) -> discord.Embed:
+        staff = guild.get_role(int(cfg["staff_role_id"])) if cfg.get("staff_role_id") else None
+        category = guild.get_channel(int(cfg["category_id"])) if cfg.get("category_id") else None
+        log = self.log_channel(guild, cfg)
+        embed = discord.Embed(title="🎫 Ticket System Setup", color=discord.Color.blurple())
+        embed.add_field(
+            name="Staff role",
+            value=staff.mention if staff else "Not set (staff = Manage Channels)",
+            inline=False,
+        )
+        embed.add_field(
+            name="Ticket category",
+            value=category.name if category else "Not set (channels are created at the top level)",
+            inline=False,
+        )
+        embed.add_field(name="Transcript channel", value=log.mention if log else "Not set", inline=False)
+        embed.add_field(name="Panel title", value=trunc(cfg["panel_title"], 200), inline=False)
+        embed.add_field(
+            name="Ticket types",
+            value=f"{len(enabled_types(cfg))} enabled of {len(catalog(cfg))}",
+            inline=True,
+        )
+        embed.add_field(name="Open tickets", value=str(len(cfg["tickets"])), inline=True)
+        embed.set_footer(text="Select the types to show in the panel below.")
+        return embed
+
+    @commands.group(name="ticket", invoke_without_command=True, case_insensitive=True)
+    async def ticket(self, ctx: commands.Context):
+        await ctx.send(embed=self.help_embed())
+
+    @ticket.command(name="help")
+    async def ticket_help(self, ctx: commands.Context):
+        await ctx.send(embed=self.help_embed())
+
+    @ticket.command(name="setup")
+    @admin_only()
+    async def ticket_setup(self, ctx: commands.Context):
+        cfg = self.cfg(ctx.guild.id)
+        view = TypeSelectView(self, ctx.guild.id, ctx.author.id)
+        view.message = await ctx.send(embed=self.status_embed(ctx.guild, cfg), view=view)
+
+    @ticket.command(name="panel")
+    @admin_only()
+    async def ticket_panel(self, ctx: commands.Context, channel: Optional[discord.TextChannel] = None):
+        channel = channel or ctx.channel
+        cfg = self.cfg(ctx.guild.id)
+        types = enabled_types(cfg)
+        if not types:
+            await ctx.send("❌ No ticket types are enabled. Run `!ticket setup` first.")
             return
 
-        sub = norm(args[0])
-
-        if sub == "رتبة" and len(args) >= 3:
-            key = ROLE_SLOTS.get(norm(args[1]))
-            if key is None:
-                await ctx.send("النوع: `ادارة` `حظر` `طرد` `مالك`.")
-                return
-            role = resolve_role(guild, args[2])
-            if role is None or role.is_default():
-                await ctx.send("ما لقيت الرتبة، أو لا يمكن استخدام @everyone.")
-                return
-            cfg[key] = role.id
-            await self.persist()
-            await ctx.send(f"تم تحديد {role.mention}.", allowed_mentions=NO_MENTIONS)
-            return
-
-        if sub == "مالك_اضافي" and len(args) >= 2 and args[1].isdigit():
-            owner_id = int(args[1])
-            extra = cfg["extra_owner_ids"]
-            if owner_id in extra:
-                extra.remove(owner_id)
-                text = "تمت إزالة المالك الإضافي."
-            else:
-                extra.append(owner_id)
-                text = "تمت إضافة المالك الإضافي. له نفس صلاحيات المالك في هذا السيرفر."
-            await self.persist()
-            await ctx.send(text)
-            return
-
-        if sub == "لوق":
-            if not ctx.message.channel_mentions:
-                cfg["log_channel_id"] = None
-                await self.persist()
-                await ctx.send("تم تعطيل اللوق.")
-                return
-            channel = ctx.message.channel_mentions[0]
-            cfg["log_channel_id"] = channel.id
-            await self.persist()
-            await ctx.send(f"تم تحديد روم اللوق: {channel.mention}", allowed_mentions=NO_MENTIONS)
-            return
-
-        if sub == "اختصار" and len(args) >= 3:
-            action = SHORTCUT_TYPES.get(norm(args[1]))
-            if action is None:
-                await ctx.send("النوع: `حظر` `طرد` `مسح` `تحذير` `تايم_اوت`.")
-                return
-            raw = [norm(a) for a in args[2:]]
-            if raw == ["-"]:
-                cfg["shortcuts"][action] = []
-            else:
-                cleaned: list[str] = []
-                for alias in raw:
-                    if alias.startswith(PREFIX) or alias in cleaned:
-                        continue
-                    cleaned.append(alias)
-                if not cleaned:
-                    await ctx.send("حدد اختصارًا واحدًا على الأقل.")
-                    return
-                cfg["shortcuts"][action] = cleaned
-            await self.persist()
-            names = cfg["shortcuts"][action]
-            await ctx.send(
-                f"تم تحديث اختصارات **{norm(args[1])}**: " + (", ".join(f"`{n}`" for n in names) or "معطّل")
+        options = [
+            discord.SelectOption(
+                label=trunc(item["label"], 100),
+                value=item["key"],
+                description=trunc(item.get("description", ""), 100) or None,
+                emoji=emoji_of(item.get("emoji")),
             )
-            return
-
-        if sub == "كلمة_ممنوعة" and len(args) >= 2:
-            word = norm(" ".join(args[1:]))
-            if word in cfg["banned_words"]:
-                cfg["banned_words"].remove(word)
-                text = f"تمت إزالة `{word}` من الكلمات الممنوعة."
-            else:
-                cfg["banned_words"].append(word)
-                text = f"تمت إضافة `{word}` إلى الكلمات الممنوعة."
-            await self.persist()
-            await ctx.send(text)
-            return
-
-        if sub == "منع_الدعوات":
-            cfg["invite_filter"] = not cfg["invite_filter"]
-            await self.persist()
-            await ctx.send("✅ منع روابط الدعوات مفعّل." if cfg["invite_filter"] else "❌ منع روابط الدعوات معطّل.")
-            return
-
-        if sub == "سبام" and len(args) >= 3 and args[1].isdigit() and args[2].isdigit():
-            limit, window = int(args[1]), int(args[2])
-            if not (2 <= limit <= 30 and 2 <= window <= 60):
-                await ctx.send("عدد الرسائل من 2 إلى 30، والنافذة من 2 إلى 60 ثانية.")
-                return
-            cfg["spam"]["limit"] = limit
-            cfg["spam"]["window"] = window
-            await self.persist()
-            await ctx.send(f"تم ضبط السبام: **{limit}** رسائل خلال **{window}** ثانية.")
-            return
-
-        if sub == "منشن" and len(args) >= 2 and args[1].isdigit():
-            value = int(args[1])
-            if not 2 <= value <= 50:
-                await ctx.send("حد المنشنات من 2 إلى 50.")
-                return
-            cfg["mentions"]["max"] = value
-            await self.persist()
-            await ctx.send(f"تم ضبط حد المنشنات على **{value}** في الرسالة الواحدة.")
-            return
-
-        if sub == "تصعيد" and len(args) >= 3 and args[1].isdigit() and args[2].isdigit():
-            count, minutes = int(args[1]), int(args[2])
-            if not (1 <= count <= 50 and 1 <= minutes <= 40320):
-                await ctx.send("عدد التحذيرات من 1 إلى 50، والمدة من 1 إلى 40320 دقيقة.")
-                return
-            cfg["escalation"] = {"warnings": count, "timeout_min": minutes}
-            await self.persist()
-            await ctx.send(f"تم ضبط التصعيد: عند **{count}** تحذيرات ← تايم اوت **{duration_text(minutes * 60)}**.")
-            return
-
-        if sub == "بوت_موثوق" and len(args) >= 2 and args[1].isdigit():
-            bot_id = int(args[1])
-            trusted = cfg["trusted_bot_ids"]
-            if bot_id in trusted:
-                trusted.remove(bot_id)
-                text = "تمت إزالة البوت من القائمة الموثوقة."
-            else:
-                trusted.append(bot_id)
-                text = "تمت إضافة البوت للقائمة الموثوقة."
-            await self.persist()
-            await ctx.send(text)
-            return
-
-        await ctx.send("صيغة غير معروفة. استخدم `!اعداد` لعرض الخيارات.")
-
-    @commands.command(name="مراقبة_تلقائية", aliases=["مراقبة", "الحماية"])
-    @requires("config")
-    async def cmd_protection(self, ctx: commands.Context):
-        guild = ctx.guild
-        turning_on = not self.cfg(guild.id)["protection"]
-
-        async def apply(interaction: discord.Interaction) -> None:
-            self.cfg(guild.id)["protection"] = turning_on
-            await self.persist()
-            state = "✅ تم تشغيل الحماية التلقائية." if turning_on else "⏸️ تم إيقاف الحماية التلقائية."
-            await interaction.response.edit_message(content=state, embed=None, view=None)
+            for item in types
+        ][:25]
 
         embed = discord.Embed(
-            title="🛡️ تأكيد الحماية التلقائية" if turning_on else "⏸️ تأكيد إيقاف الحماية",
-            color=discord.Color.orange(),
-            description=(
-                "الحماية تشمل: سبام الرسائل والتكرار، المنشنات، الصور والمرفقات، "
-                "إغراق الأحرف والروابط، روابط الدعوات، الكلمات الممنوعة، موجات الانضمام، "
-                "البوتات عالية الصلاحيات، وتخريب القنوات والرتب."
-                if turning_on else
-                "سيتم إيقاف كل الحمايات التلقائية حتى تشغلها مرة أخرى."
-            ),
+            title=trunc(cfg["panel_title"], 250),
+            description=trunc(cfg["panel_text"], 4000),
+            color=discord.Color.blurple(),
         )
-        view = ConfirmView(
-            self, ctx.author, owner_only=False,
-            label="تأكيد التشغيل" if turning_on else "تأكيد الإيقاف",
-            style=discord.ButtonStyle.success if turning_on else discord.ButtonStyle.danger,
-            handler=apply,
+        embed.set_footer(text="Team Fime • Tickets")
+        await channel.send(embed=embed, view=TicketPanelView(self, options))
+        await ctx.send(f"✅ Ticket panel posted in {channel.mention}.", delete_after=8)
+
+    @ticket.command(name="staff")
+    @admin_only()
+    async def ticket_staff(self, ctx: commands.Context, role: Optional[discord.Role] = None):
+        cfg = self.cfg(ctx.guild.id)
+        cfg["staff_role_id"] = role.id if role else None
+        await self.save()
+        text = f"✅ Staff role set to {role.mention}." if role else "✅ Staff role cleared."
+        await ctx.send(text, allowed_mentions=NO_MENTIONS)
+
+    @ticket.command(name="category")
+    @admin_only()
+    async def ticket_category(self, ctx: commands.Context, category: Optional[discord.CategoryChannel] = None):
+        cfg = self.cfg(ctx.guild.id)
+        cfg["category_id"] = category.id if category else None
+        await self.save()
+        text = f"✅ Tickets will be created under **{category.name}**." if category else "✅ Ticket category cleared."
+        await ctx.send(text)
+
+    @ticket.command(name="logs")
+    @admin_only()
+    async def ticket_logs(self, ctx: commands.Context, channel: Optional[discord.TextChannel] = None):
+        cfg = self.cfg(ctx.guild.id)
+        cfg["log_channel_id"] = channel.id if channel else None
+        await self.save()
+        text = f"✅ Transcripts will be sent to {channel.mention}." if channel else "✅ Transcript logging disabled."
+        await ctx.send(text, allowed_mentions=NO_MENTIONS)
+
+    @ticket.command(name="title")
+    @admin_only()
+    async def ticket_title(self, ctx: commands.Context, *, text: str):
+        cfg = self.cfg(ctx.guild.id)
+        cfg["panel_title"] = trunc(text, 250)
+        await self.save()
+        await ctx.send("✅ Panel title updated. Post a new panel with `!ticket panel`.")
+
+    @ticket.command(name="description")
+    @admin_only()
+    async def ticket_description(self, ctx: commands.Context, *, text: str):
+        cfg = self.cfg(ctx.guild.id)
+        cfg["panel_text"] = trunc(text, 4000)
+        await self.save()
+        await ctx.send("✅ Panel text updated. Post a new panel with `!ticket panel`.")
+
+    @ticket.command(name="typeadd")
+    @admin_only()
+    async def ticket_typeadd(self, ctx: commands.Context, *, data: str):
+        parts = [part.strip() for part in data.split("|")]
+        if not parts or not parts[0]:
+            await ctx.send("Usage: `!ticket typeadd Label | description | emoji`")
+            return
+        label = trunc(parts[0], 80)
+        description = trunc(parts[1], 100) if len(parts) > 1 else ""
+        emoji = parts[2] if len(parts) > 2 and parts[2] else "🎫"
+
+        cfg = self.cfg(ctx.guild.id)
+        if len(cfg["custom_types"]) >= MAX_CUSTOM_TYPES:
+            await ctx.send(f"❌ You can add up to {MAX_CUSTOM_TYPES} custom types.")
+            return
+        if any(item["label"].casefold() == label.casefold() for item in catalog(cfg).values()):
+            await ctx.send("❌ A ticket type with this name already exists.")
+            return
+
+        key = "custom-" + uuid.uuid4().hex[:8]
+        cfg["custom_types"].append({"key": key, "label": label, "description": description, "emoji": emoji})
+        cfg["enabled_types"].append(key)
+        await self.save()
+        await ctx.send(f"✅ Added ticket type **{label}** and enabled it. Post a new panel to show it.")
+
+    @ticket.command(name="typeremove")
+    @admin_only()
+    async def ticket_typeremove(self, ctx: commands.Context, *, name: str):
+        cfg = self.cfg(ctx.guild.id)
+        wanted = name.strip().casefold()
+        match = next(
+            (item for item in cfg["custom_types"]
+             if item["key"].casefold() == wanted or item["label"].casefold() == wanted),
+            None,
         )
-        view.message = await ctx.send(embed=embed, view=view)
-
-    @commands.command(name="طرد_الكل", aliases=["kickall"])
-    @requires("owner")
-    async def cmd_kick_all(self, ctx: commands.Context):
-        guild = ctx.guild
-        if not bot_has(guild, "kick_members"):
-            await ctx.send("البوت يحتاج صلاحية Kick Members.")
+        if match is None:
+            await ctx.send("❌ No custom ticket type matches that name. Default types can only be disabled in `!ticket setup`.")
             return
-        if guild.id in self.mass_kick_running:
-            await ctx.send("هناك عملية طرد جارية بالفعل. استخدم `!ايقاف_الطرد` لإيقافها.")
+        cfg["custom_types"] = [item for item in cfg["custom_types"] if item["key"] != match["key"]]
+        cfg["enabled_types"] = [key for key in cfg["enabled_types"] if key != match["key"]]
+        await self.save()
+        await ctx.send(f"✅ Removed ticket type **{match['label']}**.")
+
+    @ticket.command(name="list")
+    @staff_only()
+    async def ticket_list(self, ctx: commands.Context):
+        cfg = self.cfg(ctx.guild.id)
+        lines = []
+        for channel_id, record in cfg["tickets"].items():
+            channel = ctx.guild.get_channel(int(channel_id))
+            if channel is None:
+                continue
+            claimed = f"<@{record['claimed_by']}>" if record.get("claimed_by") else "unclaimed"
+            lines.append(
+                f"{channel.mention} • <@{record.get('owner_id')}> • "
+                f"{type_label(cfg, record.get('type', ''))} • {claimed}"
+            )
+        if not lines:
+            await ctx.send("There are no open tickets right now.")
             return
-
-        try:
-            await guild.chunk()
-        except (discord.HTTPException, discord.ClientException):
-            pass
-
-        targets, bots_count, protected, locked = self.plan_mass_kick(guild)
-        if not targets:
-            await ctx.send("ما فيه أعضاء يمكن طردهم.")
-            return
-
         embed = discord.Embed(
-            title="⚠️ تأكيد الطرد الجماعي",
-            color=discord.Color.red(),
-            description=(
-                "سيتم طرد كل الأعضاء البشريين، ما عدا: مالك السيرفر، والمالكون الإضافيون "
-                "وأصحاب رتبة المالك، والبوتات، والأعضاء الأعلى من البوت.\n\n"
-                "لن يرسل البوت أي رسالة للأعضاء. العملية لا يمكن التراجع عنها، "
-                "لكن يمكن إيقافها بأمر `!ايقاف_الطرد`."
-            ),
+            title=f"🎫 Open tickets ({len(lines)})",
+            description=trunc("\n".join(lines), 4000),
+            color=discord.Color.blurple(),
         )
-        embed.add_field(name="سيتم طرد", value=f"**{len(targets)}** عضو", inline=True)
-        embed.add_field(name="بوتات مستثناة", value=str(bots_count), inline=True)
-        embed.add_field(name="محمّيون (مالك)", value=str(protected), inline=True)
-        embed.add_field(name="رتب أعلى من البوت", value=str(locked), inline=True)
-
-        async def start(interaction: discord.Interaction) -> None:
-            if guild.id in self.mass_kick_running:
-                await interaction.response.edit_message(
-                    content="⚠️ هناك عملية طرد جارية بالفعل.", embed=None, view=None,
-                )
-                return
-            await interaction.response.edit_message(content="⏳ جاري الطرد...", embed=None, view=None)
-            self.spawn(self.run_mass_kick(guild, ctx.author, interaction.message))
-
-        view = ConfirmView(
-            self, ctx.author, owner_only=True,
-            label="تأكيد طرد الكل", style=discord.ButtonStyle.danger, handler=start,
-        )
-        view.message = await ctx.send(embed=embed, view=view)
-
-    @commands.command(name="ايقاف_الطرد", aliases=["stopkick"])
-    @requires("owner")
-    async def cmd_stop_kick(self, ctx: commands.Context):
-        if ctx.guild.id not in self.mass_kick_running:
-            await ctx.send("ما فيه عملية طرد شغالة.")
-            return
-        self.mass_kick_cancel.add(ctx.guild.id)
-        await ctx.send("⛔ تم طلب إيقاف الطرد، بيوقف بعد العضو الحالي.")
-
-    @commands.command(name="حظر", aliases=["ban"])
-    @requires("ban")
-    async def cmd_ban(self, ctx: commands.Context, member: discord.Member, *, reason: str = ""):
-        _, text = await self.op_ban(ctx.guild, ctx.author, member, clean_reason(reason))
-        await ctx.send(text, allowed_mentions=NO_MENTIONS)
-
-    @commands.command(name="فك_الحظر", aliases=["unban"])
-    @requires("ban")
-    async def cmd_unban(self, ctx: commands.Context, user_id: int):
-        if not bot_has(ctx.guild, "ban_members"):
-            await ctx.send("البوت يحتاج صلاحية Ban Members.")
-            return
-        try:
-            user = await self.bot.fetch_user(user_id)
-            await ctx.guild.unban(user, reason=f"فك حظر بواسطة {ctx.author}")
-        except discord.NotFound:
-            await ctx.send("المستخدم غير محظور أو الـID غير صحيح.")
-            return
-        except discord.HTTPException as exc:
-            await ctx.send(f"فشل فك الحظر: {exc}")
-            return
-        await self.log(ctx.guild, "Unban", user, ctx.author, "فك حظر")
-        await ctx.send(f"تم فك الحظر عن `{user}`.")
-
-    @commands.command(name="طرد", aliases=["kick"])
-    @requires("kick")
-    async def cmd_kick(self, ctx: commands.Context, member: discord.Member, *, reason: str = ""):
-        _, text = await self.op_kick(ctx.guild, ctx.author, member, clean_reason(reason))
-        await ctx.send(text, allowed_mentions=NO_MENTIONS)
-
-    @commands.command(name="تايم_اوت", aliases=["timeout", "تايم"])
-    @requires("manage")
-    async def cmd_timeout(self, ctx: commands.Context, member: discord.Member, duration: str, *, reason: str = ""):
-        seconds = parse_duration(duration)
-        if seconds is None:
-            await ctx.send("صيغة المدة: `10m` أو `2h` أو `1d` أو رقم فقط كدقائق. الحد الأعلى 28 يوم.")
-            return
-        _, text = await self.op_timeout(ctx.guild, ctx.author, member, seconds, clean_reason(reason))
-        await ctx.send(text, allowed_mentions=NO_MENTIONS)
-
-    @commands.command(name="فك_التايم", aliases=["untimeout"])
-    @requires("manage")
-    async def cmd_untimeout(self, ctx: commands.Context, member: discord.Member):
-        _, text = await self.op_untimeout(ctx.guild, ctx.author, member)
-        await ctx.send(text, allowed_mentions=NO_MENTIONS)
-
-    @commands.command(name="تحذير", aliases=["warn"])
-    @requires("manage")
-    async def cmd_warn(self, ctx: commands.Context, member: discord.Member, *, reason: str = ""):
-        _, text = await self.op_warn(ctx.guild, ctx.author, member, clean_reason(reason))
-        await ctx.send(text, allowed_mentions=NO_MENTIONS)
-
-    @commands.command(name="تحذيرات", aliases=["warnings"])
-    @requires("manage")
-    async def cmd_warnings(self, ctx: commands.Context, member: discord.Member):
-        items = self.cfg(ctx.guild.id)["warnings"].get(str(member.id), [])
-        if not items:
-            await ctx.send(f"{member.mention} ما عليه تحذيرات.", allowed_mentions=NO_MENTIONS)
-            return
-        shown = items[-15:]
-        start = len(items) - len(shown) + 1
-        lines = [f"**تحذيرات {member.display_name}** (المجموع: {len(items)})"]
-        for index, item in enumerate(shown, start):
-            mod = ctx.guild.get_member(int(item.get("moderator_id", 0)))
-            mod_text = mod.mention if mod else "غير معروف"
-            lines.append(f"`#{index}` بواسطة {mod_text}: {str(item.get('reason', ''))[:200]}")
-        await ctx.send("\n".join(lines), allowed_mentions=NO_MENTIONS)
-
-    @commands.command(name="ازالة_تحذير", aliases=["حذف_تحذير"])
-    @requires("manage")
-    async def cmd_remove_warning(self, ctx: commands.Context, member: discord.Member, number: int):
-        warnings = self.cfg(ctx.guild.id)["warnings"]
-        items = warnings.get(str(member.id), [])
-        if not 1 <= number <= len(items):
-            await ctx.send(f"رقم التحذير غير صحيح. عند {member.display_name} {len(items)} تحذير.")
-            return
-        removed = items.pop(number - 1)
-        if not items:
-            warnings.pop(str(member.id), None)
-        await self.persist()
-        await self.log(ctx.guild, "Remove Warning", member, ctx.author,
-                       f"إزالة التحذير #{number}", str(removed.get("reason", ""))[:300])
-        await ctx.send(f"تمت إزالة التحذير #{number} عن {member.mention}.", allowed_mentions=NO_MENTIONS)
-
-    @commands.command(name="حذف_تحذيرات", aliases=["مسح_تحذيرات"])
-    @requires("manage")
-    async def cmd_clear_warnings(self, ctx: commands.Context, member: discord.Member):
-        removed = len(self.cfg(ctx.guild.id)["warnings"].pop(str(member.id), []))
-        await self.persist()
-        await self.log(ctx.guild, "Clear Warnings", member, ctx.author, f"حذف {removed} تحذير")
-        await ctx.send(f"تم حذف **{removed}** تحذير عن {member.mention}.", allowed_mentions=NO_MENTIONS)
-
-    @commands.command(name="مسح", aliases=["clear"])
-    @requires("manage")
-    async def cmd_clear(self, ctx: commands.Context, amount: int):
-        if not 1 <= amount <= 100:
-            await ctx.send("حدد رقمًا من 1 إلى 100.")
-            return
-        _, text = await self.op_clear(ctx.guild, ctx.channel, ctx.author, amount, ctx.message)
-        await delete_quietly(ctx.message)
-        await ctx.send(text, delete_after=6)
-
-    @commands.command(name="قفل_الروم", aliases=["lock"])
-    @requires("manage")
-    async def cmd_lock(self, ctx: commands.Context):
-        if not isinstance(ctx.channel, discord.TextChannel):
-            await ctx.send("القفل يشتغل على الرومات النصية فقط.")
-            return
-        _, text = await self.op_lock(ctx.guild, ctx.channel, ctx.author, True)
-        await ctx.send(text)
-
-    @commands.command(name="فتح_الروم", aliases=["unlock"])
-    @requires("manage")
-    async def cmd_unlock(self, ctx: commands.Context):
-        if not isinstance(ctx.channel, discord.TextChannel):
-            await ctx.send("الفتح يشتغل على الرومات النصية فقط.")
-            return
-        _, text = await self.op_lock(ctx.guild, ctx.channel, ctx.author, False)
-        await ctx.send(text)
-
-    @commands.command(name="بطء", aliases=["slowmode"])
-    @requires("manage")
-    async def cmd_slowmode(self, ctx: commands.Context, seconds: int):
-        if not 0 <= seconds <= 21600:
-            await ctx.send("البطء بين 0 و 21600 ثانية (0 للإيقاف).")
-            return
-        _, text = await self.op_slowmode(ctx.guild, ctx.channel, ctx.author, seconds)
-        await ctx.send(text)
-
-    @commands.command(name="معلومات", aliases=["info"])
-    @requires("manage")
-    async def cmd_info(self, ctx: commands.Context, member: discord.Member):
-        items = self.cfg(ctx.guild.id)["warnings"].get(str(member.id), [])
-        timed = member.timed_out_until
-        timed_text = (
-            f"حتى {discord.utils.format_dt(timed, 'R')}"
-            if timed and timed > discord.utils.utcnow() else "لا"
-        )
-        joined = discord.utils.format_dt(member.joined_at, "D") if member.joined_at else "غير معروف"
-        embed = discord.Embed(title=f"معلومات {member.display_name}", color=discord.Color.blurple())
-        embed.set_thumbnail(url=member.display_avatar.url)
-        embed.add_field(name="ID", value=str(member.id), inline=True)
-        embed.add_field(name="الحساب أُنشئ", value=discord.utils.format_dt(member.created_at, "D"), inline=True)
-        embed.add_field(name="انضم للسيرفر", value=joined, inline=True)
-        embed.add_field(name="أعلى رتبة", value=member.top_role.mention, inline=True)
-        embed.add_field(name="تحذيرات", value=str(len(items)), inline=True)
-        embed.add_field(name="تايم اوت", value=timed_text, inline=True)
-        embed.add_field(name="صلاحية المالك", value="✅" if self.is_owner_level(member, ctx.guild) else "❌", inline=True)
         await ctx.send(embed=embed, allowed_mentions=NO_MENTIONS)
+
+    @ticket.command(name="claim")
+    @staff_only()
+    async def ticket_claim(self, ctx: commands.Context):
+        ok, text = self.claim_ticket(ctx.guild, ctx.channel, ctx.author)
+        if not ok:
+            await ctx.send(text, allowed_mentions=NO_MENTIONS)
+            return
+        await self.save()
+        await ctx.send(text, allowed_mentions=NO_MENTIONS)
+
+    @ticket.command(name="add")
+    @staff_only()
+    async def ticket_add(self, ctx: commands.Context, member: discord.Member):
+        if self.ticket_record(ctx.guild, ctx.channel) is None:
+            await ctx.send("This is not an active ticket channel.")
+            return
+        await ctx.channel.set_permissions(
+            member,
+            view_channel=True, send_messages=True, read_message_history=True,
+            attach_files=True, embed_links=True,
+            reason=f"Added to ticket by {ctx.author}",
+        )
+        await ctx.send(f"✅ {member.mention} was added to this ticket.", allowed_mentions=NO_MENTIONS)
+
+    @ticket.command(name="remove")
+    @staff_only()
+    async def ticket_remove(self, ctx: commands.Context, member: discord.Member):
+        record = self.ticket_record(ctx.guild, ctx.channel)
+        if record is None:
+            await ctx.send("This is not an active ticket channel.")
+            return
+        if member.id == record.get("owner_id"):
+            await ctx.send("You can't remove the ticket owner.")
+            return
+        await ctx.channel.set_permissions(member, overwrite=None, reason=f"Removed from ticket by {ctx.author}")
+        await ctx.send(f"✅ {member.mention} was removed from this ticket.", allowed_mentions=NO_MENTIONS)
+
+    @ticket.command(name="close")
+    async def ticket_close(self, ctx: commands.Context, *, reason: str = "No reason given"):
+        cfg = self.cfg(ctx.guild.id)
+        record = self.ticket_record(ctx.guild, ctx.channel)
+        if record is None:
+            await ctx.send("This is not an active ticket channel.")
+            return
+        if ctx.author.id != record.get("owner_id") and not self.is_staff(ctx.author, cfg):
+            await ctx.send("Only the ticket owner or staff can close this ticket.")
+            return
+        view = ConfirmCloseView(self, ctx.channel, ctx.author.id, trunc(reason, 300))
+        view.message = await ctx.send(
+            "Are you sure you want to close this ticket? A transcript will be saved.",
+            view=view,
+        )
 
 
 # ============================================================
-# نقطة التحميل
+# Load point
 # ============================================================
 
 async def setup(bot: commands.Bot) -> None:
-    """تستدعيها discord.py عند load_extension("bot7").
+    """Called by discord.py on load_extension("bot7").
 
-    تفحص كل اسم وalias قبل التسجيل. أي تعارض مع أمر موجود في bot.py
-    أو في ملف آخر يُحذف أو يُتخطى، بدل ما يوقف تحميل الـ Cog.
+    If a command name or alias already exists in bot.py or another cog, it is skipped
+    instead of stopping the cog from loading.
     """
-    cog = Moderation(bot)
-    taken: set[str] = set(bot.all_commands)
+    cog = Tickets(bot)
+    taken: set = set(bot.all_commands)
     kept, skipped = [], []
 
     for command in cog.__cog_commands__:
@@ -1327,5 +900,5 @@ async def setup(bot: commands.Bot) -> None:
     await bot.add_cog(cog)
 
     if skipped:
-        print(f"[BOT7] تم تخطي أوامر متعارضة: {', '.join(skipped)}")
-    print(f"✅ تم تحميل bot7 كـ Cog ({len(kept)} أمر)")
+        print(f"[TICKETS] Skipped conflicting commands: {', '.join(skipped)}")
+    print(f"✅ Ticket system loaded ({len(kept)} commands)")
