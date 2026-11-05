@@ -33,18 +33,19 @@ from discord.ext import commands
 # CONFIGURATION
 # ============================================================
 
-VERSION = "10.0"
+VERSION = "11.0"
 USER_AGENT = f"Team-Fime-Search/{VERSION} (+Discord bot)"
 
 RSCRIPTS_API_KEY = os.getenv("RSCRIPTS_API_KEY", "").strip()
+ROSCRIPTER_API_KEY = os.getenv("ROSCRIPTER_API_KEY", "").strip()
 
 CACHE_TTL = 300
 MAX_RESULTS = 150
 PAGE_SIZE = 20  # ScriptBlox documents a maximum of 20 per request.
 MAX_PAGES_PER_SOURCE = 2
 MAX_QUERY_VARIANTS = 3
-SEARCH_TIMEOUT = 14.0
-HTTP_TIMEOUT = 8.0
+SEARCH_TIMEOUT = 18.0
+HTTP_TIMEOUT = 9.0
 HTTP_CONCURRENCY = 8
 SEARCH_COOLDOWN = 3.0
 RESULT_TIMEOUT = 300.0
@@ -55,19 +56,28 @@ PANEL_COLOR = 0x5865F2
 NO_MENTIONS = discord.AllowedMentions.none()
 
 # Public API sources with current documented JSON endpoints.
-API_SOURCES = ("scriptblox", "robloxscripts", "haxhell", "rscripts")
+API_SOURCES = ("scriptblox", "robloxscripts", "haxhell", "rscripts", "roscripter")
 SOURCE_NAMES = {
     "scriptblox": "ScriptBlox",
     "robloxscripts": "RobloxScripts.com",
     "haxhell": "HaxHell",
     "rscripts": "RScripts",
+    "roscripter": "RoScripter",
     "websearch": "Web discovery",
+}
+SOURCE_LINKS = {
+    "scriptblox": "https://scriptblox.com",
+    "robloxscripts": "https://robloxscripts.com",
+    "haxhell": "https://haxhell.com",
+    "rscripts": "https://rscripts.net",
+    "roscripter": "https://roscripter.com",
 }
 SOURCE_COLORS = {
     "scriptblox": 0x2ECC71,
     "robloxscripts": 0xE67E22,
     "haxhell": 0x3498DB,
     "rscripts": 0x9B59B6,
+    "roscripter": 0xE84393,
     "websearch": 0x5865F2,
 }
 
@@ -299,10 +309,11 @@ def normalize_row(row: Dict[str, Any], source: str) -> Dict[str, Any]:
     author = item.get("author") if isinstance(item.get("author"), dict) else {}
     creator = item.get("creator") if isinstance(item.get("creator"), dict) else {}
     user = item.get("user") if isinstance(item.get("user"), dict) else {}
+    media = item.get("media") if isinstance(item.get("media"), dict) else {}
 
     title = clean(item.get("title") or item.get("name") or item.get("gameName"), "Untitled")
     slug = clean(item.get("slug"))
-    code_value = item.get("script")
+    code_value = item.get("script") or item.get("code")
     code = code_value.strip() if isinstance(code_value, str) else ""
 
     raw_url = ""
@@ -317,8 +328,13 @@ def normalize_row(row: Dict[str, Any], source: str) -> Dict[str, Any]:
                 break
 
     page_url = ""
-    for key in ("url", "scriptUrl", "pageUrl", "webUrl", "link", "permalink"):
-        page_url = valid_url(item.get(key))
+    links = item.get("links") if isinstance(item.get("links"), dict) else {}
+    for candidate in (
+        item.get("url"), item.get("scriptUrl"), item.get("pageUrl"),
+        item.get("webUrl"), item.get("scriptPageUrl"), item.get("link"), item.get("permalink"),
+        links.get("webpage"), links.get("self"),
+    ):
+        page_url = valid_url(candidate)
         if page_url:
             break
 
@@ -328,14 +344,16 @@ def normalize_row(row: Dict[str, Any], source: str) -> Dict[str, Any]:
             raw_url = f"https://rawscripts.net/raw/{urllib.parse.quote(slug)}"
     elif source == "rscripts" and slug and not page_url:
         page_url = f"https://rscripts.net/script/{urllib.parse.quote(slug)}"
+    elif source == "haxhell" and slug and not page_url:
+        page_url = f"https://haxhell.com/scripts/{urllib.parse.quote(slug)}"
 
-    if not raw_url and source == "rscripts":
-        raw_url = valid_url(item.get("rawScript"))
+    if not raw_url and source in {"rscripts", "haxhell"}:
+        raw_url = valid_url(item.get("rawScript") or links.get("raw"))
 
     image = ""
     for candidate in (
         item.get("image"), item.get("imageUrl"), item.get("thumbnailUrl"),
-        game.get("iconUrl"), game.get("imageUrl"), game.get("thumbnailUrl"),
+        media.get("thumbnailUrl"), game.get("iconUrl"), game.get("imageUrl"), game.get("thumbnailUrl"),
     ):
         image = valid_url(candidate)
         if image:
@@ -353,12 +371,12 @@ def normalize_row(row: Dict[str, Any], source: str) -> Dict[str, Any]:
     views = to_int(item.get("views", stats.get("views", item.get("viewCount", 0))))
     likes = to_int(item.get("likes", stats.get("likes", item.get("likeCount", 0))))
 
-    key_flag = item.get("key", item.get("keySystem", flags.get("keySystem")))
+    key_flag = item.get("key", item.get("keySystem", item.get("isKeySystem", flags.get("keySystem"))))
     paid_flag = item.get("paid", item.get("isPaid", flags.get("isPaid")))
     access_type = clean(item.get("accessType")).lower()
-    verified_flag = item.get("verified", author.get("verified", creator.get("isVerified", False)))
+    verified_flag = item.get("verified", author.get("verified", author.get("isScripterVerified", creator.get("isVerified", flags.get("verified", False)))))
     patched_flag = item.get("isPatched", item.get("patched", flags.get("patched")))
-    mobile_flag = item.get("mobileReady", item.get("mobileSupported", flags.get("mobileSupported")))
+    mobile_flag = item.get("mobileReady", item.get("mobileSupported", item.get("isMobileReady", flags.get("mobileSupported"))))
 
     item.update({
         "title": truncate(title, 240),
@@ -379,6 +397,7 @@ def normalize_row(row: Dict[str, Any], source: str) -> Dict[str, Any]:
         "_verified": as_bool(verified_flag),
         "_patched": as_bool(patched_flag),
         "_mobile": as_bool(mobile_flag),
+        "_risk": (item.get("risk") if isinstance(item.get("risk"), dict) else {}),
     })
     return item
 
@@ -511,7 +530,7 @@ async def fetch_robloxscripts(http: HttpClient, query: str, page: int):
 async def fetch_haxhell(http: HttpClient, query: str, page: int):
     # Documented HaxHell API v1 endpoint.
     data, error = await http.get_json(
-        "https://haxhell.com/api/v1/search/scripts",
+        "https://haxhell.com/api/v1/scripts",
         params={"q": query, "page": page, "limit": 30, "sort": "latest"},
     )
     return [normalize_row(x, "haxhell") for x in list_at(data, ("data",), ("scripts",))], error
@@ -527,8 +546,20 @@ async def fetch_rscripts(http: HttpClient, query: str, page: int):
                 "htmlDescription": "false", "includeScript": "false"},
         headers={"Authorization": f"Bearer {RSCRIPTS_API_KEY}"},
     )
-    items = list_at(data, ("data", "scripts"))
+    items = list_at(data, ("data", "scripts"), ("data",))
     return [normalize_row(x, "rscripts") for x in items], error
+
+
+async def fetch_roscripter(http: HttpClient, query: str, page: int):
+    # RoScripter has a documented read-only API and requires a free API key.
+    if not ROSCRIPTER_API_KEY:
+        return [], False
+    data, error = await http.get_json(
+        "https://api.roscripter.com/v1/scripts",
+        params={"q": query, "page": page, "limit": 20, "sort": "relevance"},
+        headers={"Authorization": f"Bearer {ROSCRIPTER_API_KEY}"},
+    )
+    return [normalize_row(x, "roscripter") for x in list_at(data, ("data",))], error
 
 
 async def fetch_web_discovery(http: HttpClient, query: str):
@@ -576,6 +607,7 @@ SOURCE_FETCHERS = {
     "robloxscripts": fetch_robloxscripts,
     "haxhell": fetch_haxhell,
     "rscripts": fetch_rscripts,
+    "roscripter": fetch_roscripter,
 }
 
 
@@ -626,7 +658,7 @@ class SearchEngine:
 
     async def _fetch_one_source(self, source: str, query: str):
         fetcher = SOURCE_FETCHERS[source]
-        page_count = 1 if source == "robloxscripts" else MAX_PAGES_PER_SOURCE
+        page_count = MAX_PAGES_PER_SOURCE
         tasks = [fetcher(self.http, query, page)
                  for page in range(1, page_count + 1)]
         responses = await asyncio.gather(*tasks, return_exceptions=True)
@@ -704,6 +736,19 @@ async def resolve_script(http: HttpClient, row: Dict[str, Any]) -> str:
     if code:
         return code
 
+    # RoScripter list results omit code; fetch the documented detail endpoint.
+    if row.get("_source") == "roscripter" and row.get("_slug") and ROSCRIPTER_API_KEY:
+        data, _ = await http.get_json(
+            "https://api.roscripter.com/v1/scripts/" + urllib.parse.quote(row["_slug"]),
+            headers={"Authorization": f"Bearer {ROSCRIPTER_API_KEY}"},
+        )
+        detail = data.get("data") if isinstance(data, dict) else None
+        if isinstance(detail, dict):
+            code = clean(detail.get("code") or detail.get("script"))
+            if code:
+                row["_code"] = code
+                return code
+
     # ScriptBlox detail endpoint is the source-supported route for full script text.
     if row.get("_source") == "scriptblox" and row.get("_slug"):
         data, _ = await http.get_json(
@@ -744,13 +789,24 @@ def build_result_embed(row: Dict[str, Any], index: int, total: int, query: str) 
     if place_id:
         game = f"[{truncate(game, 75)}](https://www.roblox.com/games/{place_id})"
     embed.add_field(name="🎮 Game", value=game, inline=False)
-    embed.add_field(name="📡 Source", value=SOURCE_NAMES.get(source, "External index"), inline=True)
+    source_name = SOURCE_NAMES.get(source, "External index")
+    source_link = SOURCE_LINKS.get(source)
+    source_value = f"[{source_name}]({source_link})" if source_link else source_name
+    embed.add_field(name="📡 Source", value=source_value, inline=True)
     embed.add_field(name="🔐 Access", value="🔑 Key required" if row.get("_key") else "🔓 No key detected", inline=True)
     embed.add_field(name="💰 Type", value="Paid" if row.get("_paid") else "Free / Unknown", inline=True)
     embed.add_field(name="👁️ Views", value=f"{to_int(row.get('views')):,}", inline=True)
     embed.add_field(name="👍 Likes", value=f"{to_int(row.get('likes')):,}", inline=True)
     if row.get("_verified"):
         embed.add_field(name="✅ Creator", value="Verified", inline=True)
+    risk = row.get("_risk") if isinstance(row.get("_risk"), dict) else {}
+    if risk:
+        risk_level = clean(risk.get("level"), "Not rated")
+        risk_score = risk.get("score")
+        risk_text = f"{risk_level}" + (f" ({risk_score}/10)" if risk_score is not None else "")
+        embed.add_field(name="🛡️ Source risk scan", value=truncate(risk_text, 80), inline=True)
+    if row.get("_patched"):
+        embed.add_field(name="⚠️ Status", value="Marked patched", inline=True)
     updated = row.get("updatedAt") or row.get("lastUpdated") or row.get("createdAt")
     if updated:
         embed.add_field(name="🕒 Updated", value=relative_date(updated), inline=True)
@@ -760,7 +816,7 @@ def build_result_embed(row: Dict[str, Any], index: int, total: int, query: str) 
         embed.set_thumbnail(url=row["_image"])
     if page:
         embed.add_field(name="🔗 Source page", value=f"[Open result]({page})", inline=False)
-    embed.set_footer(text=f"Team Fime • Result {index}/{total} • Powered by ScriptBlox / RobloxScripts.com / HaxHell / RScripts")
+    embed.set_footer(text=f"Team Fime • Result {index}/{total} • Powered by ScriptBlox / RobloxScripts.com / HaxHell / RScripts / RoScripter")
     return embed
 
 
@@ -957,7 +1013,7 @@ def build_panel_embed() -> discord.Embed:
         ),
         color=PANEL_COLOR,
     )
-    embed.set_footer(text=f"Team Fime • Search System v{VERSION} • Powered by ScriptBlox / RobloxScripts / HaxHell")
+    embed.set_footer(text=f"Team Fime • Search System v{VERSION} • Powered by ScriptBlox / RobloxScripts / HaxHell / RScripts / RoScripter")
     return embed
 
 
@@ -966,46 +1022,62 @@ def build_panel_embed() -> discord.Embed:
 # ============================================================
 
 TIKTOK_ALPHABET = string.ascii_lowercase + string.digits
+TIKTOK_WORDS = {
+    "soft": ["luna", "mimi", "nori", "sora", "lily", "melo", "yuna", "kira", "mika", "nana"],
+    "cool": ["vex", "nyx", "zero", "riven", "void", "kyro", "zen", "onyx", "vanta", "drift"],
+    "cute": ["mochi", "bunni", "peach", "koko", "puff", "mew", "berry", "daisy", "pinky", "boba"],
+    "clean": ["aria", "elix", "aero", "noir", "ren", "luxe", "sol", "aura", "kai", "eden"],
+    "random": ["nova", "echo", "cloud", "pixel", "orbit", "frost", "rune", "velvet", "comet", "haze"],
+}
 
 
-def generate_tiktok_candidates(count: int, length: Optional[int] = None) -> List[str]:
-    """Generate local username ideas only; this does not query TikTok."""
+def generate_tiktok_candidates(count: int, length: Optional[int] = None,
+                               keyword: str = "", style: str = "random") -> List[str]:
+    """Generate legal-looking TikTok handle ideas locally; never claims availability."""
     count = max(1, min(int(count), 60))
-    lengths = [length] if length in (2, 3, 4) else [2, 3, 4]
+    keyword = re.sub(r"[^a-zA-Z0-9_.]", "", clean(keyword).lower())[:12]
+    style = style.lower() if style.lower() in TIKTOK_WORDS else "random"
+    words = TIKTOK_WORDS[style]
     output = set()
-    capacity = sum(len(TIKTOK_ALPHABET) ** size for size in lengths)
-    if count > capacity:
-        count = capacity
     attempts = 0
-    max_attempts = max(200, count * 30)
-
-    while len(output) < count and attempts < max_attempts:
-        size = secrets.choice(lengths)
-        candidate = "".join(secrets.choice(TIKTOK_ALPHABET) for _ in range(size))
-        output.add(candidate)
+    while len(output) < count and attempts < count * 100:
         attempts += 1
+        base = keyword or secrets.choice(words)
+        mode = secrets.choice(("clean", "dot", "underscore", "suffix", "prefix", "double"))
+        if mode == "clean":
+            candidate = base
+        elif mode == "dot":
+            candidate = f"{base}.{secrets.choice(words)}"
+        elif mode == "underscore":
+            candidate = f"{base}_{secrets.choice(words)}"
+        elif mode == "suffix":
+            candidate = f"{base}{secrets.randbelow(99) + 1}"
+        elif mode == "prefix":
+            candidate = f"{secrets.choice(words)}{base}"
+        else:
+            candidate = f"{base}{secrets.choice(words)}"
+        candidate = candidate[:24].strip("._")
+        if 2 <= len(candidate) <= 24 and re.fullmatch(r"[a-z0-9._]+", candidate):
+            if length is None or len(candidate) == length:
+                output.add(candidate)
 
-    # Deterministic fallback for tiny namespaces or unusually high requested counts.
     if len(output) < count:
-        for size in lengths:
-            for chars in __import__("itertools").product(TIKTOK_ALPHABET, repeat=size):
-                output.add("".join(chars))
-                if len(output) >= count:
-                    break
-            if len(output) >= count:
-                break
-
+        while len(output) < count:
+            size = length if length and 2 <= length <= 24 else secrets.randbelow(8) + 5
+            candidate = "".join(secrets.choice(TIKTOK_ALPHABET) for _ in range(size))
+            output.add(candidate)
     return sorted(output, key=lambda x: (len(x), x))[:count]
 
 
-def build_tiktok_list(names: List[str]) -> str:
+def build_tiktok_list(names: List[str], style: str = "random", keyword: str = "") -> str:
     lines = [
-        "TikTok short-handle ideas",
-        "Availability is NOT verified. Open each profile link and confirm inside TikTok.",
+        "Team Fime | TikTok Username Ideas",
+        f"Style: {style} | Keyword: {keyword or 'none'}",
+        "Availability is NOT verified. This tool does not use a documented public availability endpoint.",
+        "Check each profile manually in TikTok before choosing.",
         "",
     ]
-    for name in names:
-        lines.append(f"@{name}  |  https://www.tiktok.com/@{name}")
+    lines.extend(f"@{name}  |  https://www.tiktok.com/@{name}" for name in names)
     return "\n".join(lines)
 
 
@@ -1064,7 +1136,7 @@ class GameSearchCog(commands.Cog):
         embed = build_panel_embed()
         embed.add_field(
             name="Commands",
-            value="`/searchpanel` Create the panel\n`/search query` Search directly\n`/trending` Browse trending ScriptBlox results\n`/script id` Fetch one ScriptBlox script",
+            value="`/searchpanel` Create the panel\n`/search query` Search directly\n`/trending` Browse trending scripts\n`/script id` Fetch one ScriptBlox script\n`/tiktoknames` Generate TikTok username ideas",
             inline=False,
         )
         await interaction.response.send_message(embed=embed, ephemeral=True)
@@ -1158,52 +1230,73 @@ class GameSearchCog(commands.Cog):
         view.message = message
 
     # --------------------------------------------------------
-    # Hidden-from-help TikTok short-name idea generator
+    # TikTok username idea generator
     # --------------------------------------------------------
 
-    @commands.command(name="q7v_x9", hidden=True, help=None)
-    async def tiktok_short_names(self, ctx: commands.Context, *args: str) -> None:
-        """Local idea generator. It does not contact TikTok or claim availability."""
-        length: Optional[int] = None
-        count = 25
-
+    async def _send_tiktok_ideas(self, user: discord.abc.User, count: int = 30,
+                                 style: str = "random", keyword: str = "") -> bool:
+        count = max(1, min(int(count), 60))
+        style = style.lower() if style.lower() in TIKTOK_WORDS else "random"
+        names = generate_tiktok_candidates(count, None, keyword, style)
+        payload = build_tiktok_list(names, style, keyword)
+        file = discord.File(io.BytesIO(payload.encode("utf-8")), filename="tiktok_username_ideas.txt")
         try:
-            if len(args) == 1:
-                if args[0].lower() in {"2", "3", "4"}:
-                    length = int(args[0])
-                else:
-                    count = int(args[0])
-            elif len(args) >= 2:
-                length = int(args[0]) if args[0] in {"2", "3", "4"} else None
-                count = int(args[1])
-        except ValueError:
-            await ctx.reply("Usage: `!q7v_x9 [2|3|4] [count]`", mention_author=False)
-            return
-
-        if count < 1 or count > 60:
-            await ctx.reply("Choose between 1 and 60 names per request.", mention_author=False)
-            return
-        if length not in (None, 2, 3, 4):
-            await ctx.reply("Allowed lengths: 2, 3 or 4.", mention_author=False)
-            return
-
-        names = generate_tiktok_candidates(count, length)
-        payload = build_tiktok_list(names)
-        file = discord.File(io.BytesIO(payload.encode("utf-8")), filename="tiktok_short_name_ideas.txt")
-
-        try:
-            await ctx.author.send(
-                content=(f"Here are {len(names)} short TikTok username ideas.\n"
-                         "**Availability is unverified:** TikTok has no public availability endpoint in the official API docs."),
-                file=file,
-                allowed_mentions=NO_MENTIONS,
+            await user.send(
+                content=(f"✨ جهزت لك **{len(names)}** اقتراحات لاسم تيك توك.\n"
+                         "تنبيه: التوفر غير مفحوص، لازم تتأكد من داخل TikTok."),
+                file=file, allowed_mentions=NO_MENTIONS,
             )
+            return True
+        except discord.Forbidden:
+            return False
+
+    @app_commands.command(name="tiktoknames", description="Generate TikTok username ideas and send them privately")
+    @app_commands.guild_only()
+    @app_commands.describe(
+        count="Number of ideas (1-60)",
+        style="Choose a username style",
+        keyword="Optional English word to build around",
+    )
+    @app_commands.choices(style=[
+        app_commands.Choice(name="Random", value="random"),
+        app_commands.Choice(name="Cute", value="cute"),
+        app_commands.Choice(name="Soft", value="soft"),
+        app_commands.Choice(name="Cool", value="cool"),
+        app_commands.Choice(name="Clean", value="clean"),
+    ])
+    async def tiktok_names(self, interaction: discord.Interaction, count: app_commands.Range[int, 1, 60] = 30,
+                           style: str = "random", keyword: Optional[str] = None) -> None:
+        await interaction.response.defer(ephemeral=True, thinking=True)
+        if keyword and len(keyword) > 24:
+            await interaction.followup.send("الكلمة طويلة. الحد 24 حرفاً.", ephemeral=True)
+            return
+        sent = await self._send_tiktok_ideas(interaction.user, count, style, keyword or "")
+        if sent:
+            await interaction.followup.send("📩 أرسلت قائمة الأسماء في الخاص.", ephemeral=True)
+        else:
+            await interaction.followup.send("ما قدرت أرسل الخاص. فعّل استقبال رسائل أعضاء السيرفر ثم جرّب مجدداً.", ephemeral=True)
+
+    @commands.command(name="tiktok", help="Generate TikTok username ideas")
+    async def tiktok_prefix(self, ctx: commands.Context, count: int = 30, style: str = "random", *, keyword: str = "") -> None:
+        if not 1 <= count <= 60:
+            await ctx.reply("العدد لازم يكون بين 1 و60.", mention_author=False)
+            return
+        sent = await self._send_tiktok_ideas(ctx.author, count, style, keyword)
+        if sent:
             try:
                 await ctx.message.add_reaction("📩")
             except discord.HTTPException:
                 pass
-        except discord.Forbidden:
-            await ctx.reply("I couldn't DM you. Enable server-member DMs and run the command again.", mention_author=False)
+        else:
+            await ctx.reply("فعّل الخاص من أعضاء السيرفر ثم أعد الأمر.", mention_author=False)
+
+    # Backward-compatible hidden alias for the old command.
+    @commands.command(name="q7v_x9", hidden=True, help=None)
+    async def tiktok_short_names(self, ctx: commands.Context, count: int = 30) -> None:
+        sent = await self._send_tiktok_ideas(ctx.author, count, "random", "")
+        if not sent:
+            await ctx.reply("Enable DMs from server members and try again.", mention_author=False)
+
 
 
 # ============================================================
@@ -1212,4 +1305,4 @@ class GameSearchCog(commands.Cog):
 
 async def setup(bot: commands.Bot) -> None:
     await bot.add_cog(GameSearchCog(bot))
-    print(f"✅ Team Fime bot4 v{VERSION} loaded (Search + TikTok Name Ideas).")
+    print(f"✅ Team Fime bot4 v{VERSION} loaded (Search + TikTok Name Studio).")
