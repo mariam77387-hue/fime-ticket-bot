@@ -2017,15 +2017,11 @@ class GameSearchCog(commands.Cog):
         view.message = message
 
 
+
 # ============================================================
 # SETUP
 # ============================================================
 
 async def setup(bot: commands.Bot):
-    await bot.add_cog(
-        GameSearchCog(bot)
-    )
-
-    print(
-        "✅ Team Fime Game Search v9.0 loaded successfully."
-    )
+    await bot.add_cog(GameSearchCog(bot))
+    print("✅ Game search cog loaded (bot4 v8.1).")
