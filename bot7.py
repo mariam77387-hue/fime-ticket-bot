@@ -5,18 +5,14 @@ bot7.py - نظام الأفتارات (discord.py 2.x)
 التحميل من bot.py:
     await bot.load_extension("bot7")
 
-الأمر الوحيد (للمالك فقط):
-    !avatars  + مرفق الصور
+الأمر (للمالك فقط، مخفي عنك وينشر النتيجة في الروم):
+    /avatars  banner(اختياري)  avatar1 ... avatar10
 
-- صورة اسمها يبدأ بـ banner = البنر (اختياري)
-- باقي الصور = الأفتارات (كل أفتار = بروفايل)
-- مع البنر: القوالب تنرسل كبروفايلات، الحد 7 أفتارات
-- بدون البنر: الأفتارات تنرسل مباشرة بدون قالب، بدون حد للعدد
-  (حد ديسكورد 10 مرفقات بالرسالة الواحدة، والأكثر يرسل بأمر ثاني)
-- الرسالة عامة ودائمة، وزر "تحميل" يرسل الصور الأصلية في الخاص
-- الزر يعمل بعد إعادة تشغيل البوت بدون إعادة رفع الصور
+- مع البنر: تنرسل القوالب (بروفايل لكل أفتار) بحد أقصى 7 أفتارات
+- بدون البنر: تنرسل الأفتارات مباشرة بدون قالب بحد 10 في الأمر الواحد
+- زر "تحميل" يرسل الصور الأصلية في الخاص، ويشتغل بعد إعادة تشغيل البوت
 
-المكتبات المطلوبة:
+المكتبات:
     pip install -U discord.py pillow
 """
 
@@ -31,6 +27,7 @@ from pathlib import Path
 from typing import Dict, List, Optional
 
 import discord
+from discord import app_commands
 from discord.ext import commands
 from PIL import Image, ImageDraw, ImageFont, ImageOps
 
@@ -43,16 +40,20 @@ BASE_DIR = Path(__file__).resolve().parent
 DATA_FILE = BASE_DIR / "bot7_avatars.json"
 ASSETS_DIR = BASE_DIR / "bot7_avatar_assets"
 
+# ضع ID السيرفر هنا عشان الأمر يظهر فوراً. إذا تركته None يتسجل عالمياً (ممكن ياخذ وقت).
+GUILD_ID: Optional[int] = None
+
 PROFILE_DISPLAY_NAME = "1zja"
 PROFILE_USERNAME = "1zja"
 PROFILE_BIO = "MCCl SERVER"
 
 MAX_WITH_BANNER = 7
+MAX_AVATARS = 10
 DISCORD_FILES_PER_MESSAGE = 10
 IMAGE_EXTS = (".png", ".jpg", ".jpeg", ".webp", ".gif")
 NO_MENTIONS = discord.AllowedMentions.none()
 
-# ألوان وأبعاد القالب (شكل بروفايل ديسكورد)
+# أبعاد وألوان القالب (شكل بروفايل ديسكورد)
 CARD_W = 735
 CARD_H = 660
 BANNER_H = 260
@@ -70,15 +71,6 @@ STATUS_GREY = (116, 122, 130)
 # ============================================================
 # أدوات مساعدة
 # ============================================================
-
-def owner_only():
-    async def predicate(ctx: commands.Context) -> bool:
-        if ctx.guild is not None and ctx.guild.owner_id == ctx.author.id:
-            return True
-        raise commands.CheckFailure("owner only")
-
-    return commands.check(predicate)
-
 
 def read_json(path: Path) -> dict:
     try:
@@ -141,7 +133,7 @@ def draw_badges(draw: ImageDraw.ImageDraw, x: int, cy: int) -> None:
 
 
 def render_card(banner_bytes: bytes, avatar_bytes: bytes) -> bytes:
-    """يرسم قالب البروفايل بالبنر والأفتار المعطى، ويرجع PNG كبايتات."""
+    """يرسم قالب البروفايل بالبنر والأفتار، ويرجع PNG كبايتات."""
     banner = ImageOps.fit(load_image(banner_bytes, "RGB"), (CARD_W, BANNER_H), Image.LANCZOS)
     card = Image.new("RGB", (CARD_W, CARD_H), CARD_BG)
     card.paste(banner, (0, 0))
@@ -156,7 +148,7 @@ def render_card(banner_bytes: bytes, avatar_bytes: bytes) -> bytes:
     avatar = ImageOps.fit(load_image(avatar_bytes, "RGBA"), (AVATAR_D, AVATAR_D), Image.LANCZOS)
     card.paste(avatar, (av_x, av_y), circle_mask(AVATAR_D))
 
-    # نقطة الحالة أسفل الأفتار
+    # نقطة الحالة
     sx, sy = av_x + AVATAR_D - 22, av_y + AVATAR_D - 22
     draw.ellipse((sx - 20, sy - 20, sx + 20, sy + 20), fill=CARD_BG)
     draw.ellipse((sx - 14, sy - 14, sx + 14, sy + 14), fill=STATUS_GREY)
@@ -185,7 +177,7 @@ def render_card(banner_bytes: bytes, avatar_bytes: bytes) -> bytes:
     draw.text((PAD, y3), "Bio", font=load_font(22), fill=TEXT_SUB)
     draw.text((PAD, y3 + 34), PROFILE_BIO, font=load_font(28, True), fill=TEXT_MAIN)
 
-    # زوايا مدورة للقالب كاملاً
+    # زوايا مدورة للقالب كامل
     mask = Image.new("L", (CARD_W * 2, CARD_H * 2), 0)
     ImageDraw.Draw(mask).rounded_rectangle(
         (0, 0, CARD_W * 2 - 1, CARD_H * 2 - 1), radius=56, fill=255
@@ -202,6 +194,11 @@ def render_card(banner_bytes: bytes, avatar_bytes: bytes) -> bytes:
 def chunked(items: list, size: int):
     for start in range(0, len(items), size):
         yield items[start:start + size]
+
+
+def is_image(attachment: discord.Attachment) -> bool:
+    name = attachment.filename.lower()
+    return name.endswith(IMAGE_EXTS) or (attachment.content_type or "").startswith("image/")
 
 
 # ============================================================
@@ -241,97 +238,136 @@ class AvatarCog(commands.Cog):
         async with self.lock:
             await asyncio.to_thread(write_json_atomic, DATA_FILE, payload)
 
-    # ---------------- الأمر الوحيد ----------------
+    # ---------------- الأمر الوحيد: /avatars ----------------
 
-    @commands.command(name="avatars")
-    @owner_only()
-    async def avatars(self, ctx: commands.Context):
-        images = [a for a in ctx.message.attachments if a.filename.lower().endswith(IMAGE_EXTS)]
-        if not images:
-            await ctx.send(
-                "أرفق الصور مع الأمر. صورة اسمها `banner` للبنر (اختياري)، والباقي أفتارات.",
-                delete_after=12,
-            )
+    @app_commands.command(name="avatars", description="ينشئ قوالب بروفايل من الصور (للمالك فقط).")
+    @app_commands.guild_only()
+    @app_commands.describe(
+        banner="البنر (اختياري). إذا انحط تنرسل القوالب",
+        avatar1="الأفتار الأول",
+        avatar2="الأفتار الثاني",
+        avatar3="الأفتار الثالث",
+        avatar4="الأفتار الرابع",
+        avatar5="الأفتار الخامس",
+        avatar6="الأفتار السادس",
+        avatar7="الأفتار السابع",
+        avatar8="الأفتار الثامن",
+        avatar9="الأفتار التاسع",
+        avatar10="الأفتار العاشر",
+    )
+    async def avatars(
+        self,
+        interaction: discord.Interaction,
+        banner: Optional[discord.Attachment] = None,
+        avatar1: Optional[discord.Attachment] = None,
+        avatar2: Optional[discord.Attachment] = None,
+        avatar3: Optional[discord.Attachment] = None,
+        avatar4: Optional[discord.Attachment] = None,
+        avatar5: Optional[discord.Attachment] = None,
+        avatar6: Optional[discord.Attachment] = None,
+        avatar7: Optional[discord.Attachment] = None,
+        avatar8: Optional[discord.Attachment] = None,
+        avatar9: Optional[discord.Attachment] = None,
+        avatar10: Optional[discord.Attachment] = None,
+    ):
+        guild = interaction.guild
+        if guild is None or interaction.user.id != guild.owner_id:
+            await interaction.response.send_message("هذا الأمر للمالك فقط.", ephemeral=True)
             return
 
-        banner_att = next(
-            (a for a in images if Path(a.filename).stem.lower().startswith("banner")), None
-        )
-        avatar_atts = [a for a in images if a is not banner_att]
+        # ما يظهر للكل: الرد المبدئي مخفي
+        await interaction.response.defer(ephemeral=True, thinking=True)
 
+        avatar_atts = [a for a in (
+            avatar1, avatar2, avatar3, avatar4, avatar5,
+            avatar6, avatar7, avatar8, avatar9, avatar10,
+        ) if a is not None]
+
+        if banner is not None and not is_image(banner):
+            await interaction.followup.send("البنر لازم يكون صورة.", ephemeral=True)
+            return
         if not avatar_atts:
-            await ctx.send("لازم ترفق أفتار واحد على الأقل.", delete_after=12)
+            await interaction.followup.send("لازم ترفق أفتار واحد على الأقل.", ephemeral=True)
             return
-        if banner_att is not None and len(avatar_atts) > MAX_WITH_BANNER:
-            await ctx.send(
+        if any(not is_image(a) for a in avatar_atts):
+            await interaction.followup.send("كل الأفتارات لازم تكون صور.", ephemeral=True)
+            return
+        if banner is not None and len(avatar_atts) > MAX_WITH_BANNER:
+            await interaction.followup.send(
                 f"مع البنر الحد {MAX_WITH_BANNER} أفتارات. احذف البنر أو قلل الأفتارات.",
-                delete_after=12,
+                ephemeral=True,
             )
             return
 
         batch_dir = ASSETS_DIR / uuid.uuid4().hex[:12]
         batch_dir.mkdir(parents=True, exist_ok=True)
+        channel = interaction.channel
 
         try:
+            # حفظ الصور الأصلية على القرص (عشان الزر يشتغل بعد إعادة التشغيل)
             raw_paths: List[str] = []
-            avatar_blobs: List[tuple] = []
-
-            banner_bytes = None
-            if banner_att is not None:
-                banner_bytes = await banner_att.read()
-                path = batch_dir / f"banner{Path(banner_att.filename).suffix.lower()}"
+            banner_bytes: Optional[bytes] = None
+            if banner is not None:
+                banner_bytes = await banner.read()
+                path = batch_dir / f"banner{Path(banner.filename).suffix.lower() or '.png'}"
                 await asyncio.to_thread(path.write_bytes, banner_bytes)
                 raw_paths.append(str(path))
 
+            avatar_blobs: List[tuple] = []
             for index, att in enumerate(avatar_atts, start=1):
                 data = await att.read()
-                path = batch_dir / f"avatar_{index:02d}{Path(att.filename).suffix.lower()}"
+                suffix = Path(att.filename).suffix.lower() or ".png"
+                path = batch_dir / f"avatar_{index:02d}{suffix}"
                 await asyncio.to_thread(path.write_bytes, data)
                 raw_paths.append(str(path))
-                avatar_blobs.append((index, data))
+                avatar_blobs.append((index, data, suffix))
 
-            # القوالب أو الأفتارات الخام للنشر العام
+            # الملفات العامة: قوالب (لو فيه بنر) أو أفتارات خام
             public_files: List[discord.File] = []
             if banner_bytes is not None:
-                for index, data in avatar_blobs:
+                for index, data, _ in avatar_blobs:
                     card = await asyncio.to_thread(render_card, banner_bytes, data)
                     public_files.append(
                         discord.File(io.BytesIO(card), filename=f"profile_{index:02d}.png")
                     )
             else:
-                for index, data in avatar_blobs:
-                    suffix = Path(avatar_atts[index - 1].filename).suffix.lower()
+                for index, data, suffix in avatar_blobs:
                     public_files.append(
                         discord.File(io.BytesIO(data), filename=f"avatar_{index:02d}{suffix}")
                     )
 
+            # النشر العام في نفس الروم
             groups = list(chunked(public_files, DISCORD_FILES_PER_MESSAGE))
             last_message: Optional[discord.Message] = None
             for position, group in enumerate(groups):
                 kwargs = {"files": group, "allowed_mentions": NO_MENTIONS}
-                is_last = position == len(groups) - 1
-                if is_last:
+                if position == len(groups) - 1:
                     kwargs["view"] = AvatarDownloadView(self)
-                last_message = await ctx.channel.send(**kwargs)
+                last_message = await channel.send(**kwargs)
 
             self.db[str(last_message.id)] = {
-                "guild_id": ctx.guild.id if ctx.guild else None,
-                "channel_id": ctx.channel.id,
+                "guild_id": guild.id,
+                "channel_id": channel.id,
                 "raw": raw_paths,
             }
             await self.save_db()
 
+            await interaction.followup.send(
+                f"تم نشر {len(public_files)} قالب/أفتار في {channel.mention} ✅",
+                ephemeral=True,
+            )
+
         except discord.Forbidden:
-            await ctx.send("ما عندي صلاحية أرسل الصور في هذا الروم.", delete_after=12)
             await asyncio.to_thread(self._cleanup, batch_dir)
+            await interaction.followup.send("ما عندي صلاحية أرسل الصور في هذا الروم.", ephemeral=True)
         except discord.HTTPException as error:
             print(f"[AVATARS] Discord error: {error}")
-            await ctx.send("صار خطأ من ديسكورد وما انرسلت الصور. جرب مرة ثانية.", delete_after=12)
             await asyncio.to_thread(self._cleanup, batch_dir)
+            await interaction.followup.send("صار خطأ من ديسكورد وما انرسلت الصور. جرب مرة ثانية.", ephemeral=True)
         except Exception as error:
             print(f"[AVATARS] Processing error: {type(error).__name__}: {error}")
-            await ctx.send("صار خطأ أثناء معالجة الصور. تأكد أن الملفات صور صالحة.", delete_after=12)
             await asyncio.to_thread(self._cleanup, batch_dir)
+            await interaction.followup.send("صار خطأ أثناء معالجة الصور. تأكد أن الملفات صور صالحة.", ephemeral=True)
 
     @staticmethod
     def _cleanup(folder: Path) -> None:
@@ -345,7 +381,7 @@ class AvatarCog(commands.Cog):
         except OSError:
             pass
 
-    # ---------------- إرسال الملفات الخام في الخاص ----------------
+    # ---------------- زر التحميل: الصور الأصلية في الخاص ----------------
 
     async def send_raw_files(self, interaction: discord.Interaction) -> None:
         await interaction.response.defer(ephemeral=True, thinking=False)
@@ -356,15 +392,13 @@ class AvatarCog(commands.Cog):
 
         if not paths:
             await interaction.followup.send(
-                "الملفات مو موجودة. اطلب من المالك ينزل الأفتارات من جديد.", ephemeral=True
+                "الملفات مو موجودة. اطلب من المالك يرفعها من جديد بالأمر.", ephemeral=True
             )
             return
 
         try:
             for group in chunked(paths, DISCORD_FILES_PER_MESSAGE):
-                files = [
-                    discord.File(io.BytesIO(p.read_bytes()), filename=p.name) for p in group
-                ]
+                files = [discord.File(io.BytesIO(p.read_bytes()), filename=p.name) for p in group]
                 await interaction.user.send(files=files)
         except discord.Forbidden:
             await interaction.followup.send(
@@ -374,24 +408,10 @@ class AvatarCog(commands.Cog):
             return
         except discord.HTTPException as error:
             print(f"[AVATARS] Could not DM files: {error}")
-            await interaction.followup.send(
-                "صار خطأ من ديسكورد أثناء الإرسال. جرب مرة ثانية.", ephemeral=True
-            )
+            await interaction.followup.send("صار خطأ من ديسكورد أثناء الإرسال. جرب مرة ثانية.", ephemeral=True)
             return
 
         await interaction.followup.send("تم ارسال الصور في الخاص ✅", ephemeral=True)
-
-    # ---------------- الأخطاء ----------------
-
-    async def cog_command_error(self, ctx: commands.Context, error: commands.CommandError):
-        if isinstance(error, commands.CheckFailure):
-            return  # غير المالك ما يحصل رد
-        original = getattr(error, "original", error)
-        print(f"[AVATARS COMMAND] {type(original).__name__}: {original}")
-        try:
-            await ctx.send("صار خطأ غير متوقع.", delete_after=8)
-        except discord.HTTPException:
-            pass
 
 
 # ============================================================
@@ -400,5 +420,15 @@ class AvatarCog(commands.Cog):
 
 async def setup(bot: commands.Bot) -> None:
     ASSETS_DIR.mkdir(parents=True, exist_ok=True)
-    await bot.add_cog(AvatarCog(bot))
+    cog = AvatarCog(bot)
+    await bot.add_cog(cog)
+
+    # مزامنة أمر السلاش
+    if GUILD_ID:
+        guild_obj = discord.Object(id=GUILD_ID)
+        bot.tree.copy_global_to(guild=guild_obj)
+        await bot.tree.sync(guild=guild_obj)
+    else:
+        await bot.tree.sync()
+
     print("[BOT7] Avatar system loaded.")
