@@ -1,23 +1,27 @@
-
 # ============================================================
 # Team Fime - bot4.py
-# Professional Game / Script Search System
-# Version: 9.0
-# discord.py 2.x | aiohttp
+# Game / Script Search + TikTok Short-Name Generator
+# Version: 10.0
+# Loaded by bot.py: await bot.load_extension("bot4")
+# Requires: discord.py 2.x, aiohttp
+# Optional: RSCRIPTS_API_KEY (RScripts API v1)
 # ============================================================
+
+from __future__ import annotations
 
 import asyncio
 import difflib
 import hashlib
 import io
-import json
 import math
 import os
 import re
+import secrets
+import string
 import time
 import urllib.parse
 from datetime import datetime, timezone
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Sequence, Tuple
 
 import aiohttp
 import discord
@@ -29,559 +33,378 @@ from discord.ext import commands
 # CONFIGURATION
 # ============================================================
 
-USER_AGENT = "Team-Fime-Search/9.0"
+VERSION = "10.0"
+USER_AGENT = f"Team-Fime-Search/{VERSION} (+Discord bot)"
 
 RSCRIPTS_API_KEY = os.getenv("RSCRIPTS_API_KEY", "").strip()
 
-CACHE_TTL = 240
+CACHE_TTL = 300
 MAX_RESULTS = 150
-PAGE_SIZE = 25
-MAX_PAGES = 3
-SEARCH_TIMEOUT = 12
-HTTP_TIMEOUT = 7
-HTTP_CONCURRENCY = 12
-
-SEARCH_COOLDOWN = 3
-RESULT_TIMEOUT = 300
-
-COPY_TEXT_LIMIT = 1900
-MIN_RELEVANCE = 0.43
-
+PAGE_SIZE = 20  # ScriptBlox documents a maximum of 20 per request.
+MAX_PAGES_PER_SOURCE = 2
+MAX_QUERY_VARIANTS = 3
+SEARCH_TIMEOUT = 14.0
+HTTP_TIMEOUT = 8.0
+HTTP_CONCURRENCY = 8
+SEARCH_COOLDOWN = 3.0
+RESULT_TIMEOUT = 300.0
+COPY_TEXT_LIMIT = 1800
+MIN_RELEVANCE = 0.34
 PANEL_COLOR = 0x5865F2
 
 NO_MENTIONS = discord.AllowedMentions.none()
 
-SEARCH_SOURCES = (
-    "scriptblox",
-    "robloxscripts",
-    "rscripts",
-    "haxhell",
-    "roscripts",
-    "rbxscripts",
-    "websearch",
-)
-
+# Public API sources with current documented JSON endpoints.
+API_SOURCES = ("scriptblox", "robloxscripts", "haxhell", "rscripts")
 SOURCE_NAMES = {
     "scriptblox": "ScriptBlox",
-    "robloxscripts": "RobloxScripts",
-    "rscripts": "RScripts",
+    "robloxscripts": "RobloxScripts.com",
     "haxhell": "HaxHell",
-    "roscripts": "RoScripts",
-    "rbxscripts": "RBXScripts",
-    "websearch": "Web Search",
+    "rscripts": "RScripts",
+    "websearch": "Web discovery",
 }
-
 SOURCE_COLORS = {
     "scriptblox": 0x2ECC71,
     "robloxscripts": 0xE67E22,
+    "haxhell": 0x3498DB,
     "rscripts": 0x9B59B6,
-    "websearch": 0x3498DB,
+    "websearch": 0x5865F2,
 }
 
-HTML_SOURCES = {
-    "haxhell": "https://haxhell.com/?q={query}",
-    "roscripts": "https://roscripts.net/?q={query}",
-    "rbxscripts": "https://rbxscripts.net/?q={query}",
-}
-
-WEB_SEARCH_SITES = (
+DISCOVERY_DOMAINS = (
     "scriptblox.com",
-    "rscripts.net",
     "robloxscripts.com",
+    "rscripts.net",
     "haxhell.com",
     "roscripts.net",
     "rbxscripts.net",
 )
 
-
-# ============================================================
-# TEXT HELPERS
-# ============================================================
-
 ARABIC_RE = re.compile(r"[\u0600-\u06FF]")
 
 
-def clean(value, default=""):
+# ============================================================
+# TEXT / NORMALIZATION
+# ============================================================
+
+def clean(value: Any, default: str = "") -> str:
     if value is None:
         return default
-    value = str(value).strip()
-    return value or default
+    result = str(value).strip()
+    return result or default
 
 
-def truncate(value, limit):
+def truncate(value: Any, limit: int) -> str:
     value = clean(value)
-    return value if len(value) <= limit else value[:limit - 3] + "..."
+    return value if len(value) <= limit else value[: max(0, limit - 3)] + "..."
 
 
-def to_int(value):
+def to_int(value: Any) -> int:
     try:
         return int(float(value))
-    except (ValueError, TypeError):
+    except (TypeError, ValueError, OverflowError):
         return 0
 
 
-def has_arabic(value):
+def has_arabic(value: Any) -> bool:
     return bool(ARABIC_RE.search(str(value or "")))
 
 
-def normalize(value):
-    value = clean(value).lower()
-
-    value = re.sub(r"[\u064B-\u065F\u0670]", "", value)
-
+def normalize(value: Any) -> str:
+    text = clean(value).lower()
+    text = re.sub(r"[\u064B-\u065F\u0670]", "", text)
     replacements = {
-        "أ": "ا",
-        "إ": "ا",
-        "آ": "ا",
-        "ٱ": "ا",
-        "ة": "ه",
-        "ى": "ي",
-        "ؤ": "و",
-        "ئ": "ي",
-        "ـ": "",
+        "أ": "ا", "إ": "ا", "آ": "ا", "ٱ": "ا",
+        "ة": "ه", "ى": "ي", "ؤ": "و", "ئ": "ي", "ـ": "",
     }
-
     for old, new in replacements.items():
-        value = value.replace(old, new)
-
-    value = re.sub(r"[^a-z0-9\u0600-\u06FF]+", " ", value)
-    value = re.sub(r"\s+", " ", value).strip()
-
-    words = []
-
-    for word in value.split():
-        if len(word) > 4 and word.startswith("ال"):
-            word = word[2:]
-        words.append(word)
-
+        text = text.replace(old, new)
+    text = re.sub(r"[^a-z0-9\u0600-\u06FF]+", " ", text)
+    text = re.sub(r"\s+", " ", text).strip()
+    words = [word[2:] if len(word) > 4 and word.startswith("ال") else word
+             for word in text.split()]
     return " ".join(words)
 
 
 ARABIC_WORDS = {
-    "ماب": "",
-    "روبلوكس": "",
-    "سكربت": "",
-    "سكريبت": "",
-    "سكربتات": "",
-    "لعبة": "",
-    "تايكون": "tycoon",
-    "تايكن": "tycoon",
-    "سيمولاتور": "simulator",
-    "سيميولاتور": "simulator",
-    "اوبي": "obby",
-    "تاور": "tower",
-    "وورز": "wars",
-    "باتل": "battle",
-    "فروت": "fruit",
-    "فروتس": "fruits",
-    "سرفايفل": "survival",
-    "ديفنس": "defense",
-    "ستوري": "story",
-    "لايف": "life",
-    "ورلد": "world",
-    "كينق": "king",
-    "كينج": "king",
-    "جاردن": "garden",
-    "برينروت": "brainrot",
-    "ستيل": "steal",
-    "هيرو": "hero",
-    "هيروز": "heroes",
-    "ايلاند": "island",
-    "فارم": "farm",
-    "كليكر": "clicker",
-    "فايتنق": "fighting",
-    "فايتنج": "fighting",
-    "ريسنق": "racing",
-    "كار": "car",
-    "زومبي": "zombie",
-    "نينجا": "ninja",
-    "انمي": "anime",
-    "ماينكرافت": "minecraft",
-    "فيش": "fish",
-    "سيتي": "city",
-    "ستريت": "street",
-    "ديث": "death",
-    "ريفت": "rift",
-    "رايفلز": "rivals",
+    "ماب": "", "روبلوكس": "", "سكربت": "", "سكريبت": "",
+    "سكربتات": "", "اسكربت": "", "لعبة": "", "لعبه": "",
+    "تايكون": "tycoon", "تايكن": "tycoon", "سيمولاتور": "simulator",
+    "سيميولاتور": "simulator", "اوبي": "obby", "تاور": "tower",
+    "وورز": "wars", "باتل": "battle", "فروت": "fruit",
+    "فروتس": "fruits", "سرفايفل": "survival", "ديفنس": "defense",
+    "ستوري": "story", "لايف": "life", "ورلد": "world",
+    "كينق": "king", "كينج": "king", "جاردن": "garden",
+    "برينروت": "brainrot", "ستيل": "steal", "هيرو": "hero",
+    "هيروز": "heroes", "ايلاند": "island", "فارم": "farm",
+    "كليكر": "clicker", "فايتنق": "fighting", "فايتنج": "fighting",
+    "ريسنق": "racing", "كار": "car", "زومبي": "zombie",
+    "نينجا": "ninja", "انمي": "anime", "ماينكرافت": "minecraft",
+    "فيش": "fish", "سيتي": "city", "ستريت": "street",
+    "ديث": "death", "ريفت": "rift", "رايفلز": "rivals",
     "ريفالز": "rivals",
 }
 
 NOISE_WORDS = {
-    "ماب", "الماب", "سكربت", "سكريبت", "سكربتات",
-    "لعبة", "لعبه", "ابحث", "بحث", "عن", "ابي",
-    "ابغى", "اريد", "هات", "جيب", "عطني",
-    "please", "pls", "script", "scripts",
-    "map", "game", "find", "search", "get",
-    "give", "me", "for", "the", "roblox",
+    "ماب", "الماب", "سكربت", "سكريبت", "سكربتات", "لعبة", "لعبه",
+    "ابحث", "بحث", "عن", "ابي", "ابغى", "اريد", "هات", "جيب", "عطني",
+    "please", "pls", "script", "scripts", "map", "game", "find",
+    "search", "get", "give", "me", "for", "the", "roblox",
 }
 
 
-def arabic_queries(query):
+def arabic_queries(query: str) -> List[str]:
     if not has_arabic(query):
         return []
-
-    words = []
-
-    for word in normalize(query).split():
-        mapped = ARABIC_WORDS.get(word, word)
-        if mapped:
-            words.append(mapped)
-
-    translated = " ".join(words).strip()
-
+    translated = " ".join(
+        ARABIC_WORDS.get(token, token)
+        for token in normalize(query).split()
+        if ARABIC_WORDS.get(token, token)
+    ).strip()
     return [translated] if translated else []
 
 
-def query_variants(query):
-    output = []
+def query_variants(query: str) -> List[str]:
+    variants: List[str] = []
     seen = set()
 
-    def add(value):
+    def add(value: str) -> None:
         value = clean(value)
         key = normalize(value)
-
         if key and key not in seen:
             seen.add(key)
-            output.append(value)
+            variants.append(value)
 
     add(query)
-
-    words = [
-        word for word in normalize(query).split()
-        if word not in NOISE_WORDS and len(word) >= 2
-    ]
-
-    if words:
-        add(" ".join(words))
-
-        for size in (3, 2):
-            for i in range(len(words) - size + 1):
-                add(" ".join(words[i:i + size]))
-
-        for word in words:
-            if len(word) >= 4:
-                add(word)
-
-    for translated in arabic_queries(query):
-        add(translated)
-
-    return output[:7]
+    useful = [w for w in normalize(query).split()
+              if w not in NOISE_WORDS and len(w) >= 2]
+    if useful:
+        add(" ".join(useful))
+        if len(useful) > 1:
+            add(" ".join(useful[:2]))
+    for candidate in arabic_queries(query):
+        add(candidate)
+    return variants[:MAX_QUERY_VARIANTS]
 
 
-def relevance(title, query):
-    title = normalize(title)
-    query = normalize(query)
-
-    if not title or not query:
+def relevance(text: Any, query: str) -> float:
+    target = normalize(text)
+    wanted = normalize(query)
+    if not target or not wanted:
         return 0.0
-
-    if title == query:
+    if target == wanted:
         return 1.0
-
-    if query in title:
-        return 0.94
-
-    if title in query and len(title) >= 3:
+    if wanted in target:
+        return 0.95
+    if target in wanted and len(target) >= 3:
         return 0.88
 
-    best = difflib.SequenceMatcher(
-        None, query, title
-    ).ratio()
-
-    query_words = set(query.split())
-    title_words = set(title.split())
-
-    if query_words and title_words:
-        overlap = len(query_words & title_words) / len(query_words)
-        best = max(best, overlap * 0.92)
-
-    for candidate in query_variants(query):
-        candidate = normalize(candidate)
-
-        if candidate:
-            best = max(
-                best,
-                difflib.SequenceMatcher(
-                    None, candidate, title
-                ).ratio()
-            )
-
-            if candidate in title:
-                best = max(best, 0.91)
-
-    return min(best, 1.0)
+    seq = difflib.SequenceMatcher(None, wanted, target).ratio()
+    q_words, t_words = set(wanted.split()), set(target.split())
+    overlap = len(q_words & t_words) / max(1, len(q_words))
+    return min(1.0, max(seq, overlap * 0.93))
 
 
 # ============================================================
-# DATA HELPERS
+# GENERAL DATA HELPERS
 # ============================================================
 
-def rows_from(data, path):
+def get_path(data: Any, path: Sequence[str], default=None):
     node = data
-
-    for key in path:
+    for part in path:
         if not isinstance(node, dict):
-            return []
-        node = node.get(key)
-
-    if not isinstance(node, list):
-        return []
-
-    return [item for item in node if isinstance(item, dict)]
+            return default
+        node = node.get(part)
+    return default if node is None else node
 
 
-def parse_date(value):
+def list_at(data: Any, *paths: Sequence[str]) -> List[Dict[str, Any]]:
+    for path in paths:
+        value = get_path(data, path)
+        if isinstance(value, list):
+            return [item for item in value if isinstance(item, dict)]
+    if isinstance(data, list):
+        return [item for item in data if isinstance(item, dict)]
+    return []
+
+
+def valid_url(value: Any) -> str:
+    if not isinstance(value, str):
+        return ""
+    value = value.strip()
+    try:
+        parts = urllib.parse.urlsplit(value)
+    except ValueError:
+        return ""
+    if parts.scheme not in ("http", "https") or not parts.netloc:
+        return ""
+    return value
+
+
+def parse_date(value: Any) -> Optional[datetime]:
     if not value:
         return None
-
     try:
-        result = datetime.fromisoformat(
-            str(value).replace("Z", "+00:00")
-        )
-
-        if result.tzinfo is None:
-            result = result.replace(tzinfo=timezone.utc)
-
-        return result
-
+        parsed = datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+        return parsed if parsed.tzinfo else parsed.replace(tzinfo=timezone.utc)
     except (ValueError, TypeError):
         return None
 
 
-def relative_date(value):
-    date = parse_date(value)
-
-    if not date:
+def relative_date(value: Any) -> str:
+    parsed = parse_date(value)
+    if not parsed:
         return "Unknown"
-
-    seconds = int(
-        (datetime.now(timezone.utc) - date).total_seconds()
-    )
-
+    seconds = max(0, int((datetime.now(timezone.utc) - parsed).total_seconds()))
     if seconds < 60:
         return "Just now"
-
     if seconds < 3600:
-        return f"{seconds // 60} minutes ago"
-
+        return f"{seconds // 60} min ago"
     if seconds < 86400:
-        return f"{seconds // 3600} hours ago"
+        return f"{seconds // 3600} h ago"
+    return f"{seconds // 86400} d ago"
 
-    return f"{seconds // 86400} days ago"
 
-
-def get_game_name(row):
-    for key in (
-        "gameName",
-        "game_name",
-        "gameTitle",
-        "placeName",
-        "experienceName",
-    ):
+def row_game_name(row: Dict[str, Any]) -> str:
+    for key in ("gameName", "game_name", "gameTitle", "placeName", "experienceName"):
         value = row.get(key)
-
         if isinstance(value, str) and value.strip():
             return value.strip()
-
     game = row.get("game")
-
     if isinstance(game, dict):
-        for key in ("name", "title", "displayName"):
+        for key in ("name", "title", "displayName", "gameName", "game_name"):
             if game.get(key):
-                return str(game[key])
-
-    elif isinstance(game, str):
-        return game
-
+                return str(game[key]).strip()
+    elif isinstance(game, str) and game.strip():
+        return game.strip()
     return ""
 
 
-def valid_url(value):
-    if not isinstance(value, str):
-        return ""
-
-    value = value.strip()
-
-    parts = urllib.parse.urlsplit(value)
-
-    if parts.scheme not in ("http", "https"):
-        return ""
-
-    if not parts.netloc:
-        return ""
-
-    return value
+def as_bool(value: Any) -> bool:
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, (int, float)):
+        return value != 0
+    if isinstance(value, str):
+        return value.strip().lower() in {"1", "true", "yes", "enabled", "required", "paid", "key"}
+    return False
 
 
-def normalize_row(row, source):
+def normalize_row(row: Dict[str, Any], source: str) -> Dict[str, Any]:
+    """Convert source-specific fields into one stable result format."""
     item = dict(row)
+    game = item.get("game") if isinstance(item.get("game"), dict) else {}
+    stats = item.get("stats") if isinstance(item.get("stats"), dict) else {}
+    flags = item.get("flags") if isinstance(item.get("flags"), dict) else {}
+    author = item.get("author") if isinstance(item.get("author"), dict) else {}
+    creator = item.get("creator") if isinstance(item.get("creator"), dict) else {}
+    user = item.get("user") if isinstance(item.get("user"), dict) else {}
 
+    title = clean(item.get("title") or item.get("name") or item.get("gameName"), "Untitled")
     slug = clean(item.get("slug"))
-
-    title = clean(
-        item.get("title") or item.get("name"),
-        "Untitled",
-    )
-
-    game = item.get("game")
-    if not isinstance(game, dict):
-        game = {}
-
-    code = item.get("script")
-    code = code.strip() if isinstance(code, str) else ""
+    code_value = item.get("script")
+    code = code_value.strip() if isinstance(code_value, str) else ""
 
     raw_url = ""
-
-    for key in (
-        "rawScriptUrl",
-        "rawUrl",
-        "rawScript",
-    ):
+    for key in ("rawScriptUrl", "rawScript", "rawUrl", "raw_url"):
         candidate = item.get(key)
-
-        if isinstance(candidate, str):
-            if candidate.startswith(("http://", "https://")):
+        if isinstance(candidate, str) and candidate.strip():
+            if candidate.strip().startswith(("http://", "https://")):
                 raw_url = valid_url(candidate)
             elif not code:
                 code = candidate.strip()
-
-            if raw_url:
+            if raw_url or code:
                 break
 
-    if source == "scriptblox":
-        page_url = (
-            "https://scriptblox.com/script/"
-            + urllib.parse.quote(slug)
-            if slug else ""
-        )
+    page_url = ""
+    for key in ("url", "scriptUrl", "pageUrl", "webUrl", "link", "permalink"):
+        page_url = valid_url(item.get(key))
+        if page_url:
+            break
 
-        if slug:
-            raw_url = (
-                "https://rawscripts.net/raw/"
-                + urllib.parse.quote(slug)
-            )
+    if source == "scriptblox" and slug:
+        page_url = f"https://scriptblox.com/script/{urllib.parse.quote(slug)}"
+        if not raw_url:
+            raw_url = f"https://rawscripts.net/raw/{urllib.parse.quote(slug)}"
+    elif source == "rscripts" and slug and not page_url:
+        page_url = f"https://rscripts.net/script/{urllib.parse.quote(slug)}"
 
-    elif source == "rscripts":
-        page_url = (
-            "https://rscripts.net/script/"
-            + urllib.parse.quote(slug)
-            if slug else ""
-        )
-
-    else:
-        page_url = ""
-
-        for key in (
-            "url",
-            "scriptUrl",
-            "pageUrl",
-            "webUrl",
-            "link",
-        ):
-            page_url = valid_url(item.get(key))
-            if page_url:
-                break
+    if not raw_url and source == "rscripts":
+        raw_url = valid_url(item.get("rawScript"))
 
     image = ""
-
-    for key in (
-        "image",
-        "imageUrl",
-        "thumbnailUrl",
+    for candidate in (
+        item.get("image"), item.get("imageUrl"), item.get("thumbnailUrl"),
+        game.get("iconUrl"), game.get("imageUrl"), game.get("thumbnailUrl"),
     ):
-        image = valid_url(item.get(key))
+        image = valid_url(candidate)
         if image:
             break
 
-    place_id = to_int(
-        game.get("gameId")
-        or game.get("placeId")
-        or item.get("placeId")
+    game_id = to_int(
+        game.get("gameId") or game.get("placeId") or item.get("placeId")
+        or item.get("gameId")
     )
+
+    username = clean(
+        author.get("username") or creator.get("username") or user.get("username")
+    )
+
+    views = to_int(item.get("views", stats.get("views", item.get("viewCount", 0))))
+    likes = to_int(item.get("likes", stats.get("likes", item.get("likeCount", 0))))
+
+    key_flag = item.get("key", item.get("keySystem", flags.get("keySystem")))
+    paid_flag = item.get("paid", item.get("isPaid", flags.get("isPaid")))
+    access_type = clean(item.get("accessType")).lower()
+    verified_flag = item.get("verified", author.get("verified", creator.get("isVerified", False)))
+    patched_flag = item.get("isPatched", item.get("patched", flags.get("patched")))
+    mobile_flag = item.get("mobileReady", item.get("mobileSupported", flags.get("mobileSupported")))
 
     item.update({
         "title": truncate(title, 240),
-        "gameName": get_game_name(item),
-        "views": to_int(
-            item.get("views", item.get("viewCount"))
-        ),
-        "likes": to_int(
-            item.get("likes", item.get("likeCount"))
-        ),
+        "gameName": row_game_name(item) or clean(game.get("name") or game.get("gameName")),
+        "views": views,
+        "likes": likes,
         "_source": source,
+        "_id": clean(item.get("id") or item.get("_id") or item.get("scriptId")),
+        "_slug": slug,
         "_code": code,
         "_raw_url": raw_url,
         "_page_url": page_url,
         "_image": image,
-        "_place_id": place_id,
+        "_place_id": game_id,
+        "_creator": username,
+        "_key": as_bool(key_flag) or access_type == "key",
+        "_paid": as_bool(paid_flag) or access_type == "paid",
+        "_verified": as_bool(verified_flag),
+        "_patched": as_bool(patched_flag),
+        "_mobile": as_bool(mobile_flag),
     })
-
     return item
 
 
-def row_key(row):
-    url = row.get("_page_url")
-
-    if url:
-        return url.lower()
-
-    raw = (
-        str(row.get("title"))
-        + "|"
-        + str(row.get("gameName"))
-        + "|"
-        + str(row.get("_source"))
-    )
-
-    return hashlib.sha1(
-        raw.encode("utf-8", "ignore")
-    ).hexdigest()
+def row_key(row: Dict[str, Any]) -> str:
+    canonical = row.get("_page_url") or row.get("_raw_url")
+    if canonical:
+        return canonical.lower().split("?", 1)[0]
+    raw = "|".join((
+        clean(row.get("_source")), clean(row.get("_id")),
+        clean(row.get("title")), clean(row.get("gameName")),
+    ))
+    return hashlib.sha256(raw.encode("utf-8", "ignore")).hexdigest()
 
 
-def get_key_status(row):
-    for key in (
-        "keySystem",
-        "key_system",
-        "requiresKey",
-        "requires_key",
-        "keyRequired",
-        "key_required",
-    ):
-        value = row.get(key)
-
-        if value is True or value == 1:
-            return True
-
-        if isinstance(value, str):
-            if value.lower() in (
-                "true", "yes", "1", "required"
-            ):
-                return True
-
-    if row.get("keyLink"):
-        return True
-
-    description = normalize(
-        row.get("description", "")
-    )
-
-    if "بدون مفتاح" in description:
-        return False
-
-    if "key system" in description:
-        return True
-
-    if "requires key" in description:
-        return True
-
-    return False
-
-
-def get_paid_status(row):
-    return (
-        clean(row.get("scriptType")).lower() == "paid"
-        or bool(row.get("paid"))
-    )
+def row_score(row: Dict[str, Any], query: str) -> float:
+    title_score = relevance(row.get("title"), query)
+    game_score = relevance(row.get("gameName"), query)
+    description_score = relevance(row.get("description"), query) * 0.72
+    tags = row.get("tags")
+    tags_text = " ".join(str(x) for x in tags) if isinstance(tags, list) else clean(tags)
+    tag_score = relevance(tags_text, query) * 0.70 if tags_text else 0.0
+    best = max(title_score, game_score, description_score, tag_score)
+    popularity = min(1.0, math.log10(max(0, to_int(row.get("views"))) + 1) / 6)
+    likes = min(1.0, math.log10(max(0, to_int(row.get("likes"))) + 1) / 5)
+    return min(1.0, best * 0.86 + popularity * 0.09 + likes * 0.05)
 
 
 # ============================================================
@@ -589,302 +412,170 @@ def get_paid_status(row):
 # ============================================================
 
 class HttpClient:
+    def __init__(self) -> None:
+        self.session: Optional[aiohttp.ClientSession] = None
+        self.semaphore = asyncio.Semaphore(HTTP_CONCURRENCY)
+        self._host_locks: Dict[str, asyncio.Lock] = {}
+        self._host_last_request: Dict[str, float] = {}
+        # RobloxScripts documents an approximate 60 requests/minute/IP limit.
+        self._host_min_interval = {"robloxscripts.com": 1.05}
 
-    def __init__(self):
-        self.session = None
-        self.semaphore = asyncio.Semaphore(
-            HTTP_CONCURRENCY
-        )
-
-    def ensure_session(self):
+    def _session(self) -> aiohttp.ClientSession:
         if self.session is None or self.session.closed:
             self.session = aiohttp.ClientSession(
-                headers={
-                    "User-Agent": USER_AGENT,
-                    "Accept": "*/*",
-                },
-                timeout=aiohttp.ClientTimeout(
-                    total=HTTP_TIMEOUT,
-                    connect=3,
-                ),
+                headers={"User-Agent": USER_AGENT, "Accept": "application/json, text/html;q=0.8, */*;q=0.5"},
+                timeout=aiohttp.ClientTimeout(total=HTTP_TIMEOUT, connect=3.0),
             )
-
         return self.session
 
     async def get_json(
         self,
-        url,
-        params=None,
-        headers=None,
-    ):
-        session = self.ensure_session()
+        url: str,
+        *,
+        params: Optional[Dict[str, Any]] = None,
+        headers: Optional[Dict[str, str]] = None,
+    ) -> Tuple[Any, bool]:
+        host = (urllib.parse.urlsplit(url).hostname or "").lower()
+        host_lock = self._host_locks.setdefault(host, asyncio.Lock())
+        async with host_lock:
+            interval = self._host_min_interval.get(host, 0.0)
+            elapsed = time.monotonic() - self._host_last_request.get(host, 0.0)
+            if interval and elapsed < interval:
+                await asyncio.sleep(interval - elapsed)
+            async with self.semaphore:
+                self._host_last_request[host] = time.monotonic()
+                try:
+                    async with self._session().get(url, params=params, headers=headers) as response:
+                        if response.status == 429:
+                            retry_after = response.headers.get("Retry-After", "unknown")
+                            print(f"[bot4] Rate limited by {urllib.parse.urlsplit(url).netloc}; Retry-After={retry_after}")
+                            return None, True
+                        if response.status >= 500:
+                            return None, True
+                        if response.status != 200:
+                            return None, False
+                        return await response.json(content_type=None), False
+                except (aiohttp.ClientError, asyncio.TimeoutError) as exc:
+                    print(f"[bot4] JSON request failed ({urllib.parse.urlsplit(url).netloc}): {exc}")
+                    return None, True
+                except Exception as exc:
+                    print(f"[bot4] Unexpected JSON error: {exc}")
+                    return None, True
 
+    async def get_text(self, url: str) -> Tuple[str, bool]:
         async with self.semaphore:
             try:
-                async with session.get(
-                    url,
-                    params=params,
-                    headers=headers,
-                ) as response:
-
+                async with self._session().get(url, headers={"Accept": "text/html"}) as response:
+                    if response.status == 429:
+                        print(f"[bot4] Discovery provider rate-limited the request.")
+                        return "", True
+                    if response.status >= 500:
+                        return "", True
                     if response.status != 200:
-                        return None, response.status >= 500 or response.status == 429
-
-                    return await response.json(
-                        content_type=None
-                    ), False
-
-            except Exception as error:
-                print(
-                    f"[bot4] JSON request failed: {error}"
-                )
-                return None, True
-
-    async def get_text(self, url):
-        session = self.ensure_session()
-
-        async with self.semaphore:
-            try:
-                async with session.get(
-                    url,
-                    headers={
-                        "Accept": "text/html",
-                    },
-                ) as response:
-
-                    if response.status != 200:
-                        return "", response.status >= 500
-
-                    return await response.text(
-                        errors="ignore"
-                    ), False
-
-            except Exception as error:
-                print(
-                    f"[bot4] HTML request failed: {error}"
-                )
+                        return "", False
+                    return await response.text(errors="ignore"), False
+            except (aiohttp.ClientError, asyncio.TimeoutError) as exc:
+                print(f"[bot4] HTML request failed: {exc}")
+                return "", True
+            except Exception as exc:
+                print(f"[bot4] Unexpected HTML error: {exc}")
                 return "", True
 
-    async def close(self):
+    async def close(self) -> None:
         if self.session and not self.session.closed:
             await self.session.close()
 
 
 # ============================================================
-# SEARCH SOURCES
+# SOURCE ADAPTERS
 # ============================================================
 
-async def source_scriptblox(http, query, page):
+async def fetch_scriptblox(http: HttpClient, query: str, page: int):
     data, error = await http.get_json(
         "https://scriptblox.com/api/script/search",
-        params={
-            "q": query,
-            "page": page,
-            "max": PAGE_SIZE,
-            "sortBy": "accuracy",
-            "order": "desc",
-            "strict": "false",
-        },
+        params={"q": query, "page": page, "max": PAGE_SIZE,
+                "sortBy": "accuracy", "order": "desc", "strict": "false"},
     )
-
-    rows = [
-        normalize_row(item, "scriptblox")
-        for item in rows_from(
-            data, ("result", "scripts")
-        )
-    ]
-
-    return rows, error
+    return [normalize_row(x, "scriptblox") for x in list_at(data, ("result", "scripts"))], error
 
 
-async def source_robloxscripts(http, query, page):
+async def fetch_robloxscripts(http: HttpClient, query: str, page: int):
+    # Current public API v1; no token required. Credit is shown in the result footer.
     data, error = await http.get_json(
         "https://robloxscripts.com/api/v1/scripts",
-        params={
-            "q": query,
-            "page": page,
-            "limit": PAGE_SIZE,
-            "sort": "most-liked",
-        },
+        params={"q": query, "page": page, "limit": 24, "sort": "most-viewed"},
     )
+    return [normalize_row(x, "robloxscripts") for x in list_at(data, ("data",))], error
 
-    rows = [
-        normalize_row(item, "robloxscripts")
-        for item in rows_from(data, ("data",))
-    ]
 
+async def fetch_haxhell(http: HttpClient, query: str, page: int):
+    # Documented HaxHell API v1 endpoint.
+    data, error = await http.get_json(
+        "https://haxhell.com/api/v1/search/scripts",
+        params={"q": query, "page": page, "limit": 30, "sort": "latest"},
+    )
+    return [normalize_row(x, "haxhell") for x in list_at(data, ("data",), ("scripts",))], error
+
+
+async def fetch_rscripts(http: HttpClient, query: str, page: int):
+    # Current RScripts v1 requires an API key. Skip cleanly if it is not configured.
+    if not RSCRIPTS_API_KEY:
+        return [], False
+    data, error = await http.get_json(
+        "https://api.rscripts.net/v1/search",
+        params={"q": query, "index": "scripts", "page": page, "limit": 20,
+                "htmlDescription": "false", "includeScript": "false"},
+        headers={"Authorization": f"Bearer {RSCRIPTS_API_KEY}"},
+    )
+    items = list_at(data, ("data", "scripts"))
+    return [normalize_row(x, "rscripts") for x in items], error
+
+
+async def fetch_web_discovery(http: HttpClient, query: str):
+    # Search-engine discovery only; it returns indexed page links, not extracted code.
+    site_filter = " OR ".join(f"site:{domain}" for domain in DISCOVERY_DOMAINS)
+    search_text = f"Roblox {query} script ({site_filter})"
+    url = "https://html.duckduckgo.com/html/?q=" + urllib.parse.quote_plus(search_text)
+    html, error = await http.get_text(url)
+    if not html:
+        return [], error
+
+    pattern = re.compile(
+        r'<a[^>]+class=["\']result__a["\'][^>]+href=["\']([^"\']+)["\'][^>]*>(.*?)</a>',
+        re.I | re.S,
+    )
+    rows: List[Dict[str, Any]] = []
+    seen = set()
+
+    for href, raw_title in pattern.findall(html):
+        href = href.replace("&amp;", "&")
+        try:
+            parsed = urllib.parse.urlsplit(href)
+            if "uddg" in urllib.parse.parse_qs(parsed.query):
+                href = urllib.parse.parse_qs(parsed.query)["uddg"][0]
+        except ValueError:
+            continue
+        href = valid_url(href)
+        if not href or href in seen:
+            continue
+        host = (urllib.parse.urlsplit(href).hostname or "").lower()
+        if not any(host == d or host.endswith("." + d) for d in DISCOVERY_DOMAINS):
+            continue
+        title = re.sub(r"\s+", " ", re.sub(r"<[^>]+>", " ", raw_title)).strip()
+        if not title:
+            continue
+        seen.add(href)
+        rows.append(normalize_row({"title": title, "url": href}, "websearch"))
+        if len(rows) >= 20:
+            break
     return rows, error
 
 
-async def source_rscripts(http, query, page):
-    if RSCRIPTS_API_KEY:
-        data, error = await http.get_json(
-            "https://api.rscripts.net/v1/search",
-            params={
-                "q": query,
-                "index": "scripts",
-                "page": page,
-                "limit": PAGE_SIZE,
-                "htmlDescription": "false",
-                "includeScript": "false",
-            },
-            headers={
-                "Authorization": f"Bearer {RSCRIPTS_API_KEY}"
-            },
-        )
-
-        items = rows_from(data, ("data", "scripts"))
-
-    else:
-        data, error = await http.get_json(
-            "https://rscripts.net/api/v2/scripts",
-            params={
-                "q": query,
-                "page": page,
-            },
-        )
-
-        items = rows_from(data, ("scripts",))
-
-    return [
-        normalize_row(item, "rscripts")
-        for item in items
-    ], error
-
-
-async def source_html(http, source, query):
-    url = HTML_SOURCES[source].format(
-        query=urllib.parse.quote_plus(query)
-    )
-
-    html, error = await http.get_text(url)
-
-    if not html:
-        return [], error
-
-    pattern = re.compile(
-        r'<a[^>]+href=["\']([^"\']+)["\'][^>]*>(.*?)</a>',
-        re.I | re.S,
-    )
-
-    host = urllib.parse.urlsplit(url).netloc.lower()
-
-    results = []
-    seen = set()
-
-    for href, raw_title in pattern.findall(html):
-        title = re.sub(
-            r"\s+",
-            " ",
-            re.sub(r"<[^>]+>", " ", raw_title),
-        ).strip()
-
-        if len(title) < 4:
-            continue
-
-        absolute = urllib.parse.urljoin(
-            url, href.strip()
-        )
-
-        parts = urllib.parse.urlsplit(absolute)
-
-        if parts.scheme not in ("http", "https"):
-            continue
-
-        if parts.netloc.lower() != host:
-            continue
-
-        if absolute in seen:
-            continue
-
-        seen.add(absolute)
-
-        results.append(
-            normalize_row({
-                "title": title,
-                "url": absolute,
-            }, source)
-        )
-
-        if len(results) >= 30:
-            break
-
-    return results, error
-
-
-async def source_websearch(http, query, page=1):
-    """
-    Additional discovery through DuckDuckGo HTML.
-    Results are links to indexed pages, not extracted scripts.
-    """
-
-    search_terms = " OR ".join(
-        f"site:{site}" for site in WEB_SEARCH_SITES
-    )
-
-    search_query = f"{query} Roblox script ({search_terms})"
-
-    url = (
-        "https://html.duckduckgo.com/html/?q="
-        + urllib.parse.quote_plus(search_query)
-    )
-
-    html, error = await http.get_text(url)
-
-    if not html:
-        return [], error
-
-    pattern = re.compile(
-        r'class=["\']result__a["\'][^>]*href=["\']([^"\']+)["\'][^>]*>(.*?)</a>',
-        re.I | re.S,
-    )
-
-    results = []
-    seen = set()
-
-    for href, raw_title in pattern.findall(html):
-        title = re.sub(
-            r"\s+",
-            " ",
-            re.sub(r"<[^>]+>", " ", raw_title),
-        ).strip()
-
-        href = href.replace("&amp;", "&")
-
-        if "uddg=" in href:
-            parsed = urllib.parse.urlparse(href)
-            params = urllib.parse.parse_qs(parsed.query)
-            href = params.get("uddg", [href])[0]
-
-        href = valid_url(href)
-
-        if not href or href in seen:
-            continue
-
-        seen.add(href)
-
-        host = urllib.parse.urlsplit(href).netloc.lower()
-
-        if not any(site in host for site in WEB_SEARCH_SITES):
-            continue
-
-        results.append(
-            normalize_row({
-                "title": title,
-                "url": href,
-            }, "websearch")
-        )
-
-        if len(results) >= 20:
-            break
-
-    return results, error
-
-
-PAGED_SOURCES = {
-    "scriptblox": source_scriptblox,
-    "robloxscripts": source_robloxscripts,
-    "rscripts": source_rscripts,
+SOURCE_FETCHERS = {
+    "scriptblox": fetch_scriptblox,
+    "robloxscripts": fetch_robloxscripts,
+    "haxhell": fetch_haxhell,
+    "rscripts": fetch_rscripts,
 }
 
 
@@ -893,1135 +584,632 @@ PAGED_SOURCES = {
 # ============================================================
 
 class SearchEngine:
-
-    def __init__(self, http):
+    def __init__(self, http: HttpClient) -> None:
         self.http = http
-        self.cache = {}
-        self.inflight = {}
+        self.cache: Dict[str, Dict[str, Any]] = {}
+        self.inflight: Dict[str, asyncio.Task] = {}
+        self._lock = asyncio.Lock()
 
-    def cache_get(self, key):
-        item = self.cache.get(key)
-
-        if not item:
+    def _cache_get(self, key: str) -> Optional[List[Dict[str, Any]]]:
+        entry = self.cache.get(key)
+        if not entry:
             return None
-
-        if time.monotonic() - item["time"] > CACHE_TTL:
+        if time.monotonic() - entry["created"] > CACHE_TTL:
             self.cache.pop(key, None)
             return None
+        return [dict(row) for row in entry["rows"]]
 
-        return item["rows"]
-
-    def cache_set(self, key, rows):
-        self.cache[key] = {
-            "time": time.monotonic(),
-            "rows": rows,
-        }
-
-        if len(self.cache) > 250:
+    def _cache_set(self, key: str, rows: List[Dict[str, Any]]) -> None:
+        self.cache[key] = {"created": time.monotonic(), "rows": [dict(x) for x in rows]}
+        if len(self.cache) > 300:
             now = time.monotonic()
+            self.cache = {k: v for k, v in self.cache.items()
+                          if now - v["created"] <= CACHE_TTL}
 
-            self.cache = {
-                k: v for k, v in self.cache.items()
-                if now - v["time"] < CACHE_TTL
-            }
-
-    async def search(self, query):
+    async def search(self, query: str) -> Tuple[List[Dict[str, Any]], bool]:
         key = normalize(query)
-
-        cached = self.cache_get(key)
-
+        cached = self._cache_get(key)
         if cached is not None:
-            return [dict(row) for row in cached], False
+            return cached, False
 
-        if key in self.inflight:
-            return await asyncio.shield(
-                self.inflight[key]
-            )
+        async with self._lock:
+            task = self.inflight.get(key)
+            if task is None:
+                task = asyncio.create_task(self._perform_search(query))
+                self.inflight[key] = task
+                task.add_done_callback(lambda _task, k=key: self.inflight.pop(k, None))
 
-        task = asyncio.create_task(
-            self._perform_search(query)
-        )
+        rows, had_error = await asyncio.shield(task)
+        if rows or not had_error:
+            self._cache_set(key, rows)
+        return [dict(row) for row in rows], had_error
 
-        self.inflight[key] = task
+    async def _fetch_one_source(self, source: str, query: str):
+        fetcher = SOURCE_FETCHERS[source]
+        page_count = 1 if source == "robloxscripts" else MAX_PAGES_PER_SOURCE
+        tasks = [fetcher(self.http, query, page)
+                 for page in range(1, page_count + 1)]
+        responses = await asyncio.gather(*tasks, return_exceptions=True)
+        rows: List[Dict[str, Any]] = []
+        had_error = False
+        for response in responses:
+            if isinstance(response, BaseException):
+                had_error = True
+                continue
+            found, error = response
+            rows.extend(found)
+            had_error = had_error or error
+        return rows, had_error
 
-        try:
-            rows, error = await asyncio.shield(task)
-
-            if rows or not error:
-                self.cache_set(
-                    key,
-                    [dict(row) for row in rows],
-                )
-
-            return rows, error
-
-        finally:
-            self.inflight.pop(key, None)
-
-    async def _fetch_source(self, source, query):
-        if source in PAGED_SOURCES:
-            fetch = PAGED_SOURCES[source]
-
-            jobs = [
-                fetch(self.http, query, page)
-                for page in range(1, MAX_PAGES + 1)
-            ]
-
-            results = await asyncio.gather(
-                *jobs,
-                return_exceptions=True,
-            )
-
-            rows = []
-            error = False
-
-            for result in results:
-                if isinstance(result, BaseException):
-                    error = True
-                    continue
-
-                items, failed = result
-                rows.extend(items)
-                error |= failed
-
-            return rows, error
-
-        if source in HTML_SOURCES:
-            return await source_html(
-                self.http, source, query
-            )
-
-        if source == "websearch":
-            return await source_websearch(
-                self.http, query
-            )
-
-        return [], False
-
-    async def _perform_search(self, query):
-        deadline = (
-            asyncio.get_running_loop().time()
-            + SEARCH_TIMEOUT
-        )
-
+    async def _perform_search(self, query: str):
+        loop = asyncio.get_running_loop()
+        deadline = loop.time() + SEARCH_TIMEOUT
         variants = query_variants(query)
-
-        found = {}
+        collected: Dict[str, Dict[str, Any]] = {}
         had_error = False
 
-        for variant in variants:
-            if asyncio.get_running_loop().time() >= deadline:
-                break
+        # API sources run concurrently for the original query and one useful variant.
+        query_batch = variants[:2] or [query]
+        jobs = [
+            self._fetch_one_source(source, variant)
+            for variant in query_batch
+            for source in API_SOURCES
+        ]
+        jobs.append(fetch_web_discovery(self.http, query))
 
-            jobs = [
-                self._fetch_source(source, variant)
-                for source in SEARCH_SOURCES
-            ]
+        try:
+            responses = await asyncio.wait_for(
+                asyncio.gather(*jobs, return_exceptions=True),
+                timeout=max(0.5, deadline - loop.time()),
+            )
+        except asyncio.TimeoutError:
+            return [], True
 
-            try:
-                results = await asyncio.wait_for(
-                    asyncio.gather(
-                        *jobs,
-                        return_exceptions=True,
-                    ),
-                    timeout=max(
-                        0.5,
-                        deadline - asyncio.get_running_loop().time()
-                    ),
-                )
-
-            except asyncio.TimeoutError:
+        for response in responses:
+            if isinstance(response, BaseException):
                 had_error = True
-                break
-
-            for result in results:
-                if isinstance(result, BaseException):
-                    had_error = True
+                continue
+            rows, error = response
+            had_error = had_error or error
+            for row in rows:
+                title_score = relevance(row.get("title"), query)
+                game_score = relevance(row.get("gameName"), query)
+                description_score = relevance(row.get("description"), query) * 0.78
+                tags = row.get("tags")
+                tags_text = " ".join(str(tag) for tag in tags) if isinstance(tags, list) else clean(tags)
+                tags_score = relevance(tags_text, query) * 0.72 if tags_text else 0.0
+                score = max(title_score, game_score, description_score, tags_score)
+                if score < MIN_RELEVANCE:
                     continue
+                row["_relevance"] = score
+                key = row_key(row)
+                previous = collected.get(key)
+                if previous is None or score > previous.get("_relevance", 0):
+                    collected[key] = row
 
-                rows, error = result
-                had_error |= error
-
-                for row in rows:
-                    title = (
-                        row.get("gameName")
-                        or row.get("title")
-                    )
-
-                    score = max(
-                        relevance(title, query),
-                        relevance(row.get("title"), query) * 0.92,
-                    )
-
-                    if score < MIN_RELEVANCE:
-                        continue
-
-                    row["_relevance"] = score
-
-                    key = row_key(row)
-
-                    if key not in found:
-                        found[key] = row
-                    elif score > found[key]["_relevance"]:
-                        found[key] = row
-
-            if len(found) >= 60:
-                break
-
-        rows = list(found.values())
-
-        rows.sort(
-            key=lambda row: (
-                row.get("_relevance", 0) * 0.85
-                + min(
-                    1,
-                    math.log10(
-                        max(0, row.get("views", 0)) + 1
-                    ) / 6
-                ) * 0.10
-                + min(
-                    1,
-                    math.log10(
-                        max(0, row.get("likes", 0)) + 1
-                    ) / 5
-                ) * 0.05
-            ),
-            reverse=True,
-        )
-
-        return rows[:MAX_RESULTS], had_error
+        # Search broad descriptions/tags after source normalization, then rank once.
+        ranked = list(collected.values())
+        for row in ranked:
+            row["_rank"] = row_score(row, query)
+        ranked.sort(key=lambda x: x.get("_rank", 0), reverse=True)
+        return ranked[:MAX_RESULTS], had_error
 
 
 # ============================================================
-# SCRIPT COPY
+# SCRIPT DELIVERY
 # ============================================================
 
-async def resolve_script(http, row):
+async def resolve_script(http: HttpClient, row: Dict[str, Any]) -> str:
     code = clean(row.get("_code"))
-
     if code:
         return code
 
-    if (
-        row.get("_source") == "scriptblox"
-        and row.get("_page_url")
-    ):
-        slug = row["_page_url"].rsplit("/", 1)[-1]
-
+    # ScriptBlox detail endpoint is the source-supported route for full script text.
+    if row.get("_source") == "scriptblox" and row.get("_slug"):
         data, _ = await http.get_json(
-            "https://scriptblox.com/api/script/"
-            + urllib.parse.quote(slug)
+            "https://scriptblox.com/api/script/" + urllib.parse.quote(row["_slug"])
         )
-
-        script = (
-            data.get("script")
-            if isinstance(data, dict)
-            else None
-        )
-
+        script = data.get("script") if isinstance(data, dict) else None
         if isinstance(script, dict):
             code = clean(script.get("script"))
-
             if code:
                 row["_code"] = code
                 return code
 
     raw_url = valid_url(row.get("_raw_url"))
-
     if raw_url:
-        return (
-            f'loadstring(game:HttpGet("{raw_url}"))()'
-        )
-
+        # Return a loader when the source provides a raw-script URL but not inline code.
+        return f'loadstring(game:HttpGet("{raw_url}"))()'
     return ""
 
 
 # ============================================================
-# RESULT EMBED
+# RESULT EMBED + PRIVATE BROWSER
 # ============================================================
 
-def build_result_embed(row, index, total, query):
+def build_result_embed(row: Dict[str, Any], index: int, total: int, query: str) -> discord.Embed:
     source = row.get("_source", "")
-
     embed = discord.Embed(
-        title=truncate(
-            "📜 " + row.get("title", "Untitled"),
-            250,
-        ),
-        description=(
-            f"**Search:** `{truncate(query, 80)}`\n"
-            f"**Match:** {round(row.get('_relevance', 0) * 100)}%"
-        ),
-        color=SOURCE_COLORS.get(
-            source, PANEL_COLOR
-        ),
+        title=truncate("📜 " + clean(row.get("title"), "Untitled"), 250),
+        description=(f"**Game search:** `{truncate(query, 75)}`\n"
+                     f"**Match score:** {round(row.get('_relevance', 0) * 100)}%"),
+        color=SOURCE_COLORS.get(source, PANEL_COLOR),
     )
-
     page = valid_url(row.get("_page_url"))
-
     if page:
         embed.url = page
 
-    game = clean(
-        row.get("gameName"),
-        "Unknown game",
-    )
-
+    game = clean(row.get("gameName"), "Unknown game")
     place_id = to_int(row.get("_place_id"))
-
     if place_id:
-        game = (
-            f"[{truncate(game, 80)}]"
-            f"(https://www.roblox.com/games/{place_id})"
-        )
-
-    embed.add_field(
-        name="🎮 Game",
-        value=game,
-        inline=False,
-    )
-
-    embed.add_field(
-        name="📡 Source",
-        value=SOURCE_NAMES.get(source, "External"),
-        inline=True,
-    )
-
-    embed.add_field(
-        name="🔐 Access",
-        value=(
-            "🔑 Key required"
-            if get_key_status(row)
-            else "🔓 No key detected"
-        ),
-        inline=True,
-    )
-
-    embed.add_field(
-        name="💰 Type",
-        value=(
-            "Paid"
-            if get_paid_status(row)
-            else "Free / Unknown"
-        ),
-        inline=True,
-    )
-
-    embed.add_field(
-        name="👁️ Views",
-        value=f"{to_int(row.get('views')):,}",
-        inline=True,
-    )
-
-    embed.add_field(
-        name="👍 Likes",
-        value=f"{to_int(row.get('likes')):,}",
-        inline=True,
-    )
-
-    updated = (
-        row.get("updatedAt")
-        or row.get("lastUpdated")
-        or row.get("createdAt")
-    )
-
+        game = f"[{truncate(game, 75)}](https://www.roblox.com/games/{place_id})"
+    embed.add_field(name="🎮 Game", value=game, inline=False)
+    embed.add_field(name="📡 Source", value=SOURCE_NAMES.get(source, "External index"), inline=True)
+    embed.add_field(name="🔐 Access", value="🔑 Key required" if row.get("_key") else "🔓 No key detected", inline=True)
+    embed.add_field(name="💰 Type", value="Paid" if row.get("_paid") else "Free / Unknown", inline=True)
+    embed.add_field(name="👁️ Views", value=f"{to_int(row.get('views')):,}", inline=True)
+    embed.add_field(name="👍 Likes", value=f"{to_int(row.get('likes')):,}", inline=True)
+    if row.get("_verified"):
+        embed.add_field(name="✅ Creator", value="Verified", inline=True)
+    updated = row.get("updatedAt") or row.get("lastUpdated") or row.get("createdAt")
     if updated:
-        embed.add_field(
-            name="🕒 Updated",
-            value=relative_date(updated),
-            inline=True,
-        )
-
-    user = row.get("user")
-
-    if isinstance(user, dict):
-        username = clean(user.get("username"))
-
-        if username:
-            embed.set_author(
-                name=truncate(
-                    f"Created by {username}",
-                    250,
-                )
-            )
-
+        embed.add_field(name="🕒 Updated", value=relative_date(updated), inline=True)
+    if row.get("_creator"):
+        embed.set_author(name=truncate(f"Creator: {row['_creator']}", 250))
     if row.get("_image"):
-        embed.set_thumbnail(
-            url=row["_image"]
-        )
-
+        embed.set_thumbnail(url=row["_image"])
     if page:
-        embed.add_field(
-            name="🔗 Result",
-            value=f"[Open source page]({page})",
-            inline=False,
-        )
-
-    embed.set_footer(
-        text=(
-            f"Team Fime • {index}/{total} "
-            f"• Search System v9.0"
-        )
-    )
-
+        embed.add_field(name="🔗 Source page", value=f"[Open result]({page})", inline=False)
+    embed.set_footer(text=f"Team Fime • Result {index}/{total} • Powered by ScriptBlox / RobloxScripts.com / HaxHell / RScripts")
     return embed
 
 
-# ============================================================
-# RESULT VIEW
-# ============================================================
-
 class ScriptBrowserView(discord.ui.View):
-
-    def __init__(
-        self,
-        cog,
-        requester_id,
-        rows,
-        query,
-    ):
+    def __init__(self, cog: "GameSearchCog", requester_id: int,
+                 rows: List[Dict[str, Any]], query: str):
         super().__init__(timeout=RESULT_TIMEOUT)
-
         self.cog = cog
         self.requester_id = requester_id
         self.rows = rows
         self.query = query
         self.index = 0
         self.message = None
-        self.expired = False
-
         self._build()
 
-    def current(self):
-        if not self.rows:
-            return None
+    def current(self) -> Optional[Dict[str, Any]]:
+        return self.rows[self.index] if self.rows else None
 
-        return self.rows[self.index]
+    def header(self) -> str:
+        return (f"🔎 **Search results** • **{len(self.rows)}** matches for "
+                f"`{truncate(self.query, 65)}`\n"
+                "Use Previous / Next to browse, or Copy to retrieve the selected script.")
 
-    def header(self):
-        return (
-            f"🔎 **Search results**\n"
-            f"Found **{len(self.rows)}** matching results "
-            f"for `{truncate(self.query, 70)}`.\n"
-            f"Use the arrows to browse and Copy to retrieve the selected script."
-        )
-
-    def embed(self):
+    def embed(self) -> discord.Embed:
         row = self.current()
-
         if row is None:
-            return discord.Embed(
-                title="No results",
-                color=PANEL_COLOR,
-            )
+            return discord.Embed(title="No results", color=PANEL_COLOR)
+        return build_result_embed(row, self.index + 1, len(self.rows), self.query)
 
-        return build_result_embed(
-            row,
-            self.index + 1,
-            len(self.rows),
-            self.query,
-        )
-
-    def _build(self):
+    def _build(self) -> None:
         self.clear_items()
-
         previous = discord.ui.Button(
-            label="Previous",
-            emoji="◀️",
-            style=discord.ButtonStyle.secondary,
-            disabled=self.index <= 0,
-            custom_id="fime_results_previous",
+            label="Previous", emoji="◀️", style=discord.ButtonStyle.secondary,
+            disabled=self.index <= 0, custom_id="fime_v10_previous",
         )
-
         previous.callback = self.previous
         self.add_item(previous)
 
-        counter = discord.ui.Button(
-            label=f"{self.index + 1}/{len(self.rows)}",
-            style=discord.ButtonStyle.secondary,
-            disabled=True,
-        )
-
-        self.add_item(counter)
-
         next_button = discord.ui.Button(
-            label="Next",
-            emoji="▶️",
-            style=discord.ButtonStyle.secondary,
-            disabled=self.index >= len(self.rows) - 1,
-            custom_id="fime_results_next",
+            label="Next", emoji="▶️", style=discord.ButtonStyle.secondary,
+            disabled=self.index >= len(self.rows) - 1, custom_id="fime_v10_next",
         )
-
         next_button.callback = self.next
         self.add_item(next_button)
 
         copy_button = discord.ui.Button(
-            label="Copy",
-            emoji="📋",
-            style=discord.ButtonStyle.success,
-            custom_id="fime_results_copy",
+            label="Copy", emoji="📋", style=discord.ButtonStyle.success,
+            custom_id="fime_v10_copy",
         )
-
         copy_button.callback = self.copy
         self.add_item(copy_button)
 
-    async def interaction_check(self, interaction):
+    async def interaction_check(self, interaction: discord.Interaction) -> bool:
         if interaction.user.id != self.requester_id:
             await interaction.response.send_message(
-                "🔒 These results belong to another user.",
-                ephemeral=True,
+                "🔒 These private results belong to another member.", ephemeral=True
             )
             return False
-
         return True
 
-    async def _update(self, interaction):
+    async def _edit(self, interaction: discord.Interaction) -> None:
         self._build()
-
         await interaction.response.edit_message(
-            content=self.header(),
-            embed=self.embed(),
-            view=self,
+            content=self.header(), embed=self.embed(), view=self
         )
 
-    async def previous(self, interaction):
-        if self.index > 0:
-            self.index -= 1
+    async def previous(self, interaction: discord.Interaction) -> None:
+        self.index = max(0, self.index - 1)
+        await self._edit(interaction)
 
-        await self._update(interaction)
+    async def next(self, interaction: discord.Interaction) -> None:
+        self.index = min(len(self.rows) - 1, self.index + 1)
+        await self._edit(interaction)
 
-    async def next(self, interaction):
-        if self.index < len(self.rows) - 1:
-            self.index += 1
-
-        await self._update(interaction)
-
-    async def copy(self, interaction):
+    async def copy(self, interaction: discord.Interaction) -> None:
         row = self.current()
-
-        if row is None:
-            await interaction.response.send_message(
-                "❌ No result selected.",
-                ephemeral=True,
-            )
+        if not row:
+            await interaction.response.send_message("❌ No result selected.", ephemeral=True)
             return
-
-        await interaction.response.defer(
-            ephemeral=True,
-            thinking=True,
-        )
-
+        await interaction.response.defer(ephemeral=True, thinking=True)
         try:
-            code = await resolve_script(
-                self.cog.http,
-                row,
-            )
-
+            code = await resolve_script(self.cog.http, row)
             if not code:
                 page = valid_url(row.get("_page_url"))
-
                 await interaction.followup.send(
-                    (
-                        "⚠️ The source does not provide "
-                        "direct script content.\n"
-                        + (
-                            f"🔗 {page}"
-                            if page else
-                            "No direct source link is available."
-                        )
-                    ),
-                    ephemeral=True,
-                    allowed_mentions=NO_MENTIONS,
+                    "⚠️ This source does not expose a direct script payload.\n"
+                    + (page or "No source link is available."),
+                    ephemeral=True, allowed_mentions=NO_MENTIONS,
                 )
                 return
-
             if len(code) <= COPY_TEXT_LIMIT:
                 await interaction.followup.send(
-                    f"```lua\n{code}\n```",
-                    ephemeral=True,
+                    f"```lua\n{code}\n```", ephemeral=True,
                     allowed_mentions=NO_MENTIONS,
                 )
-
             else:
-                filename = re.sub(
-                    r"[^\w-]+",
-                    "_",
-                    clean(row.get("title"), "script"),
-                )[:45]
-
-                file = discord.File(
-                    io.BytesIO(
-                        code.encode("utf-8")
-                    ),
-                    filename=f"{filename}.lua",
-                )
-
+                filename = re.sub(r"[^\w-]+", "_", clean(row.get("title"), "script"))[:45]
+                upload = discord.File(io.BytesIO(code.encode("utf-8")), filename=f"{filename}.lua")
                 await interaction.followup.send(
-                    "📋 Script retrieved successfully.",
-                    file=file,
-                    ephemeral=True,
-                    allowed_mentions=NO_MENTIONS,
+                    "📋 Script retrieved privately as a Lua file.", file=upload,
+                    ephemeral=True, allowed_mentions=NO_MENTIONS,
                 )
+        except Exception as exc:
+            print(f"[bot4] Copy failed: {exc}")
+            await interaction.followup.send("❌ Could not retrieve this script.", ephemeral=True)
 
-        except Exception as error:
-            print(f"[bot4] Copy error: {error}")
-
-            await interaction.followup.send(
-                "❌ Could not retrieve this script.",
-                ephemeral=True,
-            )
-
-    async def on_timeout(self):
-        self.expired = True
-
+    async def on_timeout(self) -> None:
+        # Keep the components visible, but disable every action after timeout.
         for item in self.children:
             if isinstance(item, discord.ui.Button):
                 item.disabled = True
                 item.label = "انتهى الوقت"
                 item.emoji = None
-
-        if self.message:
+        if self.message is not None:
             try:
-                await self.message.edit(
-                    view=self
-                )
-            except discord.HTTPException:
+                await self.message.edit(view=self)
+            except (discord.HTTPException, discord.NotFound):
                 pass
 
 
 # ============================================================
-# SEARCH MODAL
+# SEARCH MODAL + PANEL
 # ============================================================
 
-class SearchModal(discord.ui.Modal):
+class SearchModal(discord.ui.Modal, title="Search Roblox Games"):
+    game_name = discord.ui.TextInput(
+        label="Game or map name",
+        placeholder="Enter a name in English or Arabic...",
+        min_length=2,
+        max_length=100,
+        required=True,
+        style=discord.TextStyle.short,
+    )
 
-    def __init__(self, cog):
-        super().__init__(
-            title="Search Roblox Games",
-            timeout=180,
-        )
-
+    def __init__(self, cog: "GameSearchCog"):
+        super().__init__(timeout=180)
         self.cog = cog
 
-        self.game_name = discord.ui.TextInput(
-            label="Game or Map Name",
-            placeholder=(
-                "Enter the name in English or Arabic..."
-            ),
-            min_length=2,
-            max_length=100,
-            required=True,
-            style=discord.TextStyle.short,
-        )
-
-        self.add_item(self.game_name)
-
-    async def on_submit(self, interaction):
+    async def on_submit(self, interaction: discord.Interaction) -> None:
         query = clean(self.game_name.value)
-
         if len(query) < 2:
-            await interaction.response.send_message(
-                "Please enter a valid game name.",
-                ephemeral=True,
-            )
+            await interaction.response.send_message("Enter a longer game name.", ephemeral=True)
+            return
+        if self.cog.on_cooldown(interaction.user.id, interaction.guild_id or 0):
+            await interaction.response.send_message("⏳ Please wait a few seconds before searching again.", ephemeral=True)
             return
 
-        if self.cog.cooldown(
-            interaction.user.id,
-            interaction.guild_id or 0,
-        ):
-            await interaction.response.send_message(
-                "⏳ Please wait a few seconds before searching again.",
-                ephemeral=True,
-            )
-            return
-
-        await interaction.response.defer(
-            ephemeral=True,
-            thinking=True,
-        )
-
+        await interaction.response.defer(ephemeral=True, thinking=True)
         started = time.perf_counter()
-
         try:
-            rows, had_error = await self.cog.engine.search(
-                query
-            )
-
+            rows, had_error = await self.cog.engine.search(query)
             elapsed = time.perf_counter() - started
-
             if not rows:
-                await interaction.followup.send(
-                    (
-                        f"❌ No matching results found for "
-                        f"`{truncate(query, 80)}`."
-                        if not had_error
-                        else
-                        "⚠️ Search sources did not respond. Please try again."
-                    ),
-                    ephemeral=True,
-                    allowed_mentions=NO_MENTIONS,
-                )
+                text = (f"❌ No matching results found for `{truncate(query, 70)}`."
+                        if not had_error else
+                        "⚠️ Search providers did not return results. Try again shortly.")
+                await interaction.followup.send(text, ephemeral=True, allowed_mentions=NO_MENTIONS)
                 return
 
-            view = ScriptBrowserView(
-                self.cog,
-                interaction.user.id,
-                rows,
-                query,
-            )
-
+            view = ScriptBrowserView(self.cog, interaction.user.id, rows, query)
             message = await interaction.followup.send(
-                content=(
-                    view.header()
-                    + f"\n⚡ Search completed in {elapsed:.2f}s."
-                ),
-                embed=view.embed(),
-                view=view,
-                ephemeral=True,
-                allowed_mentions=NO_MENTIONS,
-                wait=True,
+                content=view.header() + f"\n⚡ Search completed in {elapsed:.2f}s.",
+                embed=view.embed(), view=view, ephemeral=True,
+                allowed_mentions=NO_MENTIONS, wait=True,
             )
-
             view.message = message
+        except Exception as exc:
+            print(f"[bot4] Modal search failed: {exc}")
+            await interaction.followup.send("❌ An unexpected search error occurred.", ephemeral=True)
 
-        except Exception as error:
-            print(f"[bot4] Modal search error: {error}")
-
-            await interaction.followup.send(
-                "❌ An unexpected error occurred during the search.",
-                ephemeral=True,
-            )
-
-
-# ============================================================
-# SEARCH PANEL
-# ============================================================
 
 class SearchPanelView(discord.ui.View):
-
-    def __init__(self, cog):
+    def __init__(self, cog: "GameSearchCog"):
         super().__init__(timeout=None)
         self.cog = cog
 
     @discord.ui.button(
-        label="Search for a Game",
-        emoji="🔎",
-        style=discord.ButtonStyle.primary,
-        custom_id="fime_game_search_start_v9",
+        label="Search for a Game", emoji="🔎", style=discord.ButtonStyle.primary,
+        custom_id="team_fime_game_search_v10",
     )
-    async def search_button(self, interaction, button):
-        await interaction.response.send_modal(
-            SearchModal(self.cog)
-        )
+    async def search_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await interaction.response.send_modal(SearchModal(self.cog))
 
 
-def build_panel_embed():
+def build_panel_embed() -> discord.Embed:
     embed = discord.Embed(
         title="🎮 Team Fime | Game Search",
         description=(
-            "Discover scripts for your favorite Roblox games "
-            "using our multi-source search system.\n\n"
-            "━━━━━━━━━━━━━━━━━━━━\n\n"
-            "🔎 **Search System**\n"
-            "Find matching scripts using a game name.\n\n"
-            "🌐 **Multiple Sources**\n"
-            "Search across several supported script websites.\n\n"
-            "🌍 **Arabic & English**\n"
-            "Enter the game name in either language.\n\n"
-            "🔒 **Private Results**\n"
-            "Your search results are visible only to you.\n\n"
-            "📋 **Copy**\n"
-            "Retrieve the selected script privately.\n\n"
-            "━━━━━━━━━━━━━━━━━━━━\n\n"
-            "**Press the button below to start searching.**"
+            "Find Roblox scripts from multiple indexed sources.\n\n"
+            "🔎 **Smart search**  •  🌍 **Arabic & English**\n"
+            "🌐 **Multiple catalogs**  •  🔒 **Private results**\n"
+            "📋 **Private script retrieval**\n\n"
+            "Press the button below and enter the game name."
         ),
         color=PANEL_COLOR,
     )
-
-    embed.set_footer(
-        text="Team Fime • Advanced Search System v9.0"
-    )
-
+    embed.set_footer(text=f"Team Fime • Search System v{VERSION} • Powered by ScriptBlox / RobloxScripts / HaxHell")
     return embed
 
 
 # ============================================================
-# COG
+# TIKTOK SHORT-HANDLE IDEAS
+# ============================================================
+
+TIKTOK_ALPHABET = string.ascii_lowercase + string.digits
+
+
+def generate_tiktok_candidates(count: int, length: Optional[int] = None) -> List[str]:
+    """Generate local username ideas only; this does not query TikTok."""
+    count = max(1, min(int(count), 60))
+    lengths = [length] if length in (2, 3, 4) else [2, 3, 4]
+    output = set()
+    capacity = sum(len(TIKTOK_ALPHABET) ** size for size in lengths)
+    if count > capacity:
+        count = capacity
+    attempts = 0
+    max_attempts = max(200, count * 30)
+
+    while len(output) < count and attempts < max_attempts:
+        size = secrets.choice(lengths)
+        candidate = "".join(secrets.choice(TIKTOK_ALPHABET) for _ in range(size))
+        output.add(candidate)
+        attempts += 1
+
+    # Deterministic fallback for tiny namespaces or unusually high requested counts.
+    if len(output) < count:
+        for size in lengths:
+            for chars in __import__("itertools").product(TIKTOK_ALPHABET, repeat=size):
+                output.add("".join(chars))
+                if len(output) >= count:
+                    break
+            if len(output) >= count:
+                break
+
+    return sorted(output, key=lambda x: (len(x), x))[:count]
+
+
+def build_tiktok_list(names: List[str]) -> str:
+    lines = [
+        "TikTok short-handle ideas",
+        "Availability is NOT verified. Open each profile link and confirm inside TikTok.",
+        "",
+    ]
+    for name in names:
+        lines.append(f"@{name}  |  https://www.tiktok.com/@{name}")
+    return "\n".join(lines)
+
+
+# ============================================================
+# MAIN COG
 # ============================================================
 
 class GameSearchCog(commands.Cog):
+    """Loaded as a cog by bot.py. This file does not start its own bot."""
 
-    def __init__(self, bot):
+    def __init__(self, bot: commands.Bot):
         self.bot = bot
         self.http = HttpClient()
         self.engine = SearchEngine(self.http)
+        self.cooldowns: Dict[str, float] = {}
 
-        self.cooldowns = {}
+    async def cog_load(self) -> None:
+        # Registers persistent panel button after this extension is loaded.
+        self.bot.add_view(SearchPanelView(self))
 
-    def cooldown(self, user_id, guild_id):
-        key = f"{guild_id}:{user_id}"
-
-        now = time.monotonic()
-        last = self.cooldowns.get(key, 0)
-
-        if now - last < SEARCH_COOLDOWN:
-            return True
-
-        self.cooldowns[key] = now
-
-        if len(self.cooldowns) > 5000:
-            self.cooldowns = {
-                k: v for k, v in self.cooldowns.items()
-                if now - v < 60
-            }
-
-        return False
-
-    async def cog_load(self):
-        # Persistent panel buttons survive bot restarts.
-        self.bot.add_view(
-            SearchPanelView(self)
-        )
-
-    async def cog_unload(self):
+    async def cog_unload(self) -> None:
         await self.http.close()
 
-    # ========================================================
-    # PANEL COMMAND
-    # ========================================================
+    def on_cooldown(self, user_id: int, guild_id: int) -> bool:
+        key = f"{guild_id}:{user_id}"
+        now = time.monotonic()
+        previous = self.cooldowns.get(key, 0.0)
+        if now - previous < SEARCH_COOLDOWN:
+            return True
+        self.cooldowns[key] = now
+        if len(self.cooldowns) > 5000:
+            cutoff = now - 120
+            self.cooldowns = {k: value for k, value in self.cooldowns.items() if value >= cutoff}
+        return False
 
-    @app_commands.command(
-        name="searchpanel",
-        description="Create the interactive game search panel",
-    )
+    # --------------------------------------------------------
+    # Search panel command
+    # --------------------------------------------------------
+
+    @app_commands.command(name="searchpanel", description="Create the interactive game-search panel")
     @app_commands.guild_only()
-    @app_commands.checks.has_permissions(
-        manage_guild=True
-    )
-    async def search_panel(
-        self,
-        interaction: discord.Interaction,
-    ):
-        await interaction.response.defer(
-            ephemeral=True
-        )
-
+    @app_commands.checks.has_permissions(manage_guild=True)
+    async def search_panel(self, interaction: discord.Interaction) -> None:
+        await interaction.response.defer(ephemeral=True)
         try:
             message = await interaction.channel.send(
-                embed=build_panel_embed(),
-                view=SearchPanelView(self),
+                embed=build_panel_embed(), view=SearchPanelView(self),
                 allowed_mentions=NO_MENTIONS,
             )
-
-            await interaction.followup.send(
-                (
-                    "✅ Search panel created successfully.\n"
-                    f"📌 {message.jump_url}"
-                ),
-                ephemeral=True,
-            )
-
+            await interaction.followup.send(f"✅ Search panel created.\n📌 {message.jump_url}", ephemeral=True)
         except discord.Forbidden:
-            await interaction.followup.send(
-                "❌ I don't have permission to send messages here.",
-                ephemeral=True,
-            )
+            await interaction.followup.send("❌ I cannot send messages in this channel.", ephemeral=True)
 
-    # ========================================================
-    # HELP
-    # ========================================================
-
-    @app_commands.command(
-        name="searchhelp",
-        description="Show search system information",
-    )
-    async def search_help(
-        self,
-        interaction: discord.Interaction,
-    ):
+    @app_commands.command(name="searchhelp", description="Show Game Search information")
+    async def search_help(self, interaction: discord.Interaction) -> None:
         embed = build_panel_embed()
-
         embed.add_field(
-            name="⚙️ Management",
-            value=(
-                "`/searchpanel` Create the search panel\n"
-                "`/searchhelp` Show this information\n"
-                "`/search` Search directly using a command"
-            ),
+            name="Commands",
+            value="`/searchpanel` Create the panel\n`/search query` Search directly\n`/trending` Browse trending ScriptBlox results\n`/script id` Fetch one ScriptBlox script",
             inline=False,
         )
+        await interaction.response.send_message(embed=embed, ephemeral=True)
 
-        await interaction.response.send_message(
-            embed=embed,
-            ephemeral=True,
-        )
+    # --------------------------------------------------------
+    # Direct slash search
+    # --------------------------------------------------------
 
-    # ========================================================
-    # DIRECT SLASH SEARCH
-    # ========================================================
-
-    @app_commands.command(
-        name="search",
-        description="Search Roblox scripts",
-    )
+    @app_commands.command(name="search", description="Search Roblox scripts across supported sources")
     @app_commands.guild_only()
-    async def slash_search(
-        self,
-        interaction: discord.Interaction,
-        query: str,
-    ):
+    async def slash_search(self, interaction: discord.Interaction, query: str) -> None:
         query = clean(query)
-
         if len(query) < 2:
-            await interaction.response.send_message(
-                "Please enter a longer game name.",
-                ephemeral=True,
-            )
+            await interaction.response.send_message("Please enter a longer game name.", ephemeral=True)
             return
-
-        if self.cooldown(
-            interaction.user.id,
-            interaction.guild_id or 0,
-        ):
-            await interaction.response.send_message(
-                "⏳ Please wait before searching again.",
-                ephemeral=True,
-            )
+        if self.on_cooldown(interaction.user.id, interaction.guild_id or 0):
+            await interaction.response.send_message("⏳ Please wait before searching again.", ephemeral=True)
             return
-
-        await interaction.response.defer(
-            ephemeral=True,
-            thinking=True,
-        )
-
+        await interaction.response.defer(ephemeral=True, thinking=True)
         started = time.perf_counter()
-
-        rows, error = await self.engine.search(query)
-
-        elapsed = time.perf_counter() - started
-
+        rows, had_error = await self.engine.search(query)
         if not rows:
             await interaction.followup.send(
-                "❌ No matching results were found."
-                if not error else
-                "⚠️ Search sources are temporarily unavailable.",
+                "❌ No matching results were found." if not had_error else "⚠️ Search providers are temporarily unavailable.",
                 ephemeral=True,
             )
             return
-
-        view = ScriptBrowserView(
-            self,
-            interaction.user.id,
-            rows,
-            query,
-        )
-
+        view = ScriptBrowserView(self, interaction.user.id, rows, query)
         message = await interaction.followup.send(
-            content=(
-                view.header()
-                + f"\n⚡ {elapsed:.2f}s"
-            ),
-            embed=view.embed(),
-            view=view,
-            ephemeral=True,
-            wait=True,
+            content=view.header() + f"\n⚡ {time.perf_counter() - started:.2f}s",
+            embed=view.embed(), view=view, ephemeral=True, wait=True,
         )
-
         view.message = message
 
-    # ========================================================
-    # LEGACY SEARCH COMMAND
-    # ========================================================
+    # --------------------------------------------------------
+    # Trending and one-script lookup
+    # --------------------------------------------------------
+
+    @app_commands.command(name="trending", description="Browse trending ScriptBlox scripts")
+    @app_commands.guild_only()
+    async def trending(self, interaction: discord.Interaction) -> None:
+        await interaction.response.defer(ephemeral=True, thinking=True)
+        data, error = await self.http.get_json("https://scriptblox.com/api/script/trending")
+        rows = [normalize_row(x, "scriptblox") for x in list_at(data, ("result", "scripts"))]
+        if not rows:
+            await interaction.followup.send("❌ Trending results are unavailable right now.", ephemeral=True)
+            return
+        for row in rows:
+            row["_relevance"] = 1.0
+        view = ScriptBrowserView(self, interaction.user.id, rows[:MAX_RESULTS], "Trending")
+        message = await interaction.followup.send(content=view.header(), embed=view.embed(), view=view, ephemeral=True, wait=True)
+        view.message = message
+
+    @app_commands.command(name="script", description="Fetch one ScriptBlox script by ID or slug")
+    @app_commands.guild_only()
+    async def fetch_script(self, interaction: discord.Interaction, script_id: str) -> None:
+        await interaction.response.defer(ephemeral=True, thinking=True)
+        data, _ = await self.http.get_json(
+            "https://scriptblox.com/api/script/" + urllib.parse.quote(clean(script_id))
+        )
+        script = data.get("script") if isinstance(data, dict) else None
+        if not isinstance(script, dict):
+            await interaction.followup.send("❌ Script not found.", ephemeral=True)
+            return
+        row = normalize_row(script, "scriptblox")
+        row["_relevance"] = 1.0
+        view = ScriptBrowserView(self, interaction.user.id, [row], row["title"])
+        message = await interaction.followup.send(content=view.header(), embed=view.embed(), view=view, ephemeral=True, wait=True)
+        view.message = message
+
+    # --------------------------------------------------------
+    # Prefix search compatibility
+    # --------------------------------------------------------
 
     @commands.command(name="search")
-    async def prefix_search(
-        self,
-        ctx,
-        *,
-        query="",
-    ):
+    async def prefix_search(self, ctx: commands.Context, *, query: str = "") -> None:
         query = clean(query)
-
         if len(query) < 2:
-            await ctx.reply(
-                "Please provide a game name.",
-                mention_author=False,
-            )
+            await ctx.reply("Please provide a game name.", mention_author=False)
             return
-
-        if self.cooldown(
-            ctx.author.id,
-            ctx.guild.id if ctx.guild else 0,
-        ):
-            await ctx.reply(
-                "⏳ Please wait before searching again.",
-                mention_author=False,
-            )
+        if self.on_cooldown(ctx.author.id, ctx.guild.id if ctx.guild else 0):
+            await ctx.reply("⏳ Please wait before searching again.", mention_author=False)
             return
-
-        status = await ctx.reply(
-            "🔎 Searching...",
-            mention_author=False,
-        )
-
-        rows, error = await self.engine.search(query)
-
+        status = await ctx.reply("🔎 Searching...", mention_author=False)
+        rows, had_error = await self.engine.search(query)
         if not rows:
-            await status.edit(
-                content=(
-                    "❌ No results found."
-                    if not error
-                    else "⚠️ Search sources are unavailable."
-                )
-            )
+            await status.edit(content="❌ No results found." if not had_error else "⚠️ Search providers are unavailable.")
             return
-
-        view = ScriptBrowserView(
-            self,
-            ctx.author.id,
-            rows,
-            query,
-        )
-
-        # Prefix searches are public because the original
-        # command is a public Discord message.
-        message = await status.edit(
-            content=view.header(),
-            embed=view.embed(),
-            view=view,
-        )
-
+        view = ScriptBrowserView(self, ctx.author.id, rows, query)
+        message = await status.edit(content=view.header(), embed=view.embed(), view=view)
         view.message = message
 
-    # ========================================================
-    # TRENDING
-    # ========================================================
+    # --------------------------------------------------------
+    # Hidden-from-help TikTok short-name idea generator
+    # --------------------------------------------------------
 
-    @app_commands.command(
-        name="trending",
-        description="Browse trending scripts",
-    )
-    @app_commands.guild_only()
-    async def trending(
-        self,
-        interaction: discord.Interaction,
-    ):
-        await interaction.response.defer(
-            ephemeral=True,
-            thinking=True,
-        )
+    @commands.command(name="q7v_x9", hidden=True, help=None)
+    async def tiktok_short_names(self, ctx: commands.Context, *args: str) -> None:
+        """Local idea generator. It does not contact TikTok or claim availability."""
+        length: Optional[int] = None
+        count = 25
 
-        data, error = await self.http.get_json(
-            "https://scriptblox.com/api/script/trending"
-        )
-
-        metas = rows_from(
-            data,
-            ("result", "scripts"),
-        )
-
-        rows = []
-
-        for item in metas[:20]:
-            rows.append(
-                normalize_row(
-                    item,
-                    "scriptblox",
-                )
-            )
-
-        if not rows:
-            await interaction.followup.send(
-                "❌ Trending scripts are unavailable.",
-                ephemeral=True,
-            )
+        try:
+            if len(args) == 1:
+                if args[0].lower() in {"2", "3", "4"}:
+                    length = int(args[0])
+                else:
+                    count = int(args[0])
+            elif len(args) >= 2:
+                length = int(args[0]) if args[0] in {"2", "3", "4"} else None
+                count = int(args[1])
+        except ValueError:
+            await ctx.reply("Usage: `!q7v_x9 [2|3|4] [count]`", mention_author=False)
             return
 
-        view = ScriptBrowserView(
-            self,
-            interaction.user.id,
-            rows,
-            "Trending",
-        )
-
-        message = await interaction.followup.send(
-            content=view.header(),
-            embed=view.embed(),
-            view=view,
-            ephemeral=True,
-            wait=True,
-        )
-
-        view.message = message
-
-    # ========================================================
-    # FETCH ONE SCRIPT
-    # ========================================================
-
-    @app_commands.command(
-        name="script",
-        description="Find one ScriptBlox script by ID or slug",
-    )
-    @app_commands.guild_only()
-    async def fetch_script(
-        self,
-        interaction: discord.Interaction,
-        script_id: str,
-    ):
-        await interaction.response.defer(
-            ephemeral=True,
-            thinking=True,
-        )
-
-        data, error = await self.http.get_json(
-            "https://scriptblox.com/api/script/"
-            + urllib.parse.quote(clean(script_id))
-        )
-
-        script = (
-            data.get("script")
-            if isinstance(data, dict)
-            else None
-        )
-
-        if not isinstance(script, dict):
-            await interaction.followup.send(
-                "❌ Script not found.",
-                ephemeral=True,
-            )
+        if count < 1 or count > 60:
+            await ctx.reply("Choose between 1 and 60 names per request.", mention_author=False)
+            return
+        if length not in (None, 2, 3, 4):
+            await ctx.reply("Allowed lengths: 2, 3 or 4.", mention_author=False)
             return
 
-        row = normalize_row(
-            script,
-            "scriptblox",
-        )
+        names = generate_tiktok_candidates(count, length)
+        payload = build_tiktok_list(names)
+        file = discord.File(io.BytesIO(payload.encode("utf-8")), filename="tiktok_short_name_ideas.txt")
 
-        row["_relevance"] = 1.0
-
-        view = ScriptBrowserView(
-            self,
-            interaction.user.id,
-            [row],
-            row.get("title", script_id),
-        )
-
-        message = await interaction.followup.send(
-            content=view.header(),
-            embed=view.embed(),
-            view=view,
-            ephemeral=True,
-            wait=True,
-        )
-
-        view.message = message
-
+        try:
+            await ctx.author.send(
+                content=(f"Here are {len(names)} short TikTok username ideas.\n"
+                         "**Availability is unverified:** TikTok has no public availability endpoint in the official API docs."),
+                file=file,
+                allowed_mentions=NO_MENTIONS,
+            )
+            try:
+                await ctx.message.add_reaction("📩")
+            except discord.HTTPException:
+                pass
+        except discord.Forbidden:
+            await ctx.reply("I couldn't DM you. Enable server-member DMs and run the command again.", mention_author=False)
 
 
 # ============================================================
-# SETUP
+# EXTENSION SETUP - bot.py loads this Cog
 # ============================================================
 
-async def setup(bot: commands.Bot):
+async def setup(bot: commands.Bot) -> None:
     await bot.add_cog(GameSearchCog(bot))
-    print("✅ Game search cog loaded (bot4 v8.1).")
+    print(f"✅ Team Fime bot4 v{VERSION} loaded (Search + TikTok Name Ideas).")
